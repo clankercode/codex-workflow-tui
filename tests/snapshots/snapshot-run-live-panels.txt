@@ -1,4 +1,4 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 ╭─────────────────── Runs ───────────────────╮╭───────── ● runs  phases  agents  events  decisions  artifacts ─────────╮
 │    State  Title                            ││ id          wf-fixture-e2e-live                                        │
 │ ▸  RUN    Live Telemetry Fixture           ││ title       Live Telemetry Fixture                                     │
@@ -12,6 +12,8 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                            ││ │ tool calls  1                                                      │ │
 │                                            ││ │ active      1                                                      │ │
 │                                            ││ │ longest     Live test worker                                       │ │
+│                                            ││ │ agents      1                                                      │ │
+│                                            ││ │ phases      1                                                      │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭─────────────────────────── Live Output ────────────────────────────╮ │
 │                                            ││ │ F(20) = 6765                                                       │ │
@@ -26,11 +28,9 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                            ││ ╭────────────────────────────── Prompt ──────────────────────────────╮ │
 │                                            ││ │ Fixture workflow for live TUI telemetry panels.                    │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││ ╭───────────────────────────── Metrics ──────────────────────────────╮ │
-│                                            ││ │ agents        1                                                    │ │
-│                                            ││ │ agent state   RUN 1                                                │ │
-│                                            ││ │ phases        1                                                    │ │
-│                                            ││ │ phase state   RUN 1                                                │ │
-│                                            ││ │ tokens        1234                                                 │ │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
 ╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
 path: run.json

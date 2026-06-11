@@ -1,9 +1,9 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 ╭─────────────── Artifacts ────────────────╮╭───── runs  phases  agents  events  decisions  ● artifacts ─────╮
 │                                          ││ ╭───────────────────────── Artifact ─────────────────────────╮ │
-│       Summary           When             ││ │ artifact_id   art-report                                   │ │
+│       Summary                            ││ │ artifact_id   art-report                                   │ │
 │  ──────────────────────────────────────  ││ │ title         Final report                                 │ │
-│   ▸   Final report      10:05:00 AEST    ││ │ kind          file                                         │ │
+│   ▸   Final report                       ││ │ kind          file                                         │ │
 │                                          ││ │ path          …/tests/fixtures/artifacts/final-report.md   │ │
 │                                          ││ │ phase         phase-synthesis                              │ │
 │                                          ││ │ agent                                                      │ │

@@ -46,17 +46,33 @@ EXPECTED_CAPTURE_TEXT = {
     "initial-runs": ("Agent Workflows", "Workflow With Parallel Review", "Live Stats"),
     "phases": ("phase-research", "Research", "No agents for this phase"),
     "phase-next": ("phase-review", "Security reviewer", "Test coverage reviewer"),
-    "agents-phase": ("Agents: Review", "agent-security", "Live Output"),
-    "agents-all": ("Synthesis writer", "Test coverage reviewer"),
-    "agent-prompt": ("Prompt", "Review authentication and secret handling."),
+    "agents-phase": ("Agents: Review", "agent-security", "Live Output", "Agent scope", "Agent view"),
+    "agents-all": ("Synthesis writer", "Test coverage reviewer", "Agent scope", "Agent view"),
+    "agent-prompt": ("Prompt", "Review authentication and secret handling.", "Agent scope", "Agent view"),
     "copy-id": ("Copied agent_id",),
     "copy-path": ("Copied agent path",),
     "events": ("evt-synthesis", "artifact recorded"),
     "decisions": ("dec-default", "Default workers to read-only"),
-    "artifacts": ("art-report", "Final report", "final-report.md"),
+    "artifacts": (
+        "art-report",
+        "Final report",
+        "final-report.md",
+        "Artifact Preview",
+        "Final synthesis report",
+        "Security: no critical issues",
+    ),
+}
+FORBIDDEN_CAPTURE_TEXT = {
+    "initial-runs": ("Agent scope", "Agent view"),
+    "phases": ("Agent scope", "Agent view"),
+    "phase-next": ("Agent scope", "Agent view"),
+    "events": ("Agent scope", "Agent view"),
+    "decisions": ("Agent scope", "Agent view"),
+    "artifacts": ("Agent scope", "Agent view"),
 }
 FAILURE_TEXT = ("Traceback", "terminal too small", "No rows")
 ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+FIXTURE_ASSET_DIRS = ("artifacts", "logs")
 
 
 def workflow_root() -> Path:
@@ -83,7 +99,16 @@ def load_fixture(path: Path) -> list[dict[str, Any]]:
     return [run for run in data if isinstance(run, dict)]
 
 
+def copy_fixture_assets(fixture_dir: Path, run_dir: Path) -> None:
+    """Copy fixture artifact and log directories into one staged run directory."""
+    for name in FIXTURE_ASSET_DIRS:
+        source = fixture_dir / name
+        if source.is_dir():
+            shutil.copytree(source, run_dir / name, dirs_exist_ok=True)
+
+
 def prepare_state(fixture: Path, output_dir: Path) -> Path:
+    fixture = fixture.expanduser().resolve()
     state_dir = output_dir / "state"
     runs_dir = state_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -94,6 +119,7 @@ def prepare_state(fixture: Path, output_dir: Path) -> Path:
         logs_dir = run_dir / "logs"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
+        copy_fixture_assets(fixture.parent, run_dir)
         copied = dict(run)
         copied.pop("_fixture_dir", None)
         copied["paths"] = dict(copied.get("paths", {}))
@@ -143,11 +169,14 @@ def append_capture(log: Path, label: str, session: str) -> str:
 def assert_capture(label: str, screen: str) -> None:
     plain = strip_ansi(screen)
     missing = [text for text in EXPECTED_CAPTURE_TEXT.get(label, ()) if text not in plain]
+    forbidden = [text for text in FORBIDDEN_CAPTURE_TEXT.get(label, ()) if text in plain]
     failures = [text for text in FAILURE_TEXT if text in plain]
-    if missing or failures:
+    if missing or forbidden or failures:
         details = []
         if missing:
             details.append(f"missing expected text for {label}: {', '.join(missing)}")
+        if forbidden:
+            details.append(f"unexpected context text for {label}: {', '.join(forbidden)}")
         if failures:
             details.append(f"unexpected failure text for {label}: {', '.join(failures)}")
         raise SystemExit("; ".join(details))

@@ -12,7 +12,6 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -23,7 +22,6 @@ sys.dont_write_bytecode = True
 from rich import box
 from rich.console import Console, Group
 from rich.panel import Panel
-from rich.pretty import Pretty
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
@@ -33,6 +31,7 @@ import workflow_state
 TABS = ("runs", "phases", "agents", "events", "decisions", "artifacts")
 AGENT_SCOPES = ("phase", "all")
 AGENT_VIEWS = ("live", "prompt")
+AGENT_ONLY_ACTIONS = frozenset({"toggle_agent_scope", "toggle_agent_view"})
 MIN_WIDTH = 80
 MIN_HEIGHT = 12
 DISPLAY_TIMESTAMP_WIDTH = 18
@@ -416,10 +415,19 @@ def json_renderable(value: Any) -> Syntax:
     return Syntax(payload, "json", theme="ansi_dark", word_wrap=True)
 
 
-def make_header() -> Text:
+def action_enabled_for_tab(tab: str, action: str) -> bool:
+    """Return whether a live TUI action is meaningful for the active tab."""
+    return tab == "agents" or action not in AGENT_ONLY_ACTIONS
+
+
+def make_header(tab: str) -> Text:
     header = Text()
+    hints = ["↑/↓ rows", "←/→ tabs", "y id", "p path"]
+    if tab == "agents":
+        hints.extend(["a scope", "v view"])
+    hints.append("r/q")
     header.append("Agent Workflows", style="bold bright_cyan")
-    header.append("  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q", style="dim")
+    header.append(f"  {'  '.join(hints)}", style="dim")
     return header
 
 
@@ -506,22 +514,6 @@ def agent_model(agent: dict[str, Any]) -> str:
     return str(agent.get("model") or agent.get("provider_model") or "")
 
 
-def status_counts_text(counts: dict[str, Any]) -> Text:
-    """Render status counts as colored compact labels."""
-    text = Text()
-    for status in STATUS_META:
-        count = token_value(counts.get(status))
-        if not count:
-            continue
-        if text:
-            text.append("  ")
-        label, style = STATUS_META[status]
-        text.append(f"{label} {count}", style=f"bold {style}")
-    if not text:
-        text.append("none", style="dim")
-    return text
-
-
 def make_mapping_table(rows: list[tuple[str, Any]]) -> Table:
     """Render structured fields as a compact two-column table."""
     table = Table.grid(expand=True)
@@ -539,20 +531,6 @@ def make_mapping_table(rows: list[tuple[str, Any]]) -> Table:
             rendered = str(display_value)
         table.add_row(Text(label, style="bold bright_black"), rendered)
     return table
-
-
-def make_metrics_panel(run: dict[str, Any], live: dict[str, Any]) -> Panel:
-    """Render derived run metrics without raw JSON."""
-    metrics = run.get("metrics", {})
-    rows = [
-        ("agents", metrics.get("agents_total", len(run.get("agents", [])))),
-        ("agent state", status_counts_text(metrics.get("agents_by_status", {}))),
-        ("phases", metrics.get("phases_total", len(run.get("phases", [])))),
-        ("phase state", status_counts_text(metrics.get("phases_by_status", {}))),
-        ("tokens", format_token_total(live.get("tokens", {}))),
-        ("tool calls", live.get("tool_call_count", 0)),
-    ]
-    return Panel(make_mapping_table(rows), title="Metrics", border_style="green", box=box.ROUNDED)
 
 
 def infer_event_kind(event: dict[str, Any]) -> str:
@@ -1127,8 +1105,9 @@ def make_facts_table(rows: list[tuple[str, Any]]) -> Table:
     return table
 
 
-def make_run_detail(run: dict[str, Any]) -> Group:
+def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) -> Group:
     live = collect_run_activity(run)
+    metrics = run.get("metrics", {})
     facts = make_facts_table(
         [
             ("id", run.get("run_id", "")),
@@ -1146,18 +1125,23 @@ def make_run_detail(run: dict[str, Any]) -> Group:
         border_style="blue",
         box=box.ROUNDED,
     )
-    metrics = make_metrics_panel(run, live)
     live_rows = [
         ("tokens", format_token_total(live.get("tokens", {}))),
         ("tool calls", live.get("tool_call_count", 0)),
         ("active", len([agent for agent in run.get("agents", []) if agent.get("status") == "running"])),
         ("longest", (live.get("longest_running") or {}).get("name", "")),
+        ("agents", metrics.get("agents_total", len(run.get("agents", [])))),
+        ("phases", metrics.get("phases_total", len(run.get("phases", [])))),
     ]
     live_stats = Panel(make_facts_table(live_rows), title="Live Stats", border_style="magenta", box=box.ROUNDED)
     tool_text = "\n".join(live.get("latest_tool_calls", [])[-8:]) or "No tool calls recorded yet."
-    tools = Panel(Text(tool_text, overflow="fold"), title="Latest Tool Calls", border_style="cyan", box=box.ROUNDED)
     latest = Panel(Text(live.get("latest_output") or "No live output yet.", overflow="fold"), title="Live Output", border_style="yellow", box=box.ROUNDED)
-    return Group(facts, live_stats, latest, tools, prompt, metrics)
+    panels: list[Any] = [facts, live_stats, latest]
+    if live.get("latest_tool_calls"):
+        panels.append(Panel(Text(tool_text, overflow="fold"), title="Latest Tool Calls", border_style="cyan", box=box.ROUNDED))
+    if detail_height is None or detail_height >= 26:
+        panels.append(prompt)
+    return Group(*panels)
 
 
 def make_phase_table(phases: list[dict[str, Any]], selected: int, visible: int) -> Table:
@@ -1226,12 +1210,14 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
         if agent_view == "prompt"
         else Panel(Text(str(output_text), overflow="fold"), title="Live Output", border_style="yellow", box=box.ROUNDED)
     )
-    return Group(
+    panels: list[Any] = [
         Panel(make_mapping_table(info_rows), title="Agent", border_style="blue", box=box.ROUNDED),
         Panel(stats, title="Live Stats", border_style="magenta", box=box.ROUNDED),
-        Panel(Text(tool_text, overflow="fold"), title="Latest Tool Calls", border_style="cyan", box=box.ROUNDED),
-        body,
-    )
+    ]
+    if activity.get("tool_calls"):
+        panels.append(Panel(Text(tool_text, overflow="fold"), title="Latest Tool Calls", border_style="cyan", box=box.ROUNDED))
+    panels.append(body)
+    return Group(*panels)
 
 
 def make_events_table(events: list[dict[str, Any]], selected: int, visible: int) -> Table:
@@ -1268,8 +1254,7 @@ def empty_sidebar_table(message: str) -> Table:
 def make_collection_table(rows: list[dict[str, Any]], selected: int, visible: int, tab: str) -> Table:
     table = Table(box=box.SIMPLE_HEAD, expand=True, header_style="bold bright_black")
     table.add_column("", width=1)
-    table.add_column("Summary", ratio=1, overflow="ellipsis")
-    table.add_column("When", width=COMPACT_TIMESTAMP_WIDTH, no_wrap=True)
+    table.add_column("Summary", ratio=1, overflow="ellipsis", no_wrap=True)
     if not rows:
         return empty_sidebar_table(f"No {tab}.")
     selected = clamp_index(selected, len(rows))
@@ -1279,7 +1264,6 @@ def make_collection_table(rows: list[dict[str, Any]], selected: int, visible: in
         table.add_row(
             marker_text(index == selected),
             collection_label(item, index),
-            display_event_timestamp(item.get("ts", "")),
             style=style,
         )
     return table
@@ -1456,13 +1440,14 @@ def make_detail_body(
     rows: list[dict[str, Any]],
     selected: int,
     *,
+    detail_height: int | None = None,
     agent_view: str = "live",
     agent_scope: str = "phase",
 ) -> Any:
     if tab == "runs":
         if not rows:
             return Text("No run selected.", style="dim")
-        return make_run_detail(rows[clamp_index(selected, len(rows))])
+        return make_run_detail(rows[clamp_index(selected, len(rows))], detail_height=detail_height)
     if not run:
         return Text("No run selected.", style="dim")
     if not rows:
@@ -1515,7 +1500,7 @@ def render_dashboard(
     selected_run_index = clamp_index(run_index, len(runs))
     run = runs[selected_run_index] if runs else None
     pane_height = height - 2 if chrome else height
-    left_width = max(36, min(46, (width * 2) // 5))
+    left_width = max(40, min(46, (width * 2) // 5))
     right_width = max(20, width - left_width)
     visible = max(1, pane_height - 5)
     rows = rows_for_tab(run, tab, runs, selected_phase_id=selected_phase_id, agent_scope=agent_scope)
@@ -1534,7 +1519,15 @@ def render_dashboard(
             height=pane_height,
         ),
         Panel(
-            make_detail_body(run, tab, rows, selected_row_index, agent_view=agent_view, agent_scope=agent_scope),
+            make_detail_body(
+                run,
+                tab,
+                rows,
+                selected_row_index,
+                detail_height=pane_height,
+                agent_view=agent_view,
+                agent_scope=agent_scope,
+            ),
             title=make_tabs_title(tab, compact=right_width < 60),
             border_style="green",
             box=box.ROUNDED,
@@ -1543,7 +1536,7 @@ def render_dashboard(
     )
     if not chrome:
         return layout
-    return Group(make_header(), layout, make_footer(run, width))
+    return Group(make_header(tab), layout, make_footer(run, width))
 
 
 def normalize_snapshot(text: str, width: int, height: int) -> str:
@@ -1607,385 +1600,10 @@ def current_rows_for(
     return rows_for_tab(run, tab, runs, selected_phase_id=selected_phase_id, agent_scope=agent_scope)
 
 
-def maybe_reexec_textual_venv() -> None:
-    venv_python = workflow_state.workflow_root() / ".venv" / "bin" / "python"
-    current = Path(sys.executable).resolve()
-    if venv_python.exists() and current != venv_python.resolve():
-        os.execv(str(venv_python), [str(venv_python), __file__, *sys.argv[1:]])
-
-
 def run_textual_app() -> None:
-    try:
-        from textual.app import App, ComposeResult, SystemCommand
-        from textual.screen import Screen
-        from textual.worker import Worker, WorkerState
-        from textual.widgets import Footer, Header, Static
-    except ModuleNotFoundError as exc:
-        if exc.name == "textual":
-            maybe_reexec_textual_venv()
-        raise SystemExit("Textual is required for the live TUI. Run `workflow tui` or install the workflow virtualenv.") from exc
+    from workflow_tui_app import run_textual_app as run_app
 
-    class WorkflowDashboardApp(App):
-        CSS = """
-        Screen {
-            background: #101418;
-            color: #d7dde8;
-        }
-
-        #dashboard {
-            width: 100%;
-            height: 1fr;
-            padding: 0;
-        }
-        """
-        BINDINGS = [
-            ("q", "quit", "Quit"),
-            ("escape", "quit", "Quit"),
-            ("r", "reload_runs", "Reload"),
-            ("a", "toggle_agent_scope", "Agent scope"),
-            ("v", "toggle_agent_view", "Agent view"),
-            ("y", "copy_selected_id", "Copy id"),
-            ("p", "copy_selected_path", "Copy path"),
-            ("ctrl+y", "copy_selected_json", "Copy row"),
-            ("tab", "next_tab", "Next section"),
-            ("shift+tab", "previous_tab", "Prev section"),
-            ("right", "next_tab", "Next section"),
-            ("left", "previous_tab", "Prev section"),
-            ("j", "move_down", "Down"),
-            ("k", "move_up", "Up"),
-            ("down", "move_down", "Down"),
-            ("up", "move_up", "Up"),
-            ("space", "page_down", "Page down"),
-            ("pagedown", "page_down", "Page down"),
-            ("pageup", "page_up", "Page up"),
-            ("g", "top", "Top"),
-            ("G", "bottom", "Bottom"),
-        ]
-        TITLE = "Agent Workflows"
-
-        def __init__(self) -> None:
-            super().__init__()
-            self.runs: list[dict[str, Any]] = []
-            self.run_index = 0
-            self.row_index = 0
-            self.tab_index = 0
-            self.agent_scope_index = 0
-            self.agent_view_index = 0
-            self.selected_run_id: str | None = None
-            self.selected_row_ids: dict[str, str | None] = {tab: None for tab in TABS}
-            self.fallback_indexes: dict[str, int] = {tab: 0 for tab in TABS}
-            self.dashboard: Static | None = None
-            self.update_status: UpdateStatus | None = None
-            self.notified_update_head: str | None = None
-
-        @property
-        def tab(self) -> str:
-            return TABS[self.tab_index]
-
-        @property
-        def agent_scope(self) -> str:
-            return AGENT_SCOPES[self.agent_scope_index]
-
-        @property
-        def agent_view(self) -> str:
-            return AGENT_VIEWS[self.agent_view_index]
-
-        @property
-        def selected_run(self) -> dict[str, Any] | None:
-            if not self.runs:
-                return None
-            if self.selected_run_id:
-                self.run_index = index_for_key(self.runs, "runs", self.selected_run_id)
-            else:
-                self.run_index = clamp_index(self.run_index, len(self.runs))
-                self.selected_run_id = item_key("runs", self.runs[self.run_index], self.run_index)
-            return self.runs[self.run_index]
-
-        def compose(self) -> ComposeResult:
-            yield Header(show_clock=True)
-            yield Static(id="dashboard")
-            yield Footer()
-
-        def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
-            yield from super().get_system_commands(screen)
-            yield SystemCommand(
-                "Workflow: Check for updates",
-                "Check the workflow skill git upstream without blocking the TUI.",
-                self.action_check_for_updates,
-            )
-            yield SystemCommand(
-                "Workflow: Update skill from git",
-                "Run git pull --ff-only in the workflow skill checkout.",
-                self.action_update_skill_from_git,
-            )
-
-        def on_mount(self) -> None:
-            self.dashboard = self.query_one("#dashboard", Static)
-            self.reload_state()
-            self.set_interval(1.0, self.reload_state)
-            self.start_update_check(notify_current=False)
-            self.set_interval(UPDATE_CHECK_INTERVAL, lambda: self.start_update_check(notify_current=False))
-
-        def start_update_check(self, notify_current: bool) -> None:
-            if notify_current:
-                self.notify("Checking workflow skill updates...", title="Workflow", timeout=1.0)
-            name = "workflow-update-check-manual" if notify_current else "workflow-update-check-auto"
-            self.run_worker(
-                lambda: check_skill_update(timeout=UPDATE_CHECK_TIMEOUT),
-                name=name,
-                group="workflow-update-check",
-                exit_on_error=False,
-                exclusive=True,
-                thread=True,
-            )
-
-        def start_skill_update(self) -> None:
-            self.notify("Updating workflow skill from git...", title="Workflow", timeout=1.2)
-            self.run_worker(
-                lambda: update_skill_from_git(timeout=UPDATE_PULL_TIMEOUT, check_timeout=UPDATE_CHECK_TIMEOUT),
-                name="workflow-update-pull",
-                group="workflow-update-pull",
-                exit_on_error=False,
-                exclusive=True,
-                thread=True,
-            )
-
-        def handle_update_status(self, status: UpdateStatus, notify_current: bool) -> None:
-            self.update_status = status
-            if status.state == "available":
-                should_notify = notify_current or self.notified_update_head != status.remote_head
-                self.notified_update_head = status.remote_head
-                if should_notify:
-                    self.notify(
-                        f"{status.message} Use the command palette to run Workflow: Update skill from git.",
-                        title="Workflow update",
-                        severity="warning",
-                        timeout=8.0,
-                    )
-                return
-            if status.state == "current":
-                self.notified_update_head = None
-                if notify_current:
-                    self.notify(status.message, title="Workflow", timeout=3.0)
-                return
-            if notify_current:
-                self.notify(status.message, title="Workflow update", severity="warning", timeout=5.0)
-
-        def handle_update_action(self, result: UpdateActionResult) -> None:
-            self.update_status = result.status
-            if result.status.state == "current":
-                self.notified_update_head = None
-            severity = "error" if not result.success else "warning" if result.status.state == "available" else "information"
-            self.notify(result.message, title="Workflow update", severity=severity, timeout=6.0)
-
-        def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
-            if event.state == WorkerState.ERROR and event.worker.name.startswith("workflow-update-"):
-                self.notify("Workflow update worker failed.", title="Workflow update", severity="error", timeout=5.0)
-                return
-            if event.state != WorkerState.SUCCESS:
-                return
-            if event.worker.name.startswith("workflow-update-check-"):
-                status = event.worker.result
-                if isinstance(status, UpdateStatus):
-                    self.handle_update_status(status, notify_current=event.worker.name.endswith("-manual"))
-                return
-            if event.worker.name == "workflow-update-pull":
-                result = event.worker.result
-                if isinstance(result, UpdateActionResult):
-                    self.handle_update_action(result)
-
-        def reload_state(self) -> None:
-            self.capture_selection()
-            self.runs = load_runs()
-            self.restore_selection()
-            self.update_dashboard()
-
-        def active_rows(self) -> list[dict[str, Any]]:
-            return current_rows_for(
-                self.selected_run,
-                self.tab,
-                self.runs,
-                selected_phase_id=self.selected_row_ids.get("phases"),
-                agent_scope=self.agent_scope,
-            )
-
-        def capture_selection(self) -> None:
-            if self.runs:
-                self.run_index = clamp_index(self.run_index, len(self.runs))
-                self.selected_run_id = item_key("runs", self.runs[self.run_index], self.run_index)
-            rows = self.active_rows()
-            if rows:
-                index = self.run_index if self.tab == "runs" else self.row_index
-                index = clamp_index(index, len(rows))
-                self.selected_row_ids[self.tab] = item_key(self.tab, rows[index], index)
-                self.fallback_indexes[self.tab] = index
-
-        def restore_selection(self) -> None:
-            self.run_index = index_for_key(self.runs, "runs", self.selected_run_id)
-            if self.runs:
-                self.selected_run_id = item_key("runs", self.runs[self.run_index], self.run_index)
-            rows = self.active_rows()
-            if self.tab == "runs":
-                self.row_index = 0
-                return
-            selected_id = self.selected_row_ids.get(self.tab)
-            fallback = self.fallback_indexes.get(self.tab, 0)
-            self.row_index = index_for_key(rows, self.tab, selected_id) if selected_id else clamp_index(fallback, len(rows))
-            if rows:
-                self.selected_row_ids[self.tab] = item_key(self.tab, rows[self.row_index], self.row_index)
-
-        def update_dashboard(self) -> None:
-            if self.dashboard is None:
-                return
-            width = max(0, self.dashboard.size.width, self.size.width - 2)
-            height = max(0, self.dashboard.size.height, self.size.height - 3)
-            self.dashboard.update(
-                render_dashboard(
-                    self.runs,
-                    width=width,
-                    height=height,
-                    tab=self.tab,
-                    run_index=self.run_index,
-                    row_index=self.row_index,
-                    chrome=False,
-                    selected_phase_id=self.selected_row_ids.get("phases"),
-                    agent_scope=self.agent_scope,
-                    agent_view=self.agent_view,
-                )
-            )
-
-        def action_reload_runs(self) -> None:
-            self.reload_state()
-
-        def action_check_for_updates(self) -> None:
-            self.start_update_check(notify_current=True)
-
-        def action_update_skill_from_git(self) -> None:
-            self.start_skill_update()
-
-        def action_toggle_agent_scope(self) -> None:
-            self.capture_selection()
-            self.agent_scope_index = (self.agent_scope_index + 1) % len(AGENT_SCOPES)
-            self.restore_selection()
-            self.update_dashboard()
-
-        def action_toggle_agent_view(self) -> None:
-            self.agent_view_index = (self.agent_view_index + 1) % len(AGENT_VIEWS)
-            self.update_dashboard()
-
-        def copy_selection(self, mode: str) -> None:
-            rows = self.active_rows()
-            selected = self.run_index if self.tab == "runs" else self.row_index
-            label, value = copy_value_for_selection(self.selected_run, self.tab, rows, selected, mode)
-            if not value:
-                self.notify(f"No {label or mode} to copy", title="Workflow", severity="warning", timeout=0.8)
-                return
-            self.copy_to_clipboard(value)
-            self.notify(f"Copied {label}", title="Workflow", timeout=0.8)
-
-        def action_copy_selected_id(self) -> None:
-            self.copy_selection("id")
-
-        def action_copy_selected_path(self) -> None:
-            self.copy_selection("path")
-
-        def action_copy_selected_json(self) -> None:
-            self.copy_selection("json")
-
-        def action_next_tab(self) -> None:
-            self.capture_selection()
-            self.tab_index = (self.tab_index + 1) % len(TABS)
-            self.restore_selection()
-            self.update_dashboard()
-
-        def action_previous_tab(self) -> None:
-            self.capture_selection()
-            self.tab_index = (self.tab_index - 1) % len(TABS)
-            self.restore_selection()
-            self.update_dashboard()
-
-        def action_move_down(self) -> None:
-            rows = self.active_rows()
-            if self.tab == "runs":
-                self.run_index = clamp_index(self.run_index + 1, len(self.runs))
-                if self.runs:
-                    self.selected_run_id = item_key("runs", self.runs[self.run_index], self.run_index)
-            else:
-                self.row_index = clamp_index(self.row_index + 1, len(rows))
-                if rows:
-                    self.selected_row_ids[self.tab] = item_key(self.tab, rows[self.row_index], self.row_index)
-                    self.fallback_indexes[self.tab] = self.row_index
-            self.update_dashboard()
-
-        def action_move_up(self) -> None:
-            if self.tab == "runs":
-                self.run_index = clamp_index(self.run_index - 1, len(self.runs))
-                if self.runs:
-                    self.selected_run_id = item_key("runs", self.runs[self.run_index], self.run_index)
-            else:
-                self.row_index = max(0, self.row_index - 1)
-                rows = self.active_rows()
-                if rows:
-                    self.selected_row_ids[self.tab] = item_key(self.tab, rows[self.row_index], self.row_index)
-                    self.fallback_indexes[self.tab] = self.row_index
-            self.update_dashboard()
-
-        def action_top(self) -> None:
-            if self.tab == "runs":
-                self.run_index = 0
-                if self.runs:
-                    self.selected_run_id = item_key("runs", self.runs[self.run_index], self.run_index)
-            else:
-                self.row_index = 0
-                rows = self.active_rows()
-                if rows:
-                    self.selected_row_ids[self.tab] = item_key(self.tab, rows[self.row_index], self.row_index)
-                    self.fallback_indexes[self.tab] = self.row_index
-            self.update_dashboard()
-
-        def action_bottom(self) -> None:
-            rows = self.active_rows()
-            if self.tab == "runs":
-                self.run_index = max(0, len(self.runs) - 1)
-                if self.runs:
-                    self.selected_run_id = item_key("runs", self.runs[self.run_index], self.run_index)
-            else:
-                self.row_index = max(0, len(rows) - 1)
-                if rows:
-                    self.selected_row_ids[self.tab] = item_key(self.tab, rows[self.row_index], self.row_index)
-                    self.fallback_indexes[self.tab] = self.row_index
-            self.update_dashboard()
-
-        def page_step(self) -> int:
-            return max(5, min(12, self.size.height // 4))
-
-        def action_page_down(self) -> None:
-            rows = self.active_rows()
-            if self.tab == "runs":
-                self.run_index = clamp_index(self.run_index + self.page_step(), len(self.runs))
-                if self.runs:
-                    self.selected_run_id = item_key("runs", self.runs[self.run_index], self.run_index)
-            else:
-                self.row_index = clamp_index(self.row_index + self.page_step(), len(rows))
-                if rows:
-                    self.selected_row_ids[self.tab] = item_key(self.tab, rows[self.row_index], self.row_index)
-                    self.fallback_indexes[self.tab] = self.row_index
-            self.update_dashboard()
-
-        def action_page_up(self) -> None:
-            if self.tab == "runs":
-                self.run_index = max(0, self.run_index - self.page_step())
-                if self.runs:
-                    self.selected_run_id = item_key("runs", self.runs[self.run_index], self.run_index)
-            else:
-                self.row_index = max(0, self.row_index - self.page_step())
-                rows = self.active_rows()
-                if rows:
-                    self.selected_row_ids[self.tab] = item_key(self.tab, rows[self.row_index], self.row_index)
-                    self.fallback_indexes[self.tab] = self.row_index
-            self.update_dashboard()
-
-    WorkflowDashboardApp().run()
+    run_app(sys.modules[__name__])
 
 
 def print_summary() -> None:

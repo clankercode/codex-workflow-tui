@@ -1,4 +1,4 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 ╭───────────────── Phases ─────────────────╮╭───── runs  ● phases  agents  events  decisions  artifacts ─────╮
 │                                          ││ ╭────────────────────────── Review ──────────────────────────╮ │
 │       State   Name                       ││ │ phase       phase-review                                   │ │

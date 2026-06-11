@@ -1,4 +1,4 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 ╭────────────────── Runs ──────────────────╮╭───── ● runs  phases  agents  events  decisions  artifacts ─────╮
 │    State  Title                          ││ id          wf-fixture-rich                                    │
 │ ▸  RUN    Fixture Workflow With Paralle… ││ title       Fixture Workflow With Parallel Review              │
@@ -12,19 +12,19 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                          ││ │ tool calls  0                                              │ │
 │                                          ││ │ active      1                                              │ │
 │                                          ││ │ longest     Security reviewer                              │ │
+│                                          ││ │ agents      3                                              │ │
+│                                          ││ │ phases      3                                              │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
 │                                          ││ │ No live output yet.                                        │ │
-│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
-│                                          ││ ╭──────────────────── Latest Tool Calls ─────────────────────╮ │
-│                                          ││ │ No tool calls recorded yet.                                │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭────────────────────────── Prompt ──────────────────────────╮ │
 │                                          ││ │ Build and review a Codex workflow system with a polished   │ │
 │                                          ││ │ TUI, fixtures, snapshots, and clear state.                 │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
-│                                          ││ ╭───────────────────────── Metrics ──────────────────────────╮ │
-│                                          ││ │ agents        3                                            │ │
-│                                          ││ │ agent state   PEND 1  RUN 1  DONE 1                        │ │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
 ╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
 path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json

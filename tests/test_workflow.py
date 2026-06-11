@@ -870,9 +870,35 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("│", rendered)
         self.assertNotIn("+ runs", rendered)
 
-    def test_snapshot_header_describes_pane_and_tab_navigation(self) -> None:
-        """Keep the TUI header explicit about section and row navigation."""
-        rendered = self.run_script(
+    def test_snapshot_panels_are_not_cropped_mid_box(self) -> None:
+        """Supported visual-review sizes should render complete panels, not clipped boxes."""
+        cases = [
+            ("rich-runs", str(FIXTURE), "runs", "110", "30"),
+            ("narrow-runs", str(FIXTURE), "runs", "80", "24"),
+            ("narrow-agents", str(FIXTURE), "agents", "80", "24"),
+            ("live-runs", str(E2E_FIXTURE), "runs", "120", "36"),
+        ]
+        for label, fixture, tab, width, height in cases:
+            with self.subTest(label=label):
+                rendered = self.run_script(
+                    "workflow_tui.py",
+                    "--snapshot",
+                    "--fixture",
+                    fixture,
+                    "--tab",
+                    tab,
+                    "--width",
+                    width,
+                    "--height",
+                    height,
+                    env=self.snapshot_env(),
+                ).stdout
+                self.assertEqual(rendered.count("╭"), rendered.count("╰"), rendered)
+                self.assertNotIn("Metrics", rendered.splitlines()[-5:])
+
+    def test_snapshot_header_shows_agent_actions_only_on_agents_tab(self) -> None:
+        """Keep agent-specific header shortcuts scoped to the agents tab."""
+        runs = self.run_script(
             "workflow_tui.py",
             "--snapshot",
             "--fixture",
@@ -885,14 +911,210 @@ class WorkflowScriptTests(unittest.TestCase):
             "30",
             env=self.snapshot_env(),
         ).stdout
-        self.assertIn("←/→ tabs", rendered)
-        self.assertIn("y id", rendered)
-        self.assertIn("p path", rendered)
-        self.assertIn("a scope", rendered)
-        self.assertIn("v view", rendered)
-        self.assertNotIn("tab side/main", rendered)
-        self.assertNotIn("→ main", rendered)
-        self.assertNotIn("← main tabs", rendered)
+        agents = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "agents",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("←/→ tabs", runs)
+        self.assertIn("y id", runs)
+        self.assertIn("p path", runs)
+        self.assertNotIn("a scope", runs)
+        self.assertNotIn("v view", runs)
+        self.assertIn("a scope", agents)
+        self.assertIn("v view", agents)
+        self.assertNotIn("tab side/main", runs)
+        self.assertNotIn("→ main", runs)
+        self.assertNotIn("← main tabs", runs)
+
+    def test_agent_only_actions_are_enabled_only_on_agents_tab(self) -> None:
+        """Match live TUI key handling to the header's agent-only shortcuts."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        agent_actions = ["toggle_agent_scope", "toggle_agent_view"]
+        for action in agent_actions:
+            with self.subTest(tab="agents", action=action):
+                self.assertTrue(workflow_tui.action_enabled_for_tab("agents", action))
+            for tab in ("runs", "phases", "events", "decisions", "artifacts"):
+                with self.subTest(tab=tab, action=action):
+                    self.assertFalse(workflow_tui.action_enabled_for_tab(tab, action))
+        self.assertTrue(workflow_tui.action_enabled_for_tab("runs", "copy_selected_id"))
+
+    def test_live_footer_refreshes_agent_bindings_on_tab_change(self) -> None:
+        """Refresh live Textual help when agent-only shortcuts enter or leave scope."""
+        import types
+
+        sys.path.insert(0, str(SCRIPTS))
+        module_names = [
+            "textual",
+            "textual.app",
+            "textual.screen",
+            "textual.worker",
+            "textual.widgets",
+            "workflow_tui_app",
+        ]
+        original_modules = {name: sys.modules.get(name) for name in module_names}
+        for name in module_names:
+            sys.modules.pop(name, None)
+
+        observations: dict[str, int | bool | None] = {}
+
+        class FakeApp:
+            def __init__(self) -> None:
+                self.refresh_binding_calls = 0
+                self.size = types.SimpleNamespace(width=110, height=30)
+
+            def refresh_bindings(self) -> None:
+                self.refresh_binding_calls += 1
+
+            def run(self) -> None:
+                observations["initial_scope"] = self.check_action("toggle_agent_scope", ())
+                self.tab_index = FakeTui.TABS.index("phases")
+                self.action_next_tab()
+                observations["enter_agents_refreshes"] = self.refresh_binding_calls
+                observations["agents_scope"] = self.check_action("toggle_agent_scope", ())
+                self.action_next_tab()
+                observations["leave_agents_refreshes"] = self.refresh_binding_calls
+                observations["events_scope"] = self.check_action("toggle_agent_scope", ())
+                self.action_previous_tab()
+                observations["return_agents_refreshes"] = self.refresh_binding_calls
+                observations["return_agents_scope"] = self.check_action("toggle_agent_scope", ())
+                self.action_previous_tab()
+                observations["back_phases_refreshes"] = self.refresh_binding_calls
+                observations["phases_scope"] = self.check_action("toggle_agent_scope", ())
+
+        class FakeSystemCommand:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+        class FakeStatic:
+            pass
+
+        class FakeTui:
+            TABS = ("runs", "phases", "agents", "events", "decisions", "artifacts")
+            AGENT_SCOPES = ("phase", "all")
+            AGENT_VIEWS = ("live", "prompt")
+            UPDATE_CHECK_INTERVAL = 999.0
+            UPDATE_CHECK_TIMEOUT = 1.0
+            UPDATE_PULL_TIMEOUT = 1.0
+
+            @staticmethod
+            def action_enabled_for_tab(tab: str, action: str) -> bool:
+                return tab == "agents" or action not in {"toggle_agent_scope", "toggle_agent_view"}
+
+            @staticmethod
+            def current_rows_for(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+                return []
+
+            @staticmethod
+            def index_for_key(*_args: object, **_kwargs: object) -> int:
+                return 0
+
+            @staticmethod
+            def clamp_index(*_args: object, **_kwargs: object) -> int:
+                return 0
+
+        try:
+            sys.modules["textual"] = types.ModuleType("textual")
+            app_module = types.ModuleType("textual.app")
+            app_module.App = FakeApp
+            app_module.ComposeResult = object
+            app_module.SystemCommand = FakeSystemCommand
+            sys.modules["textual.app"] = app_module
+            screen_module = types.ModuleType("textual.screen")
+            screen_module.Screen = object
+            sys.modules["textual.screen"] = screen_module
+            worker_module = types.ModuleType("textual.worker")
+            worker_module.Worker = type("Worker", (), {"StateChanged": object})
+            worker_module.WorkerState = types.SimpleNamespace(ERROR="error", SUCCESS="success")
+            sys.modules["textual.worker"] = worker_module
+            widgets_module = types.ModuleType("textual.widgets")
+            widgets_module.Footer = FakeStatic
+            widgets_module.Header = FakeStatic
+            widgets_module.Static = FakeStatic
+            sys.modules["textual.widgets"] = widgets_module
+
+            import workflow_tui_app  # pylint: disable=import-outside-toplevel
+
+            workflow_tui_app.run_textual_app(FakeTui)
+        finally:
+            for name, original in original_modules.items():
+                if original is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = original
+
+        self.assertFalse(observations["initial_scope"])
+        self.assertEqual(observations["enter_agents_refreshes"], 1)
+        self.assertTrue(observations["agents_scope"])
+        self.assertEqual(observations["leave_agents_refreshes"], 2)
+        self.assertFalse(observations["events_scope"])
+        self.assertEqual(observations["return_agents_refreshes"], 3)
+        self.assertTrue(observations["return_agents_scope"])
+        self.assertEqual(observations["back_phases_refreshes"], 4)
+        self.assertFalse(observations["phases_scope"])
+
+    def test_textual_venv_reexec_uses_cli_entrypoint(self) -> None:
+        """Re-entering the workflow venv should launch the CLI backend, not the app helper."""
+        import builtins
+
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+        import workflow_tui_app  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            venv_python = tmp_path / ".venv" / "bin" / "python"
+            venv_python.parent.mkdir(parents=True)
+            venv_python.write_text("", encoding="utf-8")
+
+            calls: list[tuple[str, list[str]]] = []
+            original_execv = os.execv
+            original_executable = sys.executable
+            original_argv = sys.argv
+            original_import = builtins.__import__
+            original_workflow_root = workflow_tui_app.workflow_state.workflow_root
+
+            def import_without_textual(name: str, *args: object, **kwargs: object) -> object:
+                """Force the Textual import path through workflow venv re-exec handling."""
+                if name == "textual" or name.startswith("textual."):
+                    raise ModuleNotFoundError("No module named 'textual'", name="textual")
+                return original_import(name, *args, **kwargs)
+
+            try:
+                os.execv = lambda path, args: calls.append((path, args))  # type: ignore[assignment]
+                sys.executable = str(tmp_path / "system-python")
+                sys.argv = [str(SCRIPTS / "workflow_tui.py"), "--tab", "agents"]
+                builtins.__import__ = import_without_textual  # type: ignore[assignment]
+                workflow_tui_app.workflow_state.workflow_root = lambda: tmp_path
+
+                with self.assertRaises(SystemExit):
+                    workflow_tui_app.run_textual_app(workflow_tui)
+            finally:
+                workflow_tui_app.workflow_state.workflow_root = original_workflow_root
+                builtins.__import__ = original_import  # type: ignore[assignment]
+                sys.argv = original_argv
+                sys.executable = original_executable
+                os.execv = original_execv  # type: ignore[assignment]
+
+            self.assertEqual(
+                calls,
+                [
+                    (
+                        str(venv_python),
+                        [str(venv_python), str(Path(workflow_tui.__file__).resolve()), "--tab", "agents"],
+                    )
+                ],
+            )
 
     def test_snapshot_phase_sidebar_matches_selected_run(self) -> None:
         """Show phases in the left column while the phases section is active."""
@@ -1140,7 +1362,7 @@ class WorkflowScriptTests(unittest.TestCase):
 
     def test_sidebar_tables_prioritize_readable_labels(self) -> None:
         """Sidebar tables should hide low-value columns before truncating important names."""
-        rendered = self.run_script(
+        phases = self.run_script(
             "workflow_tui.py",
             "--snapshot",
             "--fixture",
@@ -1153,10 +1375,25 @@ class WorkflowScriptTests(unittest.TestCase):
             "24",
             env=self.snapshot_env(),
         ).stdout
-        self.assertIn("Research", rendered)
-        self.assertIn("Review", rendered)
-        self.assertIn("Synthesis", rendered)
-        self.assertNotIn("phase-synthesis", rendered.split("╭", 2)[1])
+        decisions = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "decisions",
+            "--width",
+            "80",
+            "--height",
+            "24",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("Research", phases)
+        self.assertIn("Review", phases)
+        self.assertIn("Synthesis", phases)
+        self.assertNotIn("phase-synthesis", phases.split("╭", 2)[1])
+        self.assertIn("Default workers to read-only", decisions)
+        self.assertNotIn("Default   10:04", decisions)
 
     def test_empty_decision_and_artifact_sidebars_do_not_wrap_no_rows(self) -> None:
         """Empty collection sidebars should render a single clear line."""
@@ -1781,6 +2018,32 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("send-key Right", result.stdout)
         self.assertIn("send-key y", result.stdout)
         self.assertIn("send-key p", result.stdout)
+
+    def test_tmux_qa_staging_copies_fixture_assets_and_logs(self) -> None:
+        """Keep staged tmux QA runs backed by fixture-relative artifacts and logs."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_tmux_qa  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = workflow_tui_tmux_qa.prepare_state(FIXTURE, tmp_path / "rich")
+            rich_run_dir = state_dir / "runs" / "wf-fixture-rich"
+            staged_report = rich_run_dir / "artifacts" / "final-report.md"
+            expected_report = FIXTURE.parent / "artifacts" / "final-report.md"
+            self.assertEqual(staged_report.read_text(encoding="utf-8"), expected_report.read_text(encoding="utf-8"))
+
+            e2e_state_dir = workflow_tui_tmux_qa.prepare_state(E2E_FIXTURE, tmp_path / "e2e")
+            e2e_run_dir = e2e_state_dir / "runs" / "wf-fixture-e2e-live"
+            for relative_path in ("artifacts/tests.md", "logs/tests.jsonl", "logs/tests.stderr.log"):
+                with self.subTest(relative_path=relative_path):
+                    staged_asset = e2e_run_dir / relative_path
+                    fixture_asset = E2E_FIXTURE.parent / relative_path
+                    self.assertEqual(staged_asset.read_text(encoding="utf-8"), fixture_asset.read_text(encoding="utf-8"))
+
+        expected_artifact_text = workflow_tui_tmux_qa.EXPECTED_CAPTURE_TEXT["artifacts"]
+        self.assertIn("Artifact Preview", expected_artifact_text)
+        self.assertIn("Final synthesis report", expected_artifact_text)
+        self.assertIn("Security: no critical issues", expected_artifact_text)
 
     def test_fibonacci_stress_creates_full_99_agent_tree(self) -> None:
         """Exercise the full F(100) manual-agent tree in isolated workflow state."""
