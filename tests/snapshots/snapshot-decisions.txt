@@ -3,8 +3,8 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                          ││ ╭───────────────────────── Decision ─────────────────────────╮ │
 │       Summary           When             ││ │ decision_id   dec-default                                  │ │
 │  ──────────────────────────────────────  ││ │ title         Default workers to read-only                 │ │
-│   ▸   Default workers   10:04 AEST       ││ │ made_by       lead                                         │ │
-│       to read-only                       ││ │ time          10:04 AEST                                   │ │
+│   ▸   Default workers   10:04:00 AEST    ││ │ made_by       lead                                         │ │
+│       to read-only                       ││ │ time          10:04:00 AEST                                │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭──────────────────────── Rationale ─────────────────────────╮ │
 │                                          ││ │ Read-only first keeps the initial workflow safe.           │ │

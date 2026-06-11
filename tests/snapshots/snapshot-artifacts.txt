@@ -3,11 +3,11 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                          ││ ╭───────────────────────── Artifact ─────────────────────────╮ │
 │       Summary           When             ││ │ artifact_id   art-report                                   │ │
 │  ──────────────────────────────────────  ││ │ title         Final report                                 │ │
-│   ▸   Final report      10:05 AEST       ││ │ kind          file                                         │ │
+│   ▸   Final report      10:05:00 AEST    ││ │ kind          file                                         │ │
 │                                          ││ │ path          …/tests/fixtures/artifacts/final-report.md   │ │
 │                                          ││ │ phase         phase-synthesis                              │ │
 │                                          ││ │ agent                                                      │ │
-│                                          ││ │ time          10:05 AEST                                   │ │
+│                                          ││ │ time          10:05:00 AEST                                │ │
 │                                          ││ │                                                            │ │
 │                                          ││ │                                                            │ │
 │                                          ││ │                                                            │ │

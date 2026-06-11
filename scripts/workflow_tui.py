@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import os
 import re
 import subprocess
@@ -237,12 +238,73 @@ def display_event_timestamp(value: Any, now: datetime | None = None) -> str:
         return "" if value is None else str(value)
     reference = (now or datetime.now(parsed.tzinfo)).astimezone(parsed.tzinfo)
     if abs((reference - parsed).total_seconds()) <= 86_400:
-        return parsed.strftime("%H:%M %Z").strip()
+        return parsed.strftime("%H:%M:%S %Z").strip()
     return parsed.strftime("%y-%m-%d %H:%M").strip()
 
 
+def is_duration_seconds_key(key: str | None) -> bool:
+    """Return true for metadata fields that carry elapsed seconds."""
+    if not key:
+        return False
+    normalized = str(key).lower().replace("-", "_").replace(" ", "_")
+    return normalized.endswith("_seconds")
+
+
+def parse_duration_seconds(value: Any) -> float | None:
+    """Parse a numeric seconds value without treating booleans as durations."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            seconds = float(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    return seconds if math.isfinite(seconds) else None
+
+
+def compact_decimal(value: float, places: int) -> str:
+    """Format a decimal without scientific notation or useless trailing zeroes."""
+    text = f"{value:.{places}f}".rstrip("0").rstrip(".")
+    return text if text not in {"", "-0"} else "0"
+
+
+def format_duration_seconds(value: Any) -> str | None:
+    """Render seconds as a readable duration with the smallest useful unit."""
+    seconds = parse_duration_seconds(value)
+    if seconds is None:
+        return None
+    magnitude = abs(seconds)
+    if magnitude == 0:
+        return "<1 us"
+    if magnitude < 0.001:
+        micros = seconds * 1_000_000
+        places = 2 if abs(micros) < 1 else 1 if abs(micros) < 10 else 0
+        return f"{compact_decimal(micros, places)} us"
+    if magnitude < 1:
+        millis = seconds * 1_000
+        places = 2 if abs(millis) < 10 else 1 if abs(millis) < 100 else 0
+        return f"{compact_decimal(millis, places)} ms"
+    if magnitude < 60:
+        places = 2 if magnitude < 10 else 1
+        return f"{compact_decimal(seconds, places)} s"
+    total_seconds = int(round(magnitude))
+    minutes, remainder = divmod(total_seconds, 60)
+    sign = "-" if seconds < 0 else ""
+    if minutes < 60:
+        return f"{sign}{minutes}m {remainder:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{sign}{hours}h {minutes:02d}m"
+
+
 def display_timestamps_in_detail(value: Any, key: str | None = None) -> Any:
-    """Copy a detail value with timestamp fields rendered for humans."""
+    """Copy a detail value with timestamp and duration fields rendered for humans."""
     if isinstance(value, dict):
         return {
             item_key: display_timestamps_in_detail(item_value, item_key)
@@ -252,6 +314,10 @@ def display_timestamps_in_detail(value: Any, key: str | None = None) -> Any:
         return [display_timestamps_in_detail(item) for item in value]
     if isinstance(value, str) and key in TIMESTAMP_KEYS:
         return display_timestamp(value)
+    if is_duration_seconds_key(key):
+        formatted = format_duration_seconds(value)
+        if formatted is not None:
+            return formatted
     return value
 
 
@@ -461,14 +527,15 @@ def make_mapping_table(rows: list[tuple[str, Any]]) -> Table:
     table.add_column(width=14, no_wrap=True)
     table.add_column(ratio=1)
     for label, value in rows:
-        if isinstance(value, Text):
-            rendered = value
-        elif isinstance(value, (dict, list)):
-            rendered = compact_json(display_timestamps_in_detail(value))
-        elif value is None:
+        display_value = display_timestamps_in_detail(value, str(label))
+        if isinstance(display_value, Text):
+            rendered = display_value
+        elif isinstance(display_value, (dict, list)):
+            rendered = compact_json(display_value)
+        elif display_value is None:
             rendered = ""
         else:
-            rendered = str(value)
+            rendered = str(display_value)
         table.add_row(Text(label, style="bold bright_black"), rendered)
     return table
 

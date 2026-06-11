@@ -1025,9 +1025,36 @@ class WorkflowScriptTests(unittest.TestCase):
         from datetime import timezone
 
         reference = datetime.fromisoformat("2026-06-11T08:00:00+10:00")
-        self.assertEqual(workflow_tui.display_event_timestamp("2026-06-11T00:05:00Z", now=reference), "10:05 AEST")
+        self.assertEqual(workflow_tui.display_event_timestamp("2026-06-11T00:05:00Z", now=reference), "10:05:00 AEST")
         self.assertEqual(workflow_tui.display_event_timestamp("2026-06-09T21:05:00Z", now=reference), "26-06-10 07:05")
         self.assertEqual(workflow_tui.display_event_timestamp("", now=reference.astimezone(timezone.utc)), "")
+
+    def test_duration_fields_render_with_human_units(self) -> None:
+        """Tiny duration fields should not leak scientific notation or bare zeroes."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        sink = io.StringIO()
+        console = Console(file=sink, width=80, force_terminal=False, color_system=None)
+        console.print(
+            workflow_tui.make_mapping_table(
+                [
+                    ("duration_seconds", 0.0000024),
+                    ("zero_duration_seconds", 0),
+                    ("elapsed_seconds", 0.0312),
+                    ("e2e_seconds", 2.5),
+                    ("count", 0),
+                ]
+            )
+        )
+        rendered = sink.getvalue()
+        self.assertIn("2.4 us", rendered)
+        self.assertIn("<1 us", rendered)
+        self.assertIn("31.2 ms", rendered)
+        self.assertIn("2.5 s", rendered)
+        self.assertIn("count", rendered)
+        self.assertNotIn("e-", rendered.lower())
+        self.assertNotIn("0.0", rendered)
 
     def test_event_type_cells_are_colorized(self) -> None:
         """Use styled event type cells instead of plain event text only."""
@@ -1104,10 +1131,10 @@ class WorkflowScriptTests(unittest.TestCase):
         ).stdout
 
         self.assertIn("updated     Jun 11 10:05 AEST", runs_rendered)
-        self.assertIn("10:05 AEST", events_rendered)
-        self.assertIn("time          10:05 AEST", events_rendered)
-        self.assertIn("10:04 AEST", decisions_rendered)
-        self.assertIn("time          10:04 AEST", decisions_rendered)
+        self.assertIn("10:05:00 AEST", events_rendered)
+        self.assertIn("time          10:05:00 AEST", events_rendered)
+        self.assertIn("10:04:00 AEST", decisions_rendered)
+        self.assertIn("time          10:04:00 AEST", decisions_rendered)
         self.assertNotIn("2026-06-11T00:00:…", events_rendered)
         self.assertNotIn("2026-06-11T00:04:…", decisions_rendered)
 
@@ -1655,7 +1682,7 @@ class WorkflowScriptTests(unittest.TestCase):
         expected = (SNAPSHOTS / "snapshot-narrow-events.txt").read_text(encoding="utf-8")
         self.assertEqual(rendered, expected)
         self.assertIn("● evt", rendered)
-        self.assertIn("time          10:05 AEST", rendered)
+        self.assertIn("time          10:05:00 AEST", rendered)
         self.assertIn(" art ", rendered)
         self.assertIn("wf-fixture-rich/run.json", rendered)
 
