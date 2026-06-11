@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"thread-live-tests"}
+{"type":"item.completed","item":{"id":"item_msg_0","type":"agent_message","text":"I am checking the calculation with a short command."}}
+{"type":"item.started","item":{"id":"item_tool_1","type":"command_execution","command":"/usr/bin/python3 -c \"a,b=0,1\\nfor _ in range(20): a,b=b,a+b\\nprint(a)\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_tool_1","type":"command_execution","command":"/usr/bin/python3 -c \"a,b=0,1\\nfor _ in range(20): a,b=b,a+b\\nprint(a)\"","aggregated_output":"6765\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_msg_2","type":"agent_message","text":"F(20) = 6765, verified by the tool call."},"usage":{"total_tokens":1234,"input_tokens":1000,"output_tokens":234}}

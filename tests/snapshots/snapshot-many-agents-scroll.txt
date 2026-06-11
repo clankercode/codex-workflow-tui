@@ -1,0 +1,30 @@
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
+╭─────────── Agents: Many rows ────────────╮╭───── runs  phases  ● agents  events  decisions  artifacts ─────╮
+│                                          ││ ╭────────────────────────── Agent ───────────────────────────╮ │
+│   State     Name                         ││ │ agent_id      agent-08                                     │ │
+│  ──────────────────────────────────────  ││ │ name          Agent 08                                     │ │
+│     DONE    Agent 00                     ││ │ role          review                                       │ │
+│     RUN     Agent 01                     ││ │ type          native-subagent                              │ │
+│     FAIL    Agent 02                     ││ │ model         gpt-5.5                                      │ │
+│     BLCK    Agent 03                     ││ │ phase         phase-many                                   │ │
+│     PAUS    Agent 04                     ││ ╰────────────────────────────────────────────────────────────╯ │
+│     CNCL    Agent 05                     ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
+│     PEND    Agent 06                     ││ │ tokens      0                                              │ │
+│     DONE    Agent 07                     ││ │ tools       0                                              │ │
+│   ▸ RUN     Agent 08                     ││ │ parse errs  0                                              │ │
+│     FAIL    Agent 09                     ││ │ status      running                                        │ │
+│     BLCK    Agent 10                     ││ │ thread                                                     │ │
+│     PAUS    Agent 11                     ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭──────────────────── Latest Tool Calls ─────────────────────╮ │
+│                                          ││ │ No tool calls recorded yet.                                │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
+│                                          ││ │ slice 08 summary                                           │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
+path: /tmp/wf-fixture-many/run.json

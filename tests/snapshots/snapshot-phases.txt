@@ -1,0 +1,30 @@
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
+╭───────────────── Phases ─────────────────╮╭───── runs  ● phases  agents  events  decisions  artifacts ─────╮
+│                                          ││ ╭────────────────────────── Review ──────────────────────────╮ │
+│       State   Name                       ││ │ phase       phase-review                                   │ │
+│  ──────────────────────────────────────  ││ │ status      running                                        │ │
+│       DONE    Research                   ││ │ agents      1/2 done                                       │ │
+│   ▸   RUN     Review                     ││ │ started     Jun 11 10:01 AEST                              │ │
+│       PEND    Synthesis                  ││ │ done                                                       │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭─────────────────────────── Goal ───────────────────────────╮ │
+│                                          ││ │ Run independent review lanes and surface blockers.         │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││   State     Name                                               │
+│                                          ││  ────────────────────────────────────────────────────────────  │
+│                                          ││   ▸ RUN     Security reviewer                                  │
+│                                          ││     DONE    Test coverage reviewer                             │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
+path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json

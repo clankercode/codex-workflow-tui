@@ -1,0 +1,445 @@
+{
+  "runs": [
+    {
+      "agents": [
+        {
+          "agent_id": "agent-security",
+          "agent_type": "native-subagent",
+          "completed_at": null,
+          "created_at": "2026-06-11T00:01:10Z",
+          "cwd": "/home/xertrov/src/demo",
+          "exit_code": null,
+          "jsonl_path": "",
+          "log_path": "logs/security.log",
+          "model": "gpt-5.5",
+          "name": "Security reviewer",
+          "output_path": "artifacts/security.md",
+          "phase_id": "phase-review",
+          "process_id": null,
+          "prompt": "Review authentication and secret handling.",
+          "result": "",
+          "role": "security review",
+          "started_at": "2026-06-11T00:01:20Z",
+          "status": "running",
+          "summary": "Inspecting auth boundaries and token storage",
+          "thread_id": "subagent-security",
+          "updated_at": "2026-06-11T00:02:00Z",
+          "write_scope": []
+        },
+        {
+          "agent_id": "agent-tests",
+          "agent_type": "codex-exec",
+          "completed_at": "2026-06-11T00:03:00Z",
+          "created_at": "2026-06-11T00:01:12Z",
+          "cwd": "/home/xertrov/src/demo",
+          "exit_code": 0,
+          "jsonl_path": "logs/tests.jsonl",
+          "log_path": "logs/tests.stderr.log",
+          "model": "gpt-5.4-mini",
+          "name": "Test coverage reviewer",
+          "output_path": "artifacts/tests.md",
+          "phase_id": "phase-review",
+          "process_id": 4242,
+          "prompt": "Review missing tests and weak fixtures.",
+          "result": "Coverage findings recorded.",
+          "role": "test review",
+          "started_at": "2026-06-11T00:01:22Z",
+          "status": "completed",
+          "summary": "Found one missing negative case",
+          "thread_id": "thread-tests",
+          "updated_at": "2026-06-11T00:03:00Z",
+          "write_scope": []
+        },
+        {
+          "agent_id": "agent-synthesis",
+          "agent_type": "opencode-direct",
+          "completed_at": null,
+          "created_at": "2026-06-11T00:04:40Z",
+          "cwd": "/home/xertrov/src/demo",
+          "exit_code": null,
+          "jsonl_path": "",
+          "log_path": "",
+          "model": "MiniMax-M3",
+          "name": "Synthesis writer",
+          "output_path": "artifacts/synthesis.md",
+          "phase_id": "phase-synthesis",
+          "process_id": null,
+          "prompt": "Combine review findings into the final workflow report.",
+          "result": "",
+          "role": "synthesis",
+          "started_at": null,
+          "status": "pending",
+          "summary": "",
+          "thread_id": "",
+          "updated_at": "2026-06-11T00:04:40Z",
+          "write_scope": []
+        }
+      ],
+      "artifacts": [
+        {
+          "artifact_id": "art-report",
+          "kind": "file",
+          "path": "artifacts/final-report.md",
+          "phase_id": "phase-synthesis",
+          "title": "Final report",
+          "ts": "2026-06-11T00:05:00Z"
+        }
+      ],
+      "coordinator": {
+        "thread_id": "lead-thread",
+        "tool": "codex"
+      },
+      "created_at": "2026-06-11T00:00:00Z",
+      "cwd": "/home/xertrov/src/demo",
+      "decisions": [
+        {
+          "decision_id": "dec-default",
+          "made_by": "lead",
+          "rationale": "Read-only first keeps the initial workflow safe.",
+          "title": "Default workers to read-only",
+          "ts": "2026-06-11T00:04:00Z"
+        }
+      ],
+      "events": [
+        {
+          "event_id": "evt-init",
+          "kind": "workflow",
+          "level": "info",
+          "message": "workflow initialized",
+          "operation": "initialized",
+          "source": "workflow_state.init",
+          "ts": "2026-06-11T00:00:00Z"
+        },
+        {
+          "agent_id": "agent-security",
+          "event_id": "evt-security",
+          "level": "info",
+          "message": "agent updated: Security reviewer",
+          "kind": "agent",
+          "operation": "updated",
+          "phase_id": "phase-review",
+          "source": "workflow_state.update_agent",
+          "ts": "2026-06-11T00:02:00Z",
+          "data": {
+            "agent_type": "native-subagent",
+            "model": "gpt-5.5",
+            "name": "Security reviewer",
+            "status": "running"
+          }
+        },
+        {
+          "agent_id": "agent-tests",
+          "event_id": "evt-tests",
+          "level": "info",
+          "message": "agent updated: Test coverage reviewer",
+          "kind": "agent",
+          "operation": "updated",
+          "phase_id": "phase-review",
+          "source": "workflow_state.update_agent",
+          "ts": "2026-06-11T00:03:00Z",
+          "data": {
+            "agent_type": "codex-exec",
+            "model": "gpt-5.4-mini",
+            "name": "Test coverage reviewer",
+            "status": "completed"
+          }
+        },
+        {
+          "event_id": "evt-synthesis",
+          "kind": "artifact",
+          "level": "info",
+          "message": "synthesis artifact recorded",
+          "operation": "recorded",
+          "phase_id": "phase-synthesis",
+          "source": "workflow_state.artifact",
+          "ts": "2026-06-11T00:05:00Z"
+        }
+      ],
+      "metrics": {
+        "agents_by_status": {
+          "completed": 1,
+          "pending": 1,
+          "running": 1
+        },
+        "agents_total": 3,
+        "phases_by_status": {
+          "completed": 1,
+          "pending": 1,
+          "running": 1
+        },
+        "phases_total": 3
+      },
+      "mode": "hybrid",
+      "paths": {
+        "artifacts_dir": "/home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/artifacts",
+        "logs_dir": "/home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/logs",
+        "run_dir": "/home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich",
+        "run_json": "/home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json"
+      },
+      "phases": [
+        {
+          "agent_ids": [],
+          "completed_at": "2026-06-11T00:01:00Z",
+          "created_at": "2026-06-11T00:00:05Z",
+          "goal": "Understand the implementation and risks before dispatching workers.",
+          "name": "Research",
+          "phase_id": "phase-research",
+          "started_at": "2026-06-11T00:00:05Z",
+          "status": "completed"
+        },
+        {
+          "agent_ids": [
+            "agent-security",
+            "agent-tests"
+          ],
+          "completed_at": null,
+          "created_at": "2026-06-11T00:01:00Z",
+          "goal": "Run independent review lanes and surface blockers.",
+          "name": "Review",
+          "phase_id": "phase-review",
+          "started_at": "2026-06-11T00:01:00Z",
+          "status": "running"
+        },
+        {
+          "agent_ids": [
+            "agent-synthesis"
+          ],
+          "completed_at": null,
+          "created_at": "2026-06-11T00:04:30Z",
+          "goal": "Combine worker findings into a final report artifact.",
+          "name": "Synthesis",
+          "phase_id": "phase-synthesis",
+          "started_at": null,
+          "status": "pending"
+        }
+      ],
+      "prompt": "Build and review a Codex workflow system with a polished TUI, fixtures, snapshots, and clear state.",
+      "run_id": "wf-fixture-rich",
+      "schema_version": 1,
+      "status": "running",
+      "tags": [
+        "fixture",
+        "visual"
+      ],
+      "title": "Fixture Workflow With Parallel Review",
+      "updated_at": "2026-06-11T00:05:00Z"
+    },
+    {
+      "agents": [],
+      "artifacts": [],
+      "coordinator": {
+        "thread_id": null,
+        "tool": "codex"
+      },
+      "created_at": "2026-06-10T23:00:00Z",
+      "cwd": "/home/xertrov/src/demo",
+      "decisions": [],
+      "events": [
+        {
+          "event_id": "evt-completed",
+          "level": "info",
+          "message": "workflow completed",
+          "ts": "2026-06-10T23:30:00Z"
+        }
+      ],
+      "metrics": {
+        "agents_by_status": {},
+        "agents_total": 0,
+        "phases_by_status": {},
+        "phases_total": 0
+      },
+      "mode": "demo",
+      "paths": {
+        "artifacts_dir": "/tmp/wf-fixture-complete/artifacts",
+        "logs_dir": "/tmp/wf-fixture-complete/logs",
+        "run_dir": "/tmp/wf-fixture-complete",
+        "run_json": "/tmp/wf-fixture-complete/run.json"
+      },
+      "phases": [],
+      "prompt": "A completed fixture row for list rendering.",
+      "run_id": "wf-fixture-complete",
+      "schema_version": 1,
+      "status": "completed",
+      "tags": [
+        "fixture"
+      ],
+      "title": "Completed Smoke Fixture",
+      "updated_at": "2026-06-10T23:30:00Z"
+    },
+    {
+      "agents": [],
+      "artifacts": [],
+      "coordinator": {
+        "thread_id": null,
+        "tool": "codex"
+      },
+      "created_at": "2026-06-10T22:00:00Z",
+      "cwd": "/home/xertrov/src/demo",
+      "decisions": [],
+      "events": [],
+      "metrics": {
+        "agents_by_status": {},
+        "agents_total": 0,
+        "phases_by_status": {},
+        "phases_total": 0
+      },
+      "mode": "demo",
+      "paths": {
+        "artifacts_dir": "/tmp/wf-fixture-failed/artifacts",
+        "logs_dir": "/tmp/wf-fixture-failed/logs",
+        "run_dir": "/tmp/wf-fixture-failed",
+        "run_json": "/tmp/wf-fixture-failed/run.json"
+      },
+      "phases": [],
+      "prompt": "A failed fixture row for list rendering.",
+      "run_id": "wf-fixture-failed",
+      "schema_version": 1,
+      "status": "failed",
+      "tags": [
+        "fixture"
+      ],
+      "title": "Failed Worker Fixture",
+      "updated_at": "2026-06-10T22:30:00Z"
+    },
+    {
+      "agents": [],
+      "artifacts": [],
+      "coordinator": {
+        "thread_id": null,
+        "tool": "codex"
+      },
+      "created_at": "2026-06-10T21:00:00Z",
+      "cwd": "/home/xertrov/src/demo",
+      "decisions": [],
+      "events": [],
+      "metrics": {
+        "agents_by_status": {},
+        "agents_total": 0,
+        "phases_by_status": {},
+        "phases_total": 0
+      },
+      "mode": "demo",
+      "paths": {
+        "artifacts_dir": "/tmp/wf-fixture-blocked/artifacts",
+        "logs_dir": "/tmp/wf-fixture-blocked/logs",
+        "run_dir": "/tmp/wf-fixture-blocked",
+        "run_json": "/tmp/wf-fixture-blocked/run.json"
+      },
+      "phases": [],
+      "prompt": "A blocked fixture row for list rendering.",
+      "run_id": "wf-fixture-blocked",
+      "schema_version": 1,
+      "status": "blocked",
+      "tags": [
+        "fixture"
+      ],
+      "title": "Blocked Decision Fixture",
+      "updated_at": "2026-06-10T21:30:00Z"
+    },
+    {
+      "agents": [],
+      "artifacts": [],
+      "coordinator": {
+        "thread_id": null,
+        "tool": "codex"
+      },
+      "created_at": "2026-06-10T20:00:00Z",
+      "cwd": "/home/xertrov/src/demo",
+      "decisions": [],
+      "events": [],
+      "metrics": {
+        "agents_by_status": {},
+        "agents_total": 0,
+        "phases_by_status": {},
+        "phases_total": 0
+      },
+      "mode": "demo",
+      "paths": {
+        "artifacts_dir": "/tmp/wf-fixture-paused/artifacts",
+        "logs_dir": "/tmp/wf-fixture-paused/logs",
+        "run_dir": "/tmp/wf-fixture-paused",
+        "run_json": "/tmp/wf-fixture-paused/run.json"
+      },
+      "phases": [],
+      "prompt": "A paused fixture row for list rendering.",
+      "run_id": "wf-fixture-paused",
+      "schema_version": 1,
+      "status": "paused",
+      "tags": [
+        "fixture"
+      ],
+      "title": "Paused Operator Fixture",
+      "updated_at": "2026-06-10T20:30:00Z"
+    },
+    {
+      "agents": [],
+      "artifacts": [],
+      "coordinator": {
+        "thread_id": null,
+        "tool": "codex"
+      },
+      "created_at": "2026-06-10T19:00:00Z",
+      "cwd": "/home/xertrov/src/demo",
+      "decisions": [],
+      "events": [],
+      "metrics": {
+        "agents_by_status": {},
+        "agents_total": 0,
+        "phases_by_status": {},
+        "phases_total": 0
+      },
+      "mode": "demo",
+      "paths": {
+        "artifacts_dir": "/tmp/wf-fixture-cancelled/artifacts",
+        "logs_dir": "/tmp/wf-fixture-cancelled/logs",
+        "run_dir": "/tmp/wf-fixture-cancelled",
+        "run_json": "/tmp/wf-fixture-cancelled/run.json"
+      },
+      "phases": [],
+      "prompt": "A cancelled fixture row for list rendering.",
+      "run_id": "wf-fixture-cancelled",
+      "schema_version": 1,
+      "status": "cancelled",
+      "tags": [
+        "fixture"
+      ],
+      "title": "Cancelled Scope Fixture",
+      "updated_at": "2026-06-10T19:30:00Z"
+    },
+    {
+      "agents": [],
+      "artifacts": [],
+      "coordinator": {
+        "thread_id": null,
+        "tool": "codex"
+      },
+      "created_at": "2026-06-10T18:00:00Z",
+      "cwd": "/home/xertrov/src/demo",
+      "decisions": [],
+      "events": [],
+      "metrics": {
+        "agents_by_status": {},
+        "agents_total": 0,
+        "phases_by_status": {},
+        "phases_total": 0
+      },
+      "mode": "demo",
+      "paths": {
+        "artifacts_dir": "/tmp/wf-fixture-pending/artifacts",
+        "logs_dir": "/tmp/wf-fixture-pending/logs",
+        "run_dir": "/tmp/wf-fixture-pending",
+        "run_json": "/tmp/wf-fixture-pending/run.json"
+      },
+      "phases": [],
+      "prompt": "A pending fixture row for list rendering.",
+      "run_id": "wf-fixture-pending",
+      "schema_version": 1,
+      "status": "pending",
+      "tags": [
+        "fixture"
+      ],
+      "title": "Pending Dispatch Fixture",
+      "updated_at": "2026-06-10T18:30:00Z"
+    }
+  ]
+}

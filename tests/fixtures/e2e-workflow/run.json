@@ -1,0 +1,87 @@
+{
+  "agents": [
+    {
+      "agent_id": "agent-live-tests",
+      "agent_type": "codex-direct",
+      "completed_at": null,
+      "created_at": "2026-06-11T00:08:00Z",
+      "cwd": "/home/xertrov/tmp/custom-wf-test",
+      "exit_code": null,
+      "jsonl_path": "logs/tests.jsonl",
+      "log_path": "logs/tests.stderr.log",
+      "model": "gpt-5.5",
+      "name": "Live test worker",
+      "output_path": "artifacts/tests.md",
+      "phase_id": "phase-calc",
+      "process_id": 5151,
+      "prompt": "Compute a small independent verification and report the answer.",
+      "result": "",
+      "role": "calculation",
+      "started_at": "2026-06-11T00:08:15Z",
+      "status": "running",
+      "summary": "Running tool-backed calculation",
+      "thread_id": "thread-live-tests",
+      "updated_at": "2026-06-11T00:09:00Z",
+      "write_scope": []
+    }
+  ],
+  "artifacts": [],
+  "coordinator": {
+    "thread_id": "lead-live",
+    "tool": "codex"
+  },
+  "created_at": "2026-06-11T00:08:00Z",
+  "cwd": "/home/xertrov/tmp/custom-wf-test",
+  "decisions": [],
+  "events": [
+    {
+      "event_id": "evt-live-start",
+      "level": "info",
+      "message": "live worker started",
+      "phase_id": "phase-calc",
+      "agent_id": "agent-live-tests",
+      "ts": "2026-06-11T00:08:15Z"
+    }
+  ],
+  "metrics": {
+    "agents_by_status": {
+      "running": 1
+    },
+    "agents_total": 1,
+    "phases_by_status": {
+      "running": 1
+    },
+    "phases_total": 1
+  },
+  "mode": "codex-direct",
+  "paths": {
+    "artifacts_dir": "artifacts",
+    "logs_dir": "logs",
+    "run_dir": ".",
+    "run_json": "run.json"
+  },
+  "phases": [
+    {
+      "agent_ids": [
+        "agent-live-tests"
+      ],
+      "completed_at": null,
+      "created_at": "2026-06-11T00:08:00Z",
+      "goal": "Run one visible tool-backed calculation.",
+      "name": "Calculation",
+      "phase_id": "phase-calc",
+      "started_at": "2026-06-11T00:08:00Z",
+      "status": "running"
+    }
+  ],
+  "prompt": "Fixture workflow for live TUI telemetry panels.",
+  "run_id": "wf-fixture-e2e-live",
+  "schema_version": 1,
+  "status": "running",
+  "tags": [
+    "fixture",
+    "telemetry"
+  ],
+  "title": "Live Telemetry Fixture",
+  "updated_at": "2026-06-11T00:09:00Z"
+}

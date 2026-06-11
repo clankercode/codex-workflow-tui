@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workflow"
+  short_description: "Stateful multi-agent workflow orchestration"
+  default_prompt: "Use $workflow to run a stateful multi-agent workflow for this task."

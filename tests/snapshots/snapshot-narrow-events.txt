@@ -1,0 +1,24 @@
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
+╭───────────── Events ─────────────╮╭───── run  pha  agt  ● evt  dec  art ─────╮
+│                                  ││ ╭─────────────── Event ────────────────╮ │
+│   Time               Type        ││ │ event_id      evt-synthesis          │ │
+│  ──────────────────────────────  ││ │ type          artifact recorded      │ │
+│   ▸ 10:05 AEST       artifact…   ││ │ level         info                   │ │
+│     10:03 AEST       agent up…   ││ │ time          10:05 AEST             │ │
+│     10:02 AEST       agent up…   ││ │ phase         phase-synthesis        │ │
+│     10:00 AEST       workflow…   ││ │ agent                                │ │
+│                                  ││ │ source        workflow_state.artifa… │ │
+│                                  ││ ╰──────────────────────────────────────╯ │
+│                                  ││ ╭────────────── Message ───────────────╮ │
+│                                  ││ │ synthesis artifact recorded          │ │
+│                                  ││ ╰──────────────────────────────────────╯ │
+│                                  ││                                          │
+│                                  ││                                          │
+│                                  ││                                          │
+│                                  ││                                          │
+│                                  ││                                          │
+│                                  ││                                          │
+│                                  ││                                          │
+│                                  ││                                          │
+╰──────────────────────────────────╯╰──────────────────────────────────────────╯
+path: …neral/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json

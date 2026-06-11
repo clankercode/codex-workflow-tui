@@ -1,0 +1,175 @@
+# Workflow State Schema
+
+Use this reference when reading or extending workflow state.
+
+## Location
+
+The source of truth is one JSON snapshot per run:
+
+```text
+~/.llm-general/ai-coding/codex/workflow-system/state/runs/<run-id>/run.json
+```
+
+Each run directory also contains:
+
+```text
+artifacts/   prompts, final reports, worker outputs
+logs/        worker transcripts, JSONL streams, and stderr logs
+run.json     current state snapshot
+```
+
+Set `WORKFLOW_HOME` to move the whole workflow system, or `WORKFLOW_STATE_DIR` to move only state.
+
+## Top-Level Shape
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "wf-20260611T044500Z-example-a1b2c3",
+  "title": "Example workflow",
+  "prompt": "Original objective",
+  "cwd": "/repo/path",
+  "mode": "hybrid",
+  "status": "running",
+  "tags": [],
+  "created_at": "2026-06-11T04:45:00Z",
+  "updated_at": "2026-06-11T04:47:00Z",
+  "coordinator": {"tool": "codex-direct", "thread_id": null},
+  "paths": {},
+  "phases": [],
+  "agents": [],
+  "events": [],
+  "decisions": [],
+  "artifacts": [],
+  "metrics": {}
+}
+```
+
+## Status Values
+
+Use the same status vocabulary for runs, phases, and agents:
+
+```text
+pending
+running
+blocked
+completed
+failed
+cancelled
+paused
+```
+
+`completed` means the work item met its acceptance criteria. `failed` means it terminated with a failed command, unrecovered exception, or invalid result. `blocked` means human input or external state is required.
+
+## Phase Records
+
+```json
+{
+  "phase_id": "phase-research",
+  "name": "Research",
+  "goal": "Find prior art and implementation constraints",
+  "order": 10,
+  "status": "running",
+  "created_at": "2026-06-11T04:45:00Z",
+  "started_at": "2026-06-11T04:45:00Z",
+  "completed_at": null,
+  "agent_ids": ["agent-a"]
+}
+```
+
+Phase ids may be stable human ids such as `phase-research`, or generated ids. Prefer stable ids when external tooling will reference them. Display order defaults to the persisted array order created by `add-phase`; tools may set optional integer `order` values if they need to display phases independently from insertion order.
+
+## Agent Records
+
+```json
+{
+  "agent_id": "codex-01-reviewer",
+  "phase_id": "phase-review",
+  "name": "Reviewer",
+  "role": "code quality review",
+  "agent_type": "codex-exec",
+  "status": "running",
+  "prompt": "Review the change...",
+  "cwd": "/repo/path",
+  "model": "gpt-5.5",
+  "thread_id": "",
+  "process_id": 12345,
+  "write_scope": ["src/review"],
+  "jsonl_path": ".../logs/codex-01-reviewer.jsonl",
+  "log_path": ".../logs/codex-01-reviewer.stderr.log",
+  "output_path": ".../artifacts/codex-01-reviewer.final.md",
+  "summary": "",
+  "result": "",
+  "exit_code": null,
+  "created_at": "2026-06-11T04:45:00Z",
+  "started_at": "2026-06-11T04:45:01Z",
+  "completed_at": null,
+  "updated_at": "2026-06-11T04:46:00Z"
+}
+```
+
+For native subagents, set `agent_type` to `native-subagent` or the custom agent type, and store the subagent id in `thread_id` or `agent_id` as available from the current tool surface.
+For work performed directly by the coordinator session, set `agent_type` to `lead-local` so completed phases still have an owner/audit record.
+
+For external workers, `jsonl_path` is the durable transcript path. Direct Codex and OpenCode providers usually store JSONL there; `ccc-*` providers may store `transcript.txt` or `transcript.jsonl` there. The final answer is mirrored into `result` and `output_path`.
+
+## Events
+
+Events are a bounded recent timeline inside `run.json`.
+
+```json
+{
+  "event_id": "evt-abc123",
+  "ts": "2026-06-11T04:47:00Z",
+  "level": "info",
+  "kind": "agent",
+  "operation": "updated",
+  "source": "workflow_state.update_agent",
+  "message": "agent updated: reviewer",
+  "phase_id": "phase-review",
+  "agent_id": "codex-01-reviewer",
+  "data": {"status": "completed", "agent_type": "codex-direct"}
+}
+```
+
+`kind`, `operation`, and `source` are optional for old events but preferred for new events. Free-form manual notes should use `kind=run_note` and `operation=note` unless they can name a more specific action. Current tooling keeps the newest 250 events in the snapshot. Future tooling can add an append-only `events.jsonl` without changing the snapshot fields.
+
+## Decisions
+
+Decisions are durable choices that should remain visible after event rollover.
+
+```json
+{
+  "decision_id": "dec-runner-ccc-opencode",
+  "ts": "2026-06-11T04:46:00Z",
+  "title": "Runner selected: ccc-opencode",
+  "rationale": "Run 3 coding-CLI workers with max_agents=4, startup_delay=1.0, sandbox=read-only.",
+  "made_by": "workflow_run.py"
+}
+```
+
+Use decisions for runner/provider choices, scope changes, risk acceptances, and architectural tradeoffs. `workflow_run.py` automatically records its runner/concurrency choice.
+
+## Artifacts
+
+Artifacts are durable outputs that should be easy to navigate from the TUI.
+
+```json
+{
+  "artifact_id": "art-ccc-opencode-01-review-output",
+  "ts": "2026-06-11T04:50:00Z",
+  "kind": "worker-output",
+  "title": "review final output",
+  "path": "/abs/path/to/output.txt",
+  "phase_id": "phase-cli-workers",
+  "agent_id": "ccc-opencode-01-review"
+}
+```
+
+Use `kind=file` for manually recorded reports and `kind=worker-output` for worker final outputs. `workflow_run.py` automatically exposes each worker final output as an artifact.
+
+## Write Semantics
+
+Use `workflow_state.py` for mutations. It writes snapshots with temp-file-plus-rename and refreshes derived metrics. External tools should treat `metrics` as derived and rebuildable.
+
+Do not infer lifecycle status from logs. Logs can inform summaries, but status changes must be explicit state updates.

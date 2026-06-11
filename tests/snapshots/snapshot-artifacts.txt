@@ -1,0 +1,30 @@
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
+╭─────────────── Artifacts ────────────────╮╭───── runs  phases  agents  events  decisions  ● artifacts ─────╮
+│                                          ││ ╭───────────────────────── Artifact ─────────────────────────╮ │
+│       Summary           When             ││ │ artifact_id   art-report                                   │ │
+│  ──────────────────────────────────────  ││ │ title         Final report                                 │ │
+│   ▸   Final report      10:05 AEST       ││ │ kind          file                                         │ │
+│                                          ││ │ path          …/tests/fixtures/artifacts/final-report.md   │ │
+│                                          ││ │ phase         phase-synthesis                              │ │
+│                                          ││ │ agent                                                      │ │
+│                                          ││ │ time          10:05 AEST                                   │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │                                                            │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
+path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json

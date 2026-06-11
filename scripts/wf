@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+
+SOURCE="${BASH_SOURCE[0]}"
+if command -v readlink >/dev/null 2>&1; then
+  SOURCE="$(readlink -f "$SOURCE")"
+fi
+SCRIPT_DIR="$(cd -- "$(dirname -- "$SOURCE")" && pwd)"
+PROG="$(basename -- "$0")"
+WORKFLOW_ROOT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
+TUI_PYTHON="${WORKFLOW_TUI_PYTHON:-$WORKFLOW_ROOT/workflow-system/.venv/bin/python}"
+
+python_for_tui() {
+  if [[ -x "$TUI_PYTHON" ]]; then
+    printf '%s\n' "$TUI_PYTHON"
+  else
+    printf '%s\n' python3
+  fi
+}
+
+usage() {
+  cat <<USAGE
+$PROG - agent workflow helper
+
+Usage:
+  $PROG tui
+  $PROG run [workflow_run.py args...]
+  $PROG run-codex [workflow_run_codex.py args...]
+  $PROG state [workflow_state.py args...]
+  $PROG list [workflow_state.py list args...]
+  $PROG show <run-id> [workflow_state.py show args...]
+  $PROG init [workflow_state.py init args...]
+  $PROG add-phase [workflow_state.py add-phase args...]
+  $PROG update-phase [workflow_state.py update-phase args...]
+  $PROG add-agent [workflow_state.py add-agent args...]
+  $PROG update-agent [workflow_state.py update-agent args...]
+  $PROG event [workflow_state.py event args...]
+  $PROG decision [workflow_state.py decision args...]
+  $PROG artifact [workflow_state.py artifact args...]
+  $PROG set-status [workflow_state.py set-status args...]
+USAGE
+}
+
+case "$PROG" in
+  workflow-tui)
+    cmd="tui"
+    ;;
+  workflow-state)
+    cmd="state"
+    ;;
+  workflow-run-codex)
+    cmd="run-codex"
+    ;;
+  workflow-run)
+    cmd="run"
+    ;;
+  *)
+    cmd="${1:-help}"
+    if [[ $# -gt 0 ]]; then
+      shift
+    fi
+    ;;
+esac
+
+case "$cmd" in
+  tui)
+    exec "$(python_for_tui)" "$SCRIPT_DIR/workflow_tui.py" "$@"
+    ;;
+  run)
+    exec python3 "$SCRIPT_DIR/workflow_run.py" "$@"
+    ;;
+  run-codex)
+    exec python3 "$SCRIPT_DIR/workflow_run_codex.py" "$@"
+    ;;
+  state)
+    exec python3 "$SCRIPT_DIR/workflow_state.py" "$@"
+    ;;
+  list|show|init|add-phase|update-phase|add-agent|update-agent|event|decision|artifact|set-status|demo)
+    exec python3 "$SCRIPT_DIR/workflow_state.py" "$cmd" "$@"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    echo "$PROG: unknown command: $cmd" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

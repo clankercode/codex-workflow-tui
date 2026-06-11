@@ -1,0 +1,30 @@
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
+╭───────────── Agents: Review ─────────────╮╭───── runs  phases  ● agents  events  decisions  artifacts ─────╮
+│                                          ││ ╭────────────────────────── Agent ───────────────────────────╮ │
+│   State     Name                         ││ │ agent_id      agent-tests                                  │ │
+│  ──────────────────────────────────────  ││ │ name          Test coverage reviewer                       │ │
+│     RUN     Security reviewer            ││ │ role          test review                                  │ │
+│   ▸ DONE    Test coverage reviewer       ││ │ type          codex-exec                                   │ │
+│                                          ││ │ model         gpt-5.4-mini                                 │ │
+│                                          ││ │ phase         phase-review                                 │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
+│                                          ││ │ tokens      0                                              │ │
+│                                          ││ │ tools       0                                              │ │
+│                                          ││ │ parse errs  0                                              │ │
+│                                          ││ │ status      completed                                      │ │
+│                                          ││ │ thread      thread-tests                                   │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭──────────────────── Latest Tool Calls ─────────────────────╮ │
+│                                          ││ │ No tool calls recorded yet.                                │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
+│                                          ││ │ Found one missing negative case                            │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
+path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json

@@ -1,0 +1,30 @@
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
+╭─────────────── Decisions ────────────────╮╭───── runs  phases  agents  events  ● decisions  artifacts ─────╮
+│                                          ││ ╭───────────────────────── Decision ─────────────────────────╮ │
+│       Summary           When             ││ │ decision_id   dec-default                                  │ │
+│  ──────────────────────────────────────  ││ │ title         Default workers to read-only                 │ │
+│   ▸   Default workers   10:04 AEST       ││ │ made_by       lead                                         │ │
+│       to read-only                       ││ │ time          10:04 AEST                                   │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭──────────────────────── Rationale ─────────────────────────╮ │
+│                                          ││ │ Read-only first keeps the initial workflow safe.           │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
+path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json
