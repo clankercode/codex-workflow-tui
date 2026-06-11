@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Workflow - Stateful Multi-Agent Coding Runs</title>
+    <meta
+      name="description"
+      content="Codex Workflow coordinates stateful multi-agent coding runs with persistent workflow state, ccc/OpenCode runners, and a live terminal UI."
+    />
+    <meta property="og:title" content="Codex Workflow" />
+    <meta property="og:description" content="Stateful multi-agent coding runs with a live terminal UI." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="assets/social-card.png" />
+    <meta name="theme-color" content="#050907" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,500;10..48,700;10..48,800&family=JetBrains+Mono:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" href="assets/social-card.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header" data-elevated="false">
+      <a class="brand" href="#top" aria-label="Codex Workflow home">
+        <span class="brand-mark">cw</span>
+        <span>Codex Workflow</span>
+      </a>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="#tui">TUI</a>
+        <a href="#runners">Runners</a>
+        <a href="#state">State</a>
+        <a href="#install">Install</a>
+      </nav>
+      <a class="header-link" href="https://github.com/clankercode/codex-workflow-tui">GitHub</a>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <canvas id="signal-canvas" class="signal-canvas" aria-hidden="true"></canvas>
+        <img class="hero-terminal" src="assets/workflow-tui.png" alt="" aria-hidden="true" />
+        <div class="hero-noise" aria-hidden="true"></div>
+        <div class="hero-content">
+          <p class="eyebrow">stateful orchestration for coding agents</p>
+          <h1 id="hero-title">Codex Workflow</h1>
+          <p class="hero-copy">
+            Coordinate parallel coding runs without losing the plot: phases, agents, decisions, artifacts,
+            live output, runner telemetry, and a TUI that keeps the swarm legible.
+          </p>
+          <div class="hero-actions" aria-label="Primary actions">
+            <a class="button button-primary" href="https://github.com/clankercode/codex-workflow-tui">View repo</a>
+            <button class="button button-secondary" type="button" data-copy="workflow tui">Copy TUI command</button>
+          </div>
+          <div class="hero-command" aria-label="Example command">
+            <span class="prompt">$</span>
+            <code>workflow run --runner ccc-opencode --max-agents 4 --startup-delay 1.0</code>
+          </div>
+        </div>
+        <aside class="hero-readout" aria-label="Workflow telemetry summary">
+          <span>runs 07</span>
+          <span>agents 18</span>
+          <span>tokens live</span>
+          <span>state json</span>
+        </aside>
+      </section>
+
+      <section class="ticker" aria-label="Workflow capabilities">
+        <div class="ticker-track">
+          <span>phase-scoped agent panes</span>
+          <span>copyable ids and paths</span>
+          <span>ccc presets and CLI runners</span>
+          <span>rate-limited launch control</span>
+          <span>snapshot-tested TUI screens</span>
+          <span>durable decisions and artifacts</span>
+        </div>
+      </section>
+
+      <section class="section section-intro" aria-labelledby="intro-title">
+        <div class="section-kicker">why it exists</div>
+        <h2 id="intro-title">Big coding tasks need an air-traffic controller.</h2>
+        <p>
+          Native subagents are great until the work fans out, logs pile up, and the lead session needs to know
+          what is actually happening. Codex Workflow adds a state contract and terminal UI around that motion,
+          then lets direct Codex, OpenCode, and ccc-backed workers plug into the same board.
+        </p>
+      </section>
+
+      <section class="section tui-showcase" id="tui" aria-labelledby="tui-title">
+        <div class="section-kicker">terminal UI</div>
+        <div class="split-heading">
+          <h2 id="tui-title">A control surface for active workflows.</h2>
+          <p>
+            Runs, phases, agents, events, decisions, and artifacts stay navigable while worker output streams in.
+            The TUI keeps selection stable as the state file changes underneath it.
+          </p>
+        </div>
+        <figure class="tui-frame">
+          <img src="assets/workflow-tui.png" alt="Codex Workflow TUI showing phase-scoped agents, live output, and workflow state." />
+        </figure>
+      </section>
+
+      <section class="section rails" id="runners" aria-labelledby="runners-title">
+        <div class="section-kicker">runner matrix</div>
+        <h2 id="runners-title">Bring the right worker for the lane.</h2>
+        <div class="runner-grid">
+          <article class="runner-card">
+            <span class="runner-index">01</span>
+            <h3>Native subagents</h3>
+            <p>Fast sidecar research, review, and synthesis inside the current Codex turn.</p>
+          </article>
+          <article class="runner-card">
+            <span class="runner-index">02</span>
+            <h3>Codex direct</h3>
+            <p>Independent `codex exec --json` workers with durable JSONL transcripts.</p>
+          </article>
+          <article class="runner-card">
+            <span class="runner-index">03</span>
+            <h3>ccc wrapped</h3>
+            <p>Codex, OpenCode, Kimi, MiniMax, and presets like `@mm` through one provider interface.</p>
+          </article>
+          <article class="runner-card">
+            <span class="runner-index">04</span>
+            <h3>Rate limited</h3>
+            <p>`--max-agents` and `--startup-delay` keep launches controlled instead of stampeding.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section state-contract" id="state" aria-labelledby="state-title">
+        <div class="state-copy">
+          <div class="section-kicker">state contract</div>
+          <h2 id="state-title">A JSON spine for tooling.</h2>
+          <p>
+            Every workflow writes a stable `run.json` snapshot under the workflow system state directory. Tools can
+            watch it, archive it, render it, or build higher-level automation without scraping terminal output.
+          </p>
+        </div>
+        <pre class="state-code" aria-label="Workflow state shape"><code>{
+  "run_id": "wf-20260611T070952Z",
+  "status": "running",
+  "phases": ["research", "implementation", "review"],
+  "agents": [{ "type": "ccc-opencode", "status": "running" }],
+  "events": [{ "kind": "agent", "operation": "updated" }],
+  "decisions": [],
+  "artifacts": []
+}</code></pre>
+      </section>
+
+      <section class="section command-deck" id="install" aria-labelledby="install-title">
+        <div>
+          <div class="section-kicker">ship it locally</div>
+          <h2 id="install-title">Install the skill. Open the board. Start the lanes.</h2>
+        </div>
+        <div class="commands" aria-label="Command examples">
+          <button class="command-row" type="button" data-copy="workflow tui">
+            <span>open the board</span>
+            <code>workflow tui</code>
+          </button>
+          <button
+            class="command-row"
+            type="button"
+            data-copy="workflow run --runner ccc-opencode --max-agents 4 --startup-delay 1.0 --job 'review::Review this branch.'"
+          >
+            <span>launch workers</span>
+            <code>workflow run --runner ccc-opencode --max-agents 4 --startup-delay 1.0</code>
+          </button>
+          <button
+            class="command-row"
+            type="button"
+            data-copy="python3 scripts/workflow_tui_tmux_qa.py --output-dir /tmp/workflow-tui-qa"
+          >
+            <span>visual QA</span>
+            <code>python3 scripts/workflow_tui_tmux_qa.py --output-dir /tmp/workflow-tui-qa</code>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>Codex Workflow</span>
+      <a href="https://github.com/clankercode/codex-workflow-tui">github.com/clankercode/codex-workflow-tui</a>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>

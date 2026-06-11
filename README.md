@@ -2,6 +2,8 @@
 
 Stateful multi-agent coding workflows for Codex, with a Textual TUI and provider-neutral worker runners.
 
+Site: https://clankercode.github.io/codex-workflow-tui/
+
 ## What It Provides
 
 - A global Codex skill named `workflow`
