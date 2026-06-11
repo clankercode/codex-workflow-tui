@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭─────────────── Decisions ────────────────╮╭───── runs  phases  agents  events  ● decisions  artifacts ─────╮
+╭─────────────── Decisions ────────────────╮╭───────────── ovr  run  pha  agt  evt  ● dec  art ──────────────╮
 │                                          ││ ╭───────────────────────── Decision ─────────────────────────╮ │
 │       Summary                            ││ │ decision_id   dec-default                                  │ │
 │  ──────────────────────────────────────  ││ │ title         Default workers to read-only                 │ │

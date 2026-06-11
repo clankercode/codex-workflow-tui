@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
-╭─────────── Agents: Calculation ────────────╮╭───────── runs  phases  ● agents  events  decisions  artifacts ─────────╮
+╭─────────── Agents: Calculation ────────────╮╭──── overview  runs  phases  ● agents  events  decisions  artifacts ────╮
 │                                            ││ ╭────────────────────────────── Agent ───────────────────────────────╮ │
 │   State     Name                           ││ │ agent_id      agent-live-tests                                     │ │
 │  ────────────────────────────────────────  ││ │ name          Live test worker                                     │ │

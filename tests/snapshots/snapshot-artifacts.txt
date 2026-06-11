@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭─────────────── Artifacts ────────────────╮╭───── runs  phases  agents  events  decisions  ● artifacts ─────╮
+╭─────────────── Artifacts ────────────────╮╭───────────── ovr  run  pha  agt  evt  dec  ● art ──────────────╮
 │                                          ││ ╭───────────────────────── Artifact ─────────────────────────╮ │
 │       Summary                            ││ │ artifact_id   art-report                                   │ │
 │  ──────────────────────────────────────  ││ │ title         Final report                                 │ │

@@ -19,7 +19,18 @@ from typing import Any
 sys.dont_write_bytecode = True
 
 DEFAULT_ACTIONS = [
-    ("capture", "initial-runs"),
+    ("capture", "initial-overview"),
+    ("send", "/"),
+    ("send", "/"),
+    ("capture", "filter-blocked"),
+    ("send", "Enter"),
+    ("capture", "focus-filter-blocked"),
+    ("send", "Escape"),
+    ("capture", "filter-restored"),
+    ("send", "c"),
+    ("capture", "filter-cleared"),
+    ("send", "Right"),
+    ("capture", "runs"),
     ("send", "Right"),
     ("capture", "phases"),
     ("send", "Down"),
@@ -43,12 +54,17 @@ DEFAULT_ACTIONS = [
 ]
 
 EXPECTED_CAPTURE_TEXT = {
-    "initial-runs": ("Agent Workflows", "Workflow With Parallel Review", "Live Stats"),
-    "phases": ("phase-research", "Research", "No agents for this phase"),
+    "initial-overview": ("Agent Workflows", "Attention", "run-fail"),
+    "filter-blocked": ("Attention filter: blocked", "Run blocked"),
+    "focus-filter-blocked": ("filter: blocked", "Run blocked"),
+    "filter-restored": ("Attention filter: blocked", "Run blocked"),
+    "filter-cleared": ("Attention", "run-fail"),
+    "runs": ("wf-fixture-rich", "Live Stats"),
+    "phases": ("phase-research", "Research"),
     "phase-next": ("phase-review", "Security reviewer", "Test coverage reviewer"),
-    "agents-phase": ("Agents: Review", "agent-security", "Live Output", "Agent scope", "Agent view"),
-    "agents-all": ("Synthesis writer", "Test coverage reviewer", "Agent scope", "Agent view"),
-    "agent-prompt": ("Prompt", "Review authentication and secret handling.", "Agent scope", "Agent view"),
+    "agents-phase": ("Agents: Review", "agent-security", "Live Output", " a Scope", " v View"),
+    "agents-all": ("Synthesis writer", "Test coverage reviewer", " a Scope", " v View"),
+    "agent-prompt": ("Prompt", "Review auth", " a Scope", " v View"),
     "copy-id": ("Copied agent_id",),
     "copy-path": ("Copied agent path",),
     "events": ("evt-synthesis", "artifact recorded"),
@@ -56,19 +72,23 @@ EXPECTED_CAPTURE_TEXT = {
     "artifacts": (
         "art-report",
         "Final report",
-        "final-report.md",
         "Artifact Preview",
         "Final synthesis report",
         "Security: no critical issues",
     ),
 }
 FORBIDDEN_CAPTURE_TEXT = {
-    "initial-runs": ("Agent scope", "Agent view"),
-    "phases": ("Agent scope", "Agent view"),
-    "phase-next": ("Agent scope", "Agent view"),
-    "events": ("Agent scope", "Agent view"),
-    "decisions": ("Agent scope", "Agent view"),
-    "artifacts": ("Agent scope", "Agent view"),
+    "initial-overview": (" a Scope", " v View"),
+    "filter-blocked": ("Agent stale",),
+    "focus-filter-blocked": ("Agent stale",),
+    "filter-restored": ("Agent stale",),
+    "filter-cleared": ("filter: blocked", "Attention filter: blocked", "Agent scope", "Agent view", " a Scope", " v View"),
+    "runs": (" a Scope", " v View"),
+    "phases": (" a Scope", " v View"),
+    "phase-next": (" a Scope", " v View"),
+    "events": (" a Scope", " v View"),
+    "decisions": (" a Scope", " v View"),
+    "artifacts": (" a Scope", " v View"),
 }
 FAILURE_TEXT = ("Traceback", "terminal too small", "No rows")
 ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")

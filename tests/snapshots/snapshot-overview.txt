@@ -1,0 +1,30 @@
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
+╭─────────────── Attention ────────────────╮╭───────────── ● ovr  run  pha  agt  evt  dec  art ──────────────╮
+│                                          ││ ╭───────────────── Check failed: unit tests ─────────────────╮ │
+│       Sev    Kind        Title           ││ │ severity      critical                                     │ │
+│  ──────────────────────────────────────  ││ │ kind          check-failed                                 │ │
+│   ▸   CRIT   check-fa…   Check failed…   ││ │ run           wf-fixture-rich                              │ │
+│       CRIT   run-fail…   Run failed      ││ │ entity        chk-unit                                     │ │
+│       WARN   artifact…   Artifact mis…   ││ │ phase                                                      │ │
+│       WARN   agent-ou…   Output missi…   ││ │ agent                                                      │ │
+│       WARN   agent-st…   Agent stale:…   ││ │ artifact                                                   │ │
+│       WARN   run-bloc…   Run blocked     ││ │ check         chk-unit                                     │ │
+│       WARN   run-canc…   Run cancelled   ││ │ time          Jun 11 10:06 AEST                            │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭───────────────────────── Details ──────────────────────────╮ │
+│                                          ││ │ snapshot mismatch                                          │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭─────────────────────────── Next ───────────────────────────╮ │
+│                                          ││ │ Open the check log, fix the issue, and record a passing    │ │
+│                                          ││ │ verification.                                              │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
+path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json

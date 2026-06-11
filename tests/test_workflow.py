@@ -34,6 +34,11 @@ class WorkflowScriptTests(unittest.TestCase):
         command = [sys.executable, str(SCRIPTS / script), *args]
         return subprocess.run(command, check=True, text=True, capture_output=True, env=env)
 
+    def run_wf(self, *args: str, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+        """Run the shell entrypoint exactly as users do."""
+        command = [str(SCRIPTS / "wf"), *args]
+        return subprocess.run(command, check=check, text=True, capture_output=True, env=env)
+
     def git(self, cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
         """Run git in tests with local-only repositories and stable author config."""
         command = [
@@ -793,6 +798,355 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertIn("dry run", data["agents"][0]["summary"])
             self.assertEqual(data["agents"][0]["exit_code"], 0)
 
+    def test_operator_preview_does_not_write_state(self) -> None:
+        """Preview worker launches without creating workflow state."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            result = self.run_wf(
+                "preview",
+                "--title",
+                "Preview Only",
+                "--runner",
+                "ccc-opencode",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            preview = json.loads(result.stdout)
+            self.assertFalse(preview["writes_state"])
+            self.assertEqual(preview["jobs"][0]["name"], "alpha")
+            self.assertFalse((Path(tmp) / "state").exists())
+
+    def test_operator_verify_and_done_gate_completion(self) -> None:
+        """Require passing verification before safe workflow completion."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Verify Gate", "--prompt", "gate", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-verify", "--name", "Verify", "--status", "completed", env=env)
+
+            denied = self.run_wf("done", run_id, env=env, check=False)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("verification-missing", denied.stdout)
+
+            check = self.run_wf("verify", run_id, "--cmd", "python3 -c 'print(\"ok\")'", "--name", "unit smoke", env=env)
+            check_data = json.loads(check.stdout)
+            self.assertEqual(check_data["status"], "passed")
+            completed = self.run_wf("done", run_id, env=env)
+            self.assertIn("completed", completed.stdout)
+            shown = self.run_script("workflow_state.py", "show", run_id, "--json", env=env)
+            data = json.loads(shown.stdout)
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual(data["metrics"]["checks_by_status"]["passed"], 1)
+
+    def test_operator_block_and_check_surface_reason(self) -> None:
+        """Persist blocked reasons and expose them through check output."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Blocked Run", "--prompt", "blocked", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("block", run_id, "waiting for credentials", "--blocked-by", "operator", env=env)
+            checked = self.run_wf("check", run_id, env=env)
+            self.assertIn("run-blocked", checked.stdout)
+            self.assertIn("waiting for credentials", checked.stdout)
+            shown = self.run_script("workflow_state.py", "show", run_id, "--json", env=env)
+            data = json.loads(shown.stdout)
+            self.assertEqual(data["status"], "blocked")
+            self.assertEqual(data["blocked_by"], "operator")
+
+    def test_operator_done_rejects_blocked_runs_even_with_checks(self) -> None:
+        """Prevent safe completion while a workflow is explicitly blocked."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Blocked Done", "--prompt", "blocked", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env)
+            self.run_wf("block", run_id, "waiting for reviewer", env=env)
+
+            denied = self.run_wf("done", run_id, env=env, check=False)
+
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("run-blocked", denied.stdout)
+
+    def test_operator_verify_requires_explicit_evidence(self) -> None:
+        """Reject bare manual verification records that would mint fake evidence."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Evidence Gate", "--prompt", "evidence", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+
+            verify = self.run_wf("verify", run_id, env=env, check=False)
+            done = self.run_wf("done", run_id, env=env, check=False)
+
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn("requires --cmd", verify.stderr)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("verification-missing", done.stdout)
+
+    def test_operator_record_only_verify_rejects_command(self) -> None:
+        """Prevent record-only checks from implying a command was executed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Record Only Command", "--prompt", "record-only", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+
+            verify = self.run_wf("verify", run_id, "--record-only", "--cmd", "false", "--status", "passed", "--summary", "not run", env=env, check=False)
+            done = self.run_wf("done", run_id, env=env, check=False)
+
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn("--record-only cannot be combined with --cmd", verify.stderr)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("verification-missing", done.stdout)
+
+    def test_operator_verify_rejects_status_override_for_executed_command(self) -> None:
+        """Ensure executed checks cannot be manually overridden into passing evidence."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Status Override", "--prompt", "override", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+
+            verify = self.run_wf("verify", run_id, "--cmd", "false", "--status", "passed", "--summary", "should not pass", env=env, check=False)
+            done = self.run_wf("done", run_id, env=env, check=False)
+
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn("--status is only valid with --record-only", verify.stderr)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("verification-missing", done.stdout)
+
+    def test_operator_done_ignores_passed_command_check_with_nonzero_exit(self) -> None:
+        """Reject legacy or hand-edited passed checks that contradict command exit status."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Bad Legacy Check", "--prompt", "legacy", "--cwd", str(ROOT), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+            run_path = Path(created_data["path"])
+            data = json.loads(run_path.read_text(encoding="utf-8"))
+            data["checks"].append(
+                {
+                    "check_id": "chk-bad-legacy",
+                    "ts": "2026-06-11T00:00:00Z",
+                    "name": "bad legacy",
+                    "kind": "verification",
+                    "status": "passed",
+                    "required": True,
+                    "command": "false",
+                    "exit_code": 1,
+                    "summary": "bad override",
+                    "completed_at": "2026-06-11T00:00:01Z",
+                }
+            )
+            run_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            denied = self.run_wf("done", run_id, env=env, check=False)
+
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("verification-missing", denied.stdout)
+
+    def test_operator_exact_later_pass_resolves_failed_check_identity(self) -> None:
+        """Use check identity to supersede a failed command with a later passing same command."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Exact Rerun", "--prompt", "rerun", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+            command_file = Path(tmp) / "exit-code.txt"
+            command_file.write_text("1", encoding="utf-8")
+            command = f"python3 -c \"import pathlib,sys; sys.exit(int(pathlib.Path({str(command_file)!r}).read_text()))\""
+
+            self.run_wf("verify", run_id, "--cmd", command, "--name", "same check", env=env, check=False)
+            command_file.write_text("0", encoding="utf-8")
+            self.run_wf("verify", run_id, "--cmd", command, "--name", "same check", env=env)
+            completed = self.run_wf("done", run_id, env=env)
+
+            self.assertIn("completed", completed.stdout)
+
+    def test_operator_done_rejects_manual_pass_without_summary(self) -> None:
+        """Reject malformed commandless passed checks without external evidence text."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Malformed Manual", "--prompt", "manual", "--cwd", str(ROOT), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+            run_path = Path(created_data["path"])
+            data = json.loads(run_path.read_text(encoding="utf-8"))
+            data["checks"].append(
+                {
+                    "check_id": "chk-empty-summary",
+                    "ts": "2026-06-11T00:00:00Z",
+                    "name": "empty manual",
+                    "kind": "verification",
+                    "status": "passed",
+                    "required": True,
+                    "command": "",
+                    "exit_code": 0,
+                    "summary": "",
+                    "completed_at": "2026-06-11T00:00:01Z",
+                }
+            )
+            run_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            denied = self.run_wf("done", run_id, env=env, check=False)
+            checked = self.run_wf("check", run_id, env=env, check=False)
+
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("verification-missing", denied.stdout)
+            self.assertNotEqual(checked.returncode, 0)
+            self.assertIn("check-invalid", checked.stdout)
+
+    def test_latest_check_uses_append_order_for_same_second_pass_then_fail(self) -> None:
+        """Treat later same-second failed reruns as authoritative over earlier passes."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        run = {
+            "run_id": "wf-test",
+            "checks": [
+                {
+                    "check_id": "chk-z",
+                    "ts": "2026-06-11T00:00:00Z",
+                    "completed_at": "2026-06-11T00:00:00Z",
+                    "kind": "verification",
+                    "name": "same",
+                    "command": "python3 test.py",
+                    "cwd": "/repo",
+                    "status": "passed",
+                    "required": True,
+                    "exit_code": 0,
+                    "summary": "passed",
+                },
+                {
+                    "check_id": "chk-a",
+                    "ts": "2026-06-11T00:00:00Z",
+                    "completed_at": "2026-06-11T00:00:00Z",
+                    "kind": "verification",
+                    "name": "same",
+                    "command": "python3 test.py",
+                    "cwd": "/repo",
+                    "status": "failed",
+                    "required": True,
+                    "exit_code": 1,
+                    "summary": "failed",
+                },
+            ],
+        }
+
+        blockers = workflow_health.completion_blockers(run)
+
+        self.assertTrue(any(item["kind"] == "check-failed" for item in blockers))
+        self.assertFalse(workflow_health.passed_checks(run))
+
+    def test_latest_check_uses_append_order_for_same_second_fail_then_pass(self) -> None:
+        """Treat later same-second passing reruns as authoritative over earlier failures."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        run = {
+            "run_id": "wf-test",
+            "checks": [
+                {
+                    "check_id": "chk-z",
+                    "ts": "2026-06-11T00:00:00Z",
+                    "completed_at": "2026-06-11T00:00:00Z",
+                    "kind": "verification",
+                    "name": "same",
+                    "command": "python3 test.py",
+                    "cwd": "/repo",
+                    "status": "failed",
+                    "required": True,
+                    "exit_code": 1,
+                    "summary": "failed",
+                },
+                {
+                    "check_id": "chk-a",
+                    "ts": "2026-06-11T00:00:00Z",
+                    "completed_at": "2026-06-11T00:00:00Z",
+                    "kind": "verification",
+                    "name": "same",
+                    "command": "python3 test.py",
+                    "cwd": "/repo",
+                    "status": "passed",
+                    "required": True,
+                    "exit_code": 0,
+                    "summary": "passed",
+                },
+            ],
+        }
+
+        blockers = workflow_health.completion_blockers(run)
+
+        self.assertFalse(any(item["kind"] == "check-failed" for item in blockers))
+        self.assertTrue(workflow_health.passed_checks(run))
+
+    def test_operator_done_requires_required_passing_check(self) -> None:
+        """Ensure optional checks do not satisfy the default completion gate."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Optional Check", "--prompt", "optional", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+            self.run_wf(
+                "verify",
+                run_id,
+                "--record-only",
+                "--status",
+                "passed",
+                "--optional",
+                "--summary",
+                "non-blocking manual note",
+                env=env,
+            )
+
+            denied = self.run_wf("done", run_id, env=env, check=False)
+
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("verification-missing", denied.stdout)
+
+    def test_operator_done_rejects_cancelled_runs_even_with_checks(self) -> None:
+        """Prevent accidental revival of cancelled workflows through wf done."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Cancelled Done", "--prompt", "cancelled", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env)
+            self.run_wf("set-status", run_id, "cancelled", env=env)
+
+            denied = self.run_wf("done", run_id, env=env, check=False)
+
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("run-cancelled", denied.stdout)
+
+    def test_operator_doctor_distinguishes_required_and_optional_checks(self) -> None:
+        """Keep optional provider commands from making doctor report a broken install."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            result = self.run_wf("doctor", "--json", env=env)
+            data = json.loads(result.stdout)
+            by_name = {check["name"]: check for check in data["checks"]}
+            self.assertTrue(data["ok"])
+            self.assertTrue(by_name["state-dir"]["required"])
+            self.assertFalse(by_name["opencode"]["required"])
+
     def test_runner_rejects_non_positive_concurrency(self) -> None:
         """Reject zero concurrency before asyncio can hang forever."""
         result = subprocess.run(
@@ -818,6 +1172,7 @@ class WorkflowScriptTests(unittest.TestCase):
     def test_snapshot_fixtures_match_checked_in_screens(self) -> None:
         """Render every TUI tab from fixtures and compare to text snapshots."""
         cases = [
+            ("overview", "snapshot-overview.txt", "0"),
             ("runs", "snapshot-runs.txt", "0"),
             ("phases", "snapshot-phases.txt", "1"),
             ("agents", "snapshot-agents.txt", "1"),
@@ -844,6 +1199,98 @@ class WorkflowScriptTests(unittest.TestCase):
                 ).stdout
                 expected = (SNAPSHOTS / snapshot_name).read_text(encoding="utf-8")
                 self.assertEqual(rendered, expected)
+
+    def test_snapshot_filter_and_focus_modes(self) -> None:
+        """Expose deterministic filter and focus views for visual review."""
+        filtered = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "overview",
+            "--filter",
+            "blocked",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("Run blocked", filtered)
+        self.assertNotIn("Run failed", filtered)
+        empty_filtered = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "overview",
+            "--filter",
+            "definitely-no-match",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("Attention filter: definitely-no-match", empty_filtered)
+        self.assertIn("No rows match filter: definitely-no-match", empty_filtered)
+        focus_filtered = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "overview",
+            "--filter",
+            "run-blocked",
+            "--focus",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("filter: run-blocked", focus_filtered)
+        self.assertIn("Run blocked", focus_filtered)
+        filtered_runs = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "runs",
+            "--filter",
+            "blocked",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("wf-fixture-blocked", filtered_runs)
+        self.assertIn("wf-fixture-blocked/run.json", filtered_runs)
+        self.assertNotIn("wf-fixture-rich/run.json", filtered_runs)
+        focused = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "agents",
+            "--row-index",
+            "0",
+            "--focus",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("Security reviewer", focused)
+        self.assertNotIn("Agents: Review", focused)
+        self.assertIn("Live Stats", focused)
 
     def test_snapshot_dimensions_are_stable(self) -> None:
         """Ensure snapshot output has deterministic dimensions for visual review."""
@@ -1953,7 +2400,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(rendered, expected)
         self.assertIn("● evt", rendered)
         self.assertIn("time          10:05:00 AEST", rendered)
-        self.assertIn(" art ", rendered)
+        self.assertIn("dec  art", rendered)
         self.assertIn("wf-fixture-rich/run.json", rendered)
 
     def test_selected_row_stays_visible_in_snapshot_tables(self) -> None:
@@ -2014,7 +2461,7 @@ class WorkflowScriptTests(unittest.TestCase):
             "workflow-tui-test",
         )
         self.assertIn("workflow-tui-test", result.stdout)
-        self.assertIn("capture initial-runs", result.stdout)
+        self.assertIn("capture initial-overview", result.stdout)
         self.assertIn("send-key Right", result.stdout)
         self.assertIn("send-key y", result.stdout)
         self.assertIn("send-key p", result.stdout)

@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭─────────────────── Runs ───────────────────╮╭───────── ● runs  phases  agents  events  decisions  artifacts ─────────╮
+╭─────────────────── Runs ───────────────────╮╭──── overview  ● runs  phases  agents  events  decisions  artifacts ────╮
 │    State  Title                            ││ id          wf-fixture-e2e-live                                        │
 │ ▸  RUN    Live Telemetry Fixture           ││ title       Live Telemetry Fixture                                     │
 │                                            ││ status      running                                                    │
@@ -14,6 +14,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ │ longest     Live test worker                                       │ │
 │                                            ││ │ agents      1                                                      │ │
 │                                            ││ │ phases      1                                                      │ │
+│                                            ││ │ checks      0                                                      │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭─────────────────────────── Live Output ────────────────────────────╮ │
 │                                            ││ │ F(20) = 6765                                                       │ │
@@ -28,7 +29,6 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ ╭────────────────────────────── Prompt ──────────────────────────────╮ │
 │                                            ││ │ Fixture workflow for live TUI telemetry panels.                    │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││                                                                        │
 │                                            ││                                                                        │
 │                                            ││                                                                        │
 │                                            ││                                                                        │

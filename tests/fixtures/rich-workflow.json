@@ -85,6 +85,22 @@
           "ts": "2026-06-11T00:05:00Z"
         }
       ],
+      "checks": [
+        {
+          "check_id": "chk-unit",
+          "command": "python3 tests/test_workflow.py",
+          "completed_at": "2026-06-11T00:06:00Z",
+          "duration_seconds": 12.4,
+          "exit_code": 1,
+          "kind": "verification",
+          "log_path": "logs/check-unit.log",
+          "name": "unit tests",
+          "required": true,
+          "status": "failed",
+          "summary": "snapshot mismatch",
+          "ts": "2026-06-11T00:06:00Z"
+        }
+      ],
       "coordinator": {
         "thread_id": "lead-thread",
         "tool": "codex"
@@ -162,6 +178,10 @@
           "running": 1
         },
         "agents_total": 3,
+        "checks_by_status": {
+          "failed": 1
+        },
+        "checks_total": 1,
         "phases_by_status": {
           "completed": 1,
           "pending": 1,

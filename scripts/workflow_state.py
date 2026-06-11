@@ -141,6 +141,9 @@ def refresh_metrics(data: dict[str, Any]) -> None:
     metrics["phases_total"] = len(phases)
     metrics["agents_by_status"] = count_by_status(agents)
     metrics["phases_by_status"] = count_by_status(phases)
+    checks = data.get("checks", [])
+    metrics["checks_total"] = len(checks)
+    metrics["checks_by_status"] = count_by_status(checks)
 
 
 def count_by_status(items: list[dict[str, Any]]) -> dict[str, int]:
@@ -152,15 +155,17 @@ def count_by_status(items: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def add_event(run_data: dict[str, Any], level: str, message: str, **extra: Any) -> dict[str, Any]:
+    event_ts = now()
     event = {
         "event_id": short_id("evt"),
-        "ts": now(),
+        "ts": event_ts,
         "level": level,
         "message": message,
     }
     event.update({key: value for key, value in extra.items() if value not in (None, "", {})})
     run_data.setdefault("events", []).append(event)
     run_data["events"] = run_data["events"][-250:]
+    run_data["last_activity_at"] = event_ts
     return event
 
 
@@ -213,6 +218,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "events": [],
         "decisions": [],
         "artifacts": [],
+        "checks": [],
         "metrics": {},
     }
     add_event(data, "info", "workflow initialized", kind="workflow", operation="initialized", source="workflow_state.init")

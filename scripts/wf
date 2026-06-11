@@ -41,6 +41,15 @@ Usage:
   $PROG decision [workflow_state.py decision args...]
   $PROG artifact [workflow_state.py artifact args...]
   $PROG set-status [workflow_state.py set-status args...]
+  $PROG status [workflow_ops.py status args...]
+  $PROG last [workflow_ops.py last args...]
+  $PROG open [workflow_tui.py args...]
+  $PROG doctor [workflow_ops.py doctor args...]
+  $PROG check <run-id> [workflow_ops.py check args...]
+  $PROG verify <run-id> [workflow_ops.py verify args...]
+  $PROG done <run-id> [workflow_ops.py done args...]
+  $PROG block <run-id> <reason>
+  $PROG preview [workflow_ops.py preview args...]
 USAGE
 }
 
@@ -74,6 +83,12 @@ case "$cmd" in
     ;;
   run-codex)
     exec python3 "$SCRIPT_DIR/workflow_run_codex.py" "$@"
+    ;;
+  status|last|doctor|check|verify|done|block|preview)
+    exec python3 "$SCRIPT_DIR/workflow_ops.py" "$cmd" "$@"
+    ;;
+  open)
+    exec "$(python_for_tui)" "$SCRIPT_DIR/workflow_tui.py" "$@"
     ;;
   fibonacci-stress|fib-stress)
     exec python3 "$SCRIPT_DIR/workflow_fibonacci_stress.py" "$@"

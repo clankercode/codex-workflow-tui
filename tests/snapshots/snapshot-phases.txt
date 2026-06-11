@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭───────────────── Phases ─────────────────╮╭───── runs  ● phases  agents  events  decisions  artifacts ─────╮
+╭───────────────── Phases ─────────────────╮╭───────────── ovr  run  ● pha  agt  evt  dec  art ──────────────╮
 │                                          ││ ╭────────────────────────── Review ──────────────────────────╮ │
 │       State   Name                       ││ │ phase       phase-review                                   │ │
 │  ──────────────────────────────────────  ││ │ status      running                                        │ │

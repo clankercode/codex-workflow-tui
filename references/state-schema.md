@@ -41,6 +41,7 @@ That is the default for the recommended install at `~/.agents/skills/workflow` w
   "events": [],
   "decisions": [],
   "artifacts": [],
+  "checks": [],
   "metrics": {}
 }
 ```
@@ -135,6 +136,48 @@ The TUI normalizes usage into:
 
 Manual scripted agents may emit explicit zero usage in JSONL when they perform no model call. That is a real zero-token count and is distinct from missing usage.
 
+## Optional Health And Verification Fields
+
+Schema v1 remains additive. Old runs do not need these fields, but new operator commands may add them:
+
+```json
+{
+  "status_reason": "waiting for credentials",
+  "status_message": "Blocked until the operator refreshes API credentials.",
+  "blocked_by": "operator",
+  "last_activity_at": "2026-06-11T04:47:00Z",
+  "checks": []
+}
+```
+
+`status_reason` is a short machine-friendly reason. `status_message` is a readable operator note. `blocked_by` records the actor or external dependency responsible for a blocked state. `last_activity_at` is updated when new workflow events are recorded.
+
+Checks are durable verification evidence:
+
+```json
+{
+  "check_id": "chk-unit-tests",
+  "ts": "2026-06-11T04:58:00Z",
+  "name": "unit tests",
+  "kind": "verification",
+  "status": "passed",
+  "required": true,
+  "command": "python3 tests/test_workflow.py",
+  "cwd": "/repo/path",
+  "exit_code": 0,
+  "duration_seconds": 24.6,
+  "summary": "66 tests OK",
+  "log_path": ".../logs/chk-unit-tests.log",
+  "completed_at": "2026-06-11T04:58:25Z"
+}
+```
+
+Valid check statuses are `passed`, `failed`, `error`, and `skipped`. `wf verify` records checks. `wf done` requires at least one required passing check by default, unless `--allow-unverified` or `--force` is used. Optional checks are visible evidence but do not satisfy the default completion gate. Commandless manual checks must include a non-empty `summary` to count as evidence.
+
+For completion health, repeated checks are grouped by `(kind, name, command, cwd)` and the latest record in that identity is authoritative. A later passing exact rerun resolves an earlier failed check with the same identity; a different command or name is a different verification identity. Executed checks must have `exit_code=0` to count as passing evidence, even if a malformed or hand-edited record says `status=passed`.
+
+The lower-level `workflow set-status` command remains available for recovery and compatibility.
+
 ## Events
 
 Events are a bounded recent timeline inside `run.json`.
@@ -192,6 +235,6 @@ Use `kind=file` for manually recorded reports and `kind=worker-output` for worke
 
 ## Write Semantics
 
-Use `workflow_state.py` for mutations. It writes snapshots with temp-file-plus-rename and refreshes derived metrics. External tools should treat `metrics` as derived and rebuildable.
+Use `workflow_state.py` for primitive mutations and `workflow_ops.py` for operator intent commands. Snapshot writes use temp-file-plus-rename and refresh derived metrics. External tools should treat `metrics` as derived and rebuildable.
 
 Do not infer lifecycle status from logs. Logs can inform summaries, but status changes must be explicit state updates.

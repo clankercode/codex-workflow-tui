@@ -155,6 +155,8 @@ Prefer `ccc` `stream-json` mode, direct `codex --json`, or `opencode --format js
 ## View State
 
 ```bash
+workflow status
+workflow last
 workflow list
 workflow show <run-id> --detail
 workflow tui
@@ -168,6 +170,14 @@ workflow list
 workflow show <run-id> --detail
 wf list
 wf show <run-id> --detail
+wf status
+wf last --cwd
+wf doctor
+wf check <run-id>
+wf verify <run-id> --cmd "python3 tests/test_workflow.py"
+wf done <run-id>
+wf block <run-id> "waiting for credentials"
+wf preview --title "review" --job "security::Review this branch."
 wf tui
 wf run --runner ccc-opencode --title "..." --job "name::prompt"
 wf run-codex --title "..." --job "name::prompt"
@@ -214,6 +224,11 @@ Use `--dry-run` to print the key/capture plan without starting tmux.
 
 - `Up`/`Down`: move within the current sidebar list.
 - `Right`/`Left`: move across top-level tabs.
+- `Enter`: focus the selected detail full-width.
+- `Escape`: leave focus mode, or quit when not focused.
+- `/`: cycle common filters.
+- `!`: jump back to the attention overview.
+- `c`: clear the active filter.
 - `a`: toggle Agents between selected-phase scope and all agents.
 - `v`: toggle the selected agent detail between live output and prompt.
 - `y`: copy the selected row id.
@@ -224,13 +239,29 @@ Use `--dry-run` to print the key/capture plan without starting tmux.
 ## Record Verification
 
 ```bash
-workflow event <run-id> \
-  --level info \
-  --message "verification passed: pytest tests/test_workflow.py"
+workflow verify <run-id> \
+  --name "unit tests" \
+  --cmd "python3 tests/test_workflow.py"
 ```
 
-Only mark the run complete after verification evidence is recorded:
+`workflow verify` stores a structured `checks[]` record and a log file when the command emits output. Bare manual verification is rejected; use `--record-only --status <status> --summary <evidence>` when the evidence is external, and do not combine `--record-only` with `--cmd`. By default, the safer completion command requires at least one required passing check:
 
 ```bash
-workflow set-status <run-id> completed
+workflow done <run-id>
 ```
+
+If a verification command fails, rerun the same `--name`, `--cmd`, and `--cwd` after fixing the issue. Completion health uses the latest check for that identity, so the later exact passing rerun resolves the earlier failure.
+
+Use `workflow done <run-id> --allow-unverified` only when a run's evidence is intentionally external. The primitive `workflow set-status <run-id> completed` remains available for recovery and compatibility.
+
+## Operator Health Commands
+
+Use the intent commands before digging through raw JSON:
+
+```bash
+workflow status --cwd
+workflow doctor
+workflow check <run-id>
+```
+
+`status` summarizes active and recent runs with derived health. `doctor` checks state writability, command availability, and TUI dependencies. `check` validates one run for failed/blocked/stale work, missing artifacts, invalid links, failed checks, and other operator-facing issues.

@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
-╭───────────── Agents: Review ─────────────╮╭───── runs  phases  ● agents  events  decisions  artifacts ─────╮
+╭───────────── Agents: Review ─────────────╮╭───────────── ovr  run  pha  ● agt  evt  dec  art ──────────────╮
 │                                          ││ ╭────────────────────────── Agent ───────────────────────────╮ │
 │   State     Name                         ││ │ agent_id      agent-tests                                  │ │
 │  ──────────────────────────────────────  ││ │ name          Test coverage reviewer                       │ │

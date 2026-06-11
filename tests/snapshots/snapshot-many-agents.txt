@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
-╭─────────── Agents: Many rows ────────────╮╭───── runs  phases  ● agents  events  decisions  artifacts ─────╮
+╭─────────── Agents: Many rows ────────────╮╭───────────── ovr  run  pha  ● agt  evt  dec  art ──────────────╮
 │                                          ││ ╭────────────────────────── Agent ───────────────────────────╮ │
 │   State     Name                         ││ │ agent_id      agent-11                                     │ │
 │  ──────────────────────────────────────  ││ │ name          Agent 11                                     │ │

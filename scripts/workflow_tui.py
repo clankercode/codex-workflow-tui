@@ -27,8 +27,9 @@ from rich.table import Table
 from rich.text import Text
 
 import workflow_state
+import workflow_health
 
-TABS = ("runs", "phases", "agents", "events", "decisions", "artifacts")
+TABS = ("overview", "runs", "phases", "agents", "events", "decisions", "artifacts")
 AGENT_SCOPES = ("phase", "all")
 AGENT_VIEWS = ("live", "prompt")
 AGENT_ONLY_ACTIONS = frozenset({"toggle_agent_scope", "toggle_agent_view"})
@@ -370,6 +371,17 @@ def marked_status_text(active: bool, status: str) -> Text:
     return text
 
 
+def severity_text(severity: str) -> Text:
+    """Render an attention severity label."""
+    mapping = {
+        "critical": ("CRIT", "bold red"),
+        "warning": ("WARN", "bold yellow"),
+        "info": ("INFO", "cyan"),
+    }
+    label, style = mapping.get(str(severity), (str(severity or "?")[:4].upper(), "white"))
+    return Text(label, style=style)
+
+
 def path_text(run: dict[str, Any] | None) -> str:
     if not run:
         return ""
@@ -454,6 +466,7 @@ def make_footer(run: dict[str, Any] | None, width: int) -> Text:
 
 def make_tabs_title(tab: str, compact: bool = False) -> Text:
     labels = {
+        "overview": "ovr",
         "runs": "run",
         "phases": "pha",
         "agents": "agt",
@@ -470,6 +483,16 @@ def make_tabs_title(tab: str, compact: bool = False) -> Text:
             title.append(f"● {label}", style="bold bright_white on dark_green")
         else:
             title.append(label, style="bright_black")
+    return title
+
+
+def make_panel_title(tab: str, *, compact: bool = False, filter_text: str = "") -> Text:
+    """Return a tab title with persistent filter state when active."""
+    title = make_tabs_title(tab, compact=compact)
+    normalized = active_filter(filter_text)
+    if normalized:
+        title.append("  ")
+        title.append(f"filter: {normalized}", style="bold yellow")
     return title
 
 
@@ -570,6 +593,52 @@ def event_kind_text(event: dict[str, Any]) -> Text:
     elif kind.startswith("phase"):
         style = EVENT_STYLE_BY_KIND.get(kind, "cyan")
     return Text(kind, style=f"bold {style}")
+
+
+def make_attention_table(items: list[dict[str, Any]], selected: int, visible: int) -> Table:
+    """Render the overview attention list."""
+    table = Table(box=box.SIMPLE_HEAD, expand=True, header_style="bold bright_black")
+    table.add_column("", width=1, no_wrap=True)
+    table.add_column("Sev", width=4, no_wrap=True)
+    table.add_column("Kind", width=9, overflow="ellipsis", no_wrap=True)
+    table.add_column("Title", ratio=1, overflow="ellipsis", no_wrap=True)
+    if not items:
+        table.add_row("", "", "", "No attention items")
+        return table
+    selected = clamp_index(selected, len(items))
+    start = window_start(selected, len(items), visible)
+    for index, item in enumerate(items[start : start + visible], start=start):
+        style = "reverse" if index == selected else ""
+        table.add_row(
+            marker_text(index == selected),
+            severity_text(str(item.get("severity", ""))),
+            str(item.get("kind", "")),
+            str(item.get("title", "")),
+            style=style,
+        )
+    return table
+
+
+def make_attention_detail(item: dict[str, Any]) -> Group:
+    """Render one attention item with enough context to act on it."""
+    rows = [
+        ("severity", item.get("severity", "")),
+        ("kind", item.get("kind", "")),
+        ("run", item.get("run_id", "")),
+        ("entity", item.get("entity_id", "")),
+        ("phase", item.get("phase_id", "")),
+        ("agent", item.get("agent_id", "")),
+        ("artifact", item.get("artifact_id", "")),
+        ("check", item.get("check_id", "")),
+        ("time", display_timestamp(item.get("ts", ""))),
+    ]
+    facts = Panel(make_mapping_table(rows), title=str(item.get("title", "Attention")), border_style="yellow", box=box.ROUNDED)
+    message = Panel(Text(str(item.get("message") or "No details recorded."), overflow="fold"), title="Details", border_style="cyan", box=box.ROUNDED)
+    suggestion = str(item.get("suggestion") or "")
+    panels: list[Any] = [facts, message]
+    if suggestion:
+        panels.append(Panel(Text(suggestion, overflow="fold"), title="Next", border_style="green", box=box.ROUNDED))
+    return Group(*panels)
 
 
 def make_runs_table(runs: list[dict[str, Any]], selected: int, visible: int) -> Table:
@@ -1068,6 +1137,7 @@ def copy_value_for_selection(
         return ("", "")
     item = rows[clamp_index(selected, len(rows))]
     id_labels = {
+        "overview": "attention_id",
         "runs": "run_id",
         "phases": "phase_id",
         "agents": "agent_id",
@@ -1079,6 +1149,9 @@ def copy_value_for_selection(
         key = id_labels.get(tab, "id")
         return (key, str(item.get(key) or item.get("id") or ""))
     if mode == "path":
+        if tab == "overview":
+            run_id = str(item.get("run_id") or "")
+            return ("state path", path_text({"paths": {"run_json": str(workflow_state.run_file(run_id))}}) if run_id else "")
         if tab == "runs":
             return ("state path", path_text(item))
         if tab == "agents":
@@ -1132,6 +1205,7 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
         ("longest", (live.get("longest_running") or {}).get("name", "")),
         ("agents", metrics.get("agents_total", len(run.get("agents", [])))),
         ("phases", metrics.get("phases_total", len(run.get("phases", [])))),
+        ("checks", metrics.get("checks_total", len(run.get("checks", [])))),
     ]
     live_stats = Panel(make_facts_table(live_rows), title="Live Stats", border_style="magenta", box=box.ROUNDED)
     tool_text = "\n".join(live.get("latest_tool_calls", [])[-8:]) or "No tool calls recorded yet."
@@ -1371,6 +1445,8 @@ def rows_for_tab(
     selected_phase_id: str | None = None,
     agent_scope: str = "phase",
 ) -> list[dict[str, Any]]:
+    if tab == "overview":
+        return workflow_health.attention_items(runs)
     if tab == "runs":
         return runs
     if not run:
@@ -1395,6 +1471,7 @@ def rows_for_tab(
 
 def item_key(tab: str, item: dict[str, Any], index: int) -> str:
     keys = {
+        "overview": "attention_id",
         "runs": "run_id",
         "phases": "phase_id",
         "agents": "agent_id",
@@ -1415,7 +1492,45 @@ def index_for_key(rows: list[dict[str, Any]], tab: str, key: str | None) -> int:
     return 0
 
 
-def make_sidebar(tab: str, rows: list[dict[str, Any]], selected: int, visible: int) -> Any:
+def row_matches_filter(row: dict[str, Any], filter_text: str) -> bool:
+    """Return whether a row contains all filter words in common display fields."""
+    query = filter_text.strip().lower()
+    if not query:
+        return True
+    haystack_parts: list[str] = []
+    for key, value in row.items():
+        if key.endswith("_path") or key in {"prompt", "result", "suggestion"}:
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            haystack_parts.append(str(value))
+        elif isinstance(value, list):
+            haystack_parts.extend(str(item) for item in value if isinstance(item, (str, int, float, bool)))
+    haystack = " ".join(haystack_parts).lower()
+    return all(part in haystack for part in query.split())
+
+
+def apply_row_filter(rows: list[dict[str, Any]], filter_text: str) -> list[dict[str, Any]]:
+    """Filter rows using the shared text matcher."""
+    if not filter_text.strip():
+        return rows
+    return [row for row in rows if row_matches_filter(row, filter_text)]
+
+
+def active_filter(filter_text: str) -> str:
+    """Return the normalized active filter label."""
+    return " ".join(filter_text.strip().split())
+
+
+def filter_empty_message(filter_text: str) -> str:
+    """Return a consistent empty state for filtered views."""
+    return f"No rows match filter: {active_filter(filter_text)}"
+
+
+def make_sidebar(tab: str, rows: list[dict[str, Any]], selected: int, visible: int, *, filter_text: str = "") -> Any:
+    if not rows and active_filter(filter_text):
+        return Text(filter_empty_message(filter_text), style="dim")
+    if tab == "overview":
+        return make_attention_table(rows, selected, visible)
     if tab == "runs":
         return make_runs_table(rows, selected, visible)
     if tab == "phases":
@@ -1443,7 +1558,14 @@ def make_detail_body(
     detail_height: int | None = None,
     agent_view: str = "live",
     agent_scope: str = "phase",
+    filter_text: str = "",
 ) -> Any:
+    if not rows and active_filter(filter_text):
+        return Text(filter_empty_message(filter_text), style="dim")
+    if tab == "overview":
+        if not rows:
+            return Text("No attention items.", style="dim")
+        return make_attention_detail(rows[clamp_index(selected, len(rows))])
     if tab == "runs":
         if not rows:
             return Text("No run selected.", style="dim")
@@ -1470,11 +1592,19 @@ def make_detail_body(
 def sidebar_title_for(tab: str, run: dict[str, Any] | None, selected_phase_id: str | None, agent_scope: str) -> str:
     """Return the contextual sidebar title."""
     if tab != "agents" or agent_scope == "all":
+        if tab == "overview":
+            return "Attention"
         return tab.capitalize()
     phase = selected_phase(run, selected_phase_id)
     if not phase:
         return "Agents"
     return f"Agents: {phase.get('name', phase.get('phase_id', 'Phase'))}"
+
+
+def title_with_filter(title: str, filter_text: str) -> str:
+    """Append the active filter to a panel title."""
+    normalized = active_filter(filter_text)
+    return f"{title} filter: {normalized}" if normalized else title
 
 
 def render_dashboard(
@@ -1489,6 +1619,8 @@ def render_dashboard(
     selected_phase_id: str | None = None,
     agent_scope: str = "phase",
     agent_view: str = "live",
+    filter_text: str = "",
+    focus: bool = False,
 ) -> Any:
     if tab not in TABS:
         raise SystemExit(f"invalid tab {tab!r}; expected one of {TABS}")
@@ -1498,37 +1630,54 @@ def render_dashboard(
         return Text(f"terminal too small; need at least {MIN_WIDTH}x{MIN_HEIGHT}", style="bold red")
 
     selected_run_index = clamp_index(run_index, len(runs))
-    run = runs[selected_run_index] if runs else None
+    base_run = runs[selected_run_index] if runs else None
     pane_height = height - 2 if chrome else height
     left_width = max(40, min(46, (width * 2) // 5))
     right_width = max(20, width - left_width)
     visible = max(1, pane_height - 5)
-    rows = rows_for_tab(run, tab, runs, selected_phase_id=selected_phase_id, agent_scope=agent_scope)
-    selected_row_index = selected_run_index if tab == "runs" else clamp_index(row_index, len(rows))
-    sidebar_title = sidebar_title_for(tab, run, selected_phase_id, agent_scope)
+    rows = apply_row_filter(rows_for_tab(base_run, tab, runs, selected_phase_id=selected_phase_id, agent_scope=agent_scope), filter_text)
+    if tab == "runs" and not active_filter(filter_text):
+        selected_row_index = selected_run_index
+    else:
+        selected_row_index = clamp_index(row_index, len(rows))
+    run = rows[selected_row_index] if tab == "runs" and rows else base_run
+    sidebar_title = title_with_filter(sidebar_title_for(tab, run, selected_phase_id, agent_scope), filter_text)
+    detail = make_detail_body(
+        run,
+        tab,
+        rows,
+        selected_row_index,
+        detail_height=pane_height,
+        agent_view=agent_view,
+        agent_scope=agent_scope,
+        filter_text=filter_text,
+    )
+    if focus:
+        focused = Panel(
+            detail,
+            title=make_panel_title(tab, compact=width < 100, filter_text=filter_text),
+            border_style="green",
+            box=box.ROUNDED,
+            height=pane_height,
+        )
+        if not chrome:
+            return focused
+        return Group(make_header(tab), focused, make_footer(run, width))
 
     layout = Table.grid(expand=True)
     layout.add_column(width=left_width)
     layout.add_column(width=right_width)
     layout.add_row(
         Panel(
-            make_sidebar(tab, rows, selected_row_index, visible),
+            make_sidebar(tab, rows, selected_row_index, visible, filter_text=filter_text),
             title=Text(sidebar_title, style="bold cyan"),
             border_style="cyan",
             box=box.ROUNDED,
             height=pane_height,
         ),
         Panel(
-            make_detail_body(
-                run,
-                tab,
-                rows,
-                selected_row_index,
-                detail_height=pane_height,
-                agent_view=agent_view,
-                agent_scope=agent_scope,
-            ),
-            title=make_tabs_title(tab, compact=right_width < 60),
+            detail,
+            title=make_panel_title(tab, compact=right_width < 72, filter_text=""),
             border_style="green",
             box=box.ROUNDED,
             height=pane_height,
@@ -1559,6 +1708,8 @@ def render_snapshot(
     phase_index: int | None = None,
     agent_scope: str = "phase",
     agent_view: str = "live",
+    filter_text: str = "",
+    focus: bool = False,
 ) -> str:
     """Render the TUI as deterministic text for snapshot tests."""
     if height < MIN_HEIGHT or width < MIN_WIDTH:
@@ -1584,6 +1735,8 @@ def render_snapshot(
             selected_phase_id=selected_phase_id,
             agent_scope=agent_scope,
             agent_view=agent_view,
+            filter_text=filter_text,
+            focus=focus,
         )
     )
     return normalize_snapshot(console.export_text(styles=False), width, height)
@@ -1620,7 +1773,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", action="store_true", help="render deterministic text snapshot and exit")
     parser.add_argument("--fixture", help="JSON fixture for snapshot mode")
-    parser.add_argument("--tab", choices=TABS, default="runs")
+    parser.add_argument("--tab", choices=TABS, default="overview")
     parser.add_argument("--width", type=int, default=100)
     parser.add_argument("--height", type=int, default=28)
     parser.add_argument("--run-index", type=int, default=0)
@@ -1630,6 +1783,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--phase-index", type=int, help="ordered phase context for phase-scoped agent snapshots")
     parser.add_argument("--agent-scope", choices=AGENT_SCOPES, default="phase")
     parser.add_argument("--agent-view", choices=AGENT_VIEWS, default="live")
+    parser.add_argument("--filter", default="", help="filter rows by text")
+    parser.add_argument("--focus", action="store_true", help="render selected detail full-width")
     return parser
 
 
@@ -1650,6 +1805,8 @@ def main() -> None:
                 phase_index=args.phase_index,
                 agent_scope=args.agent_scope,
                 agent_view=args.agent_view,
+                filter_text=args.filter,
+                focus=args.focus,
             )
         )
         return

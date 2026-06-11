@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭────────────────── Runs ──────────────────╮╭───── ● runs  phases  agents  events  decisions  artifacts ─────╮
+╭────────────────── Runs ──────────────────╮╭───────────── ovr  ● run  pha  agt  evt  dec  art ──────────────╮
 │    State  Title                          ││ id          wf-fixture-rich                                    │
 │ ▸  RUN    Fixture Workflow With Paralle… ││ title       Fixture Workflow With Parallel Review              │
 │    DONE   Completed Smoke Fixture        ││ status      running                                            │
@@ -14,6 +14,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                          ││ │ longest     Security reviewer                              │ │
 │                                          ││ │ agents      3                                              │ │
 │                                          ││ │ phases      3                                              │ │
+│                                          ││ │ checks      1                                              │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
 │                                          ││ │ No live output yet.                                        │ │
@@ -22,7 +23,6 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                          ││ │ Build and review a Codex workflow system with a polished   │ │
 │                                          ││ │ TUI, fixtures, snapshots, and clear state.                 │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
-│                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │

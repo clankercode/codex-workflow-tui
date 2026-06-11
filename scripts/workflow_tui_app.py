@@ -32,6 +32,16 @@ def run_textual_app(tui: Any) -> None:
         if exc.name == "textual":
             maybe_reexec_textual_venv(tui)
         raise SystemExit("Textual is required for the live TUI. Run `workflow tui` or install the workflow virtualenv.") from exc
+    try:
+        from textual.binding import Binding
+    except ModuleNotFoundError:
+        Binding = None  # type: ignore[assignment]
+
+    def binding(key: str, action: str, description: str, *, show: bool = True) -> Any:
+        """Return a Textual binding, falling back to tuple shape in tests."""
+        if Binding is None:
+            return (key, action, description)
+        return Binding(key, action, description, show=show)
 
     class WorkflowDashboardApp(App):
         CSS = """
@@ -47,27 +57,31 @@ def run_textual_app(tui: Any) -> None:
         }
         """
         BINDINGS = [
-            ("q", "quit", "Quit"),
-            ("escape", "quit", "Quit"),
-            ("r", "reload_runs", "Reload"),
-            ("a", "toggle_agent_scope", "Agent scope"),
-            ("v", "toggle_agent_view", "Agent view"),
-            ("y", "copy_selected_id", "Copy id"),
-            ("p", "copy_selected_path", "Copy path"),
-            ("ctrl+y", "copy_selected_json", "Copy row"),
-            ("tab", "next_tab", "Next section"),
-            ("shift+tab", "previous_tab", "Prev section"),
-            ("right", "next_tab", "Next section"),
-            ("left", "previous_tab", "Prev section"),
-            ("j", "move_down", "Down"),
-            ("k", "move_up", "Up"),
-            ("down", "move_down", "Down"),
-            ("up", "move_up", "Up"),
-            ("space", "page_down", "Page down"),
-            ("pagedown", "page_down", "Page down"),
-            ("pageup", "page_up", "Page up"),
-            ("g", "top", "Top"),
-            ("G", "bottom", "Bottom"),
+            binding("q", "quit", "Quit"),
+            binding("escape", "escape_or_quit", "Back"),
+            binding("r", "reload_runs", "Reload"),
+            binding("a", "toggle_agent_scope", "Scope"),
+            binding("v", "toggle_agent_view", "View"),
+            binding("y", "copy_selected_id", "ID"),
+            binding("p", "copy_selected_path", "Path"),
+            binding("ctrl+y", "copy_selected_json", "Row"),
+            binding("enter", "toggle_focus", "Focus"),
+            binding("/", "cycle_filter", "Filter"),
+            binding("!", "show_attention", "Attn"),
+            binding("c", "clear_filter", "Clear"),
+            binding("tab", "next_tab", "Next", show=False),
+            binding("shift+tab", "previous_tab", "Prev", show=False),
+            binding("right", "next_tab", "Next", show=False),
+            binding("left", "previous_tab", "Prev", show=False),
+            binding("j", "move_down", "Down", show=False),
+            binding("k", "move_up", "Up", show=False),
+            binding("down", "move_down", "Down", show=False),
+            binding("up", "move_up", "Up", show=False),
+            binding("space", "page_down", "Page down", show=False),
+            binding("pagedown", "page_down", "Page down", show=False),
+            binding("pageup", "page_up", "Page up", show=False),
+            binding("g", "top", "Top", show=False),
+            binding("G", "bottom", "Bottom", show=False),
         ]
         TITLE = "Agent Workflows"
 
@@ -79,6 +93,9 @@ def run_textual_app(tui: Any) -> None:
             self.tab_index = 0
             self.agent_scope_index = 0
             self.agent_view_index = 0
+            self.filter_index = 0
+            self.filter_presets = ("", "failed", "blocked", "running", "artifact")
+            self.focus_mode = False
             self.selected_run_id: str | None = None
             self.selected_row_ids: dict[str, str | None] = {tab: None for tab in tui.TABS}
             self.fallback_indexes: dict[str, int] = {tab: 0 for tab in tui.TABS}
@@ -209,13 +226,21 @@ def run_textual_app(tui: Any) -> None:
             self.update_dashboard()
 
         def active_rows(self) -> list[dict[str, Any]]:
-            return tui.current_rows_for(
+            rows = tui.current_rows_for(
                 self.selected_run,
                 self.tab,
                 self.runs,
                 selected_phase_id=self.selected_row_ids.get("phases"),
                 agent_scope=self.agent_scope,
             )
+            filter_rows = getattr(tui, "apply_row_filter", None)
+            if filter_rows is None:
+                return rows
+            return filter_rows(rows, self.filter_text)
+
+        @property
+        def filter_text(self) -> str:
+            return self.filter_presets[self.filter_index]
 
         def capture_selection(self) -> None:
             if self.runs:
@@ -259,12 +284,21 @@ def run_textual_app(tui: Any) -> None:
                     selected_phase_id=self.selected_row_ids.get("phases"),
                     agent_scope=self.agent_scope,
                     agent_view=self.agent_view,
+                    filter_text=self.filter_text,
+                    focus=self.focus_mode,
                 )
             )
 
         def update_tab_chrome(self) -> None:
             self.refresh_bindings()
             self.update_dashboard()
+
+        def action_escape_or_quit(self) -> None:
+            if self.focus_mode:
+                self.focus_mode = False
+                self.update_dashboard()
+                return
+            self.exit()
 
         def action_reload_runs(self) -> None:
             self.reload_state()
@@ -313,15 +347,47 @@ def run_textual_app(tui: Any) -> None:
         def action_copy_selected_json(self) -> None:
             self.copy_selection("json")
 
+        def action_toggle_focus(self) -> None:
+            if not self.active_rows():
+                return
+            self.focus_mode = not self.focus_mode
+            self.update_dashboard()
+
+        def action_cycle_filter(self) -> None:
+            self.capture_selection()
+            self.filter_index = (self.filter_index + 1) % len(self.filter_presets)
+            self.restore_selection()
+            label = self.filter_text or "none"
+            self.notify(f"Filter: {label}", title="Workflow", timeout=0.8)
+            self.update_dashboard()
+
+        def action_clear_filter(self) -> None:
+            if self.filter_index == 0:
+                return
+            self.capture_selection()
+            self.filter_index = 0
+            self.restore_selection()
+            self.notify("Filter cleared", title="Workflow", timeout=0.8)
+            self.update_dashboard()
+
+        def action_show_attention(self) -> None:
+            self.capture_selection()
+            self.tab_index = tui.TABS.index("overview")
+            self.focus_mode = False
+            self.restore_selection()
+            self.update_tab_chrome()
+
         def action_next_tab(self) -> None:
             self.capture_selection()
             self.tab_index = (self.tab_index + 1) % len(tui.TABS)
+            self.focus_mode = False
             self.restore_selection()
             self.update_tab_chrome()
 
         def action_previous_tab(self) -> None:
             self.capture_selection()
             self.tab_index = (self.tab_index - 1) % len(tui.TABS)
+            self.focus_mode = False
             self.restore_selection()
             self.update_tab_chrome()
 
