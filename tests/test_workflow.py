@@ -1228,6 +1228,39 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(label, "run json")
         self.assertIn('"run_id": "wf-fixture-rich"', value)
 
+    def test_ascii_artifact_detail_renders_file_preview(self) -> None:
+        """Artifact detail should render readable ASCII artifact files inline."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        runs = workflow_tui.load_fixture(str(FIXTURE))
+        run = runs[0]
+        artifact = workflow_tui.rows_for_tab(run, "artifacts", runs)[0]
+        sink = io.StringIO()
+        console = Console(file=sink, width=100, force_terminal=False, color_system=None)
+        console.print(workflow_tui.make_artifact_detail(artifact, run))
+        rendered = sink.getvalue()
+        self.assertIn("Artifact Preview", rendered)
+        self.assertIn("Final synthesis report", rendered)
+        self.assertIn("Security: no critical issues", rendered)
+
+    def test_binary_artifact_detail_does_not_render_file_preview(self) -> None:
+        """Binary artifacts should keep the detail pane readable by omitting previews."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            binary_path = Path(tmp) / "artifact.bin"
+            binary_path.write_bytes(b"\x00\xff\xfePNG-ish")
+            artifact = {"artifact_id": "art-bin", "title": "Binary", "kind": "binary", "path": str(binary_path)}
+            sink = io.StringIO()
+            console = Console(file=sink, width=100, force_terminal=False, color_system=None)
+            console.print(workflow_tui.make_artifact_detail(artifact))
+            rendered = sink.getvalue()
+        self.assertIn("art-bin", rendered)
+        self.assertNotIn("Artifact Preview", rendered)
+        self.assertNotIn("PNG-ish", rendered)
+
     def test_selection_helpers_preserve_ids_after_inserted_rows(self) -> None:
         """Keep selection attached to row ids after live reload inserts new rows."""
         sys.path.insert(0, str(SCRIPTS))

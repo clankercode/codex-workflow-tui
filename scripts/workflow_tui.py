@@ -39,6 +39,7 @@ DISPLAY_TIMESTAMP_WIDTH = 18
 COMPACT_TIMESTAMP_WIDTH = 14
 TAIL_BYTES = 96_000
 MAX_PREVIEW_CHARS = 2_400
+MAX_ARTIFACT_PREVIEW_BYTES = 24_000
 UPDATE_CHECK_TIMEOUT = 2.0
 UPDATE_PULL_TIMEOUT = 30.0
 UPDATE_CHECK_INTERVAL = 15 * 60.0
@@ -956,6 +957,29 @@ def resolve_artifact_path(artifact: dict[str, Any], run: dict[str, Any] | None =
     return resolve_workflow_path(run, artifact.get("path"), "artifacts")
 
 
+def read_ascii_artifact_preview(path: Path | None, limit: int = MAX_ARTIFACT_PREVIEW_BYTES) -> str:
+    """Return a bounded preview for files that are plain ASCII text."""
+    if not path or not path.exists() or not path.is_file():
+        return ""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            data = handle.read(limit + 1)
+    except OSError:
+        return ""
+    if not data:
+        return ""
+    allowed_controls = {9, 10, 13}
+    if any(byte > 0x7F or (byte < 32 and byte not in allowed_controls) for byte in data):
+        return ""
+    body = data[:limit].decode("ascii", errors="strict").rstrip()
+    if not body:
+        return ""
+    if size > limit:
+        body = f"{body}\n... truncated after {limit} bytes ..."
+    return body
+
+
 def parse_ccc_output_log(stderr_text: str) -> Path | None:
     """Return ccc's artifact directory from its stderr footer, when present."""
     for line in reversed(stderr_text.splitlines()):
@@ -1329,7 +1353,18 @@ def make_artifact_detail(artifact: dict[str, Any], run: dict[str, Any] | None = 
         ("agent", artifact.get("agent_id", "")),
         ("time", display_event_timestamp(artifact.get("ts", ""))),
     ]
-    return Panel(make_mapping_table(rows), title="Artifact", border_style="blue", box=box.ROUNDED)
+    panels: list[Any] = [Panel(make_mapping_table(rows), title="Artifact", border_style="blue", box=box.ROUNDED)]
+    preview = read_ascii_artifact_preview(resolved_path)
+    if preview:
+        panels.append(
+            Panel(
+                Text(preview, overflow="fold"),
+                title="Artifact Preview",
+                border_style="green",
+                box=box.ROUNDED,
+            )
+        )
+    return Group(*panels)
 
 
 def selected_detail(rows: list[dict[str, Any]], selected: int, title: str) -> Panel:

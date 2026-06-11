@@ -8,23 +8,23 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                          ││ │ phase         phase-synthesis                              │ │
 │                                          ││ │ agent                                                      │ │
 │                                          ││ │ time          10:05:00 AEST                                │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
-│                                          ││ │                                                            │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭───────────────────── Artifact Preview ─────────────────────╮ │
+│                                          ││ │ # Final synthesis report                                   │ │
+│                                          ││ │                                                            │ │
+│                                          ││ │ Security: no critical issues.                              │ │
+│                                          ││ │ Tests: coverage gap documented and queued.                 │ │
+│                                          ││ │ Synthesis: ready for coordinator review.                   │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
 ╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
 path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json
