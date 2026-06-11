@@ -15,7 +15,7 @@ Treat the current coding-agent conversation as the lead agent: keep decisions, a
 2. Initialize state before delegating:
 
 ```bash
-python3 ~/.llm-general/ai-coding/codex/skills/workflow/scripts/workflow_state.py init \
+workflow init \
   --title "short workflow title" \
   --prompt "original user request or compact objective" \
   --cwd "$PWD" \
@@ -37,11 +37,12 @@ workflow tui
 The live TUI is Textual-based and the snapshot renderer uses Rich panels/tables.
 The installed `workflow`/`wf` aliases use the private workflow virtualenv when it exists.
 In the TUI, use arrow keys to move rows and sections, `a` to toggle phase/all agent scope, `v` to toggle live output/prompt, `y` to copy the selected id, `p` to copy the useful path, and `Ctrl-Y` to copy selected-row JSON.
+Use `Ctrl-P` for the Textual command palette; it includes `Workflow: Check for updates` and `Workflow: Update skill from git`.
 
 or, without the installed alias:
 
 ```bash
-python3 ~/.llm-general/ai-coding/codex/skills/workflow/scripts/workflow_tui.py
+python3 ~/.agents/skills/workflow/scripts/workflow_tui.py
 ```
 
 ## Delegation Rules
@@ -60,10 +61,10 @@ python3 ~/.llm-general/ai-coding/codex/skills/workflow/scripts/workflow_tui.py
 State lives under:
 
 ```text
-~/.llm-general/ai-coding/codex/workflow-system/state/runs/<run-id>/run.json
+~/.agents/workflow-system/state/runs/<run-id>/run.json
 ```
 
-This is the stable integration point for tooling. Do not invent ad hoc status files for workflow runs. Use the bundled state script instead.
+This is the default when the skill is installed at `~/.agents/skills/workflow` and launched through the `workflow` command. `WORKFLOW_STATE_DIR` can override it. This is the stable integration point for tooling. Do not invent ad hoc status files for workflow runs. Use the bundled state script instead.
 
 Read `references/state-schema.md` before building tools that consume workflow state. Read `references/operations.md` for command examples and lifecycle conventions.
 
@@ -84,7 +85,7 @@ Read `references/claude-code-parity.md` when designing or extending the workflow
 Use external coding-CLI workers when the task needs a separate process, durable logs, or a bigger isolated run:
 
 ```bash
-python3 ~/.llm-general/ai-coding/codex/skills/workflow/scripts/workflow_run.py \
+workflow run \
   --title "review lanes" \
   --cwd "$PWD" \
   --runner ccc-opencode \
@@ -102,6 +103,18 @@ workflow run --runner ccc --ccc-runner @mm --title "review" --job "review::Revie
 ```
 
 Read `references/coding-cli-runners.md` before using this path for write access.
+
+## Stress Testing
+
+Use the built-in Fibonacci reduction tree to stress workflow state, artifacts, TUI navigation, and token telemetry without spending model calls:
+
+```bash
+workflow fibonacci-stress --n 100 --output-dir ~/tmp/custom-wf-test
+```
+
+For `F(100)`, this creates 99 completed manual agents: 50 independent binomial-term agents and 49 one-sum reducers. The final answer, reduction tree, timing data, and run snapshot are archived under the output directory.
+
+Token totals in the TUI come only from reported usage metadata. If a provider reports `total_tokens`, that total is used. If it reports input/output/reasoning parts without a total, the TUI derives and labels the total. If usage is missing, the TUI shows `unknown`; it does not estimate from text length.
 
 ## Completion Gate
 

@@ -8,8 +8,11 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import time
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -35,6 +38,9 @@ DISPLAY_TIMESTAMP_WIDTH = 18
 COMPACT_TIMESTAMP_WIDTH = 14
 TAIL_BYTES = 96_000
 MAX_PREVIEW_CHARS = 2_400
+UPDATE_CHECK_TIMEOUT = 2.0
+UPDATE_PULL_TIMEOUT = 30.0
+UPDATE_CHECK_INTERVAL = 15 * 60.0
 STATUS_META = {
     "pending": ("PEND", "magenta"),
     "running": ("RUN", "cyan"),
@@ -55,6 +61,147 @@ EVENT_STYLE_BY_KIND = {
     "decision recorded": "bright_yellow",
     "artifact recorded": "bright_blue",
 }
+
+
+@dataclass(frozen=True)
+class GitCommandResult:
+    """Bounded git subprocess result for update checks and actions."""
+
+    args: tuple[str, ...]
+    returncode: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0 and not self.timed_out
+
+    def summary(self) -> str:
+        return trim_preview("\n".join(part for part in (self.stderr, self.stdout) if part).strip(), 400)
+
+
+@dataclass(frozen=True)
+class UpdateStatus:
+    """Current git-update status for the workflow skill checkout."""
+
+    state: str
+    message: str
+    local_head: str = ""
+    remote_head: str = ""
+    upstream: str = ""
+
+
+@dataclass(frozen=True)
+class UpdateActionResult:
+    """Result of an attempted git pull update."""
+
+    success: bool
+    message: str
+    status: UpdateStatus
+
+
+def skill_repo_root() -> Path:
+    """Return the workflow skill checkout that contains this TUI script."""
+    return Path(__file__).resolve().parents[1]
+
+
+def text_from_process(value: Any) -> str:
+    """Decode subprocess output from either text or timeout paths."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def run_git_command(repo_root: Path, args: list[str], timeout: float) -> GitCommandResult:
+    """Run a bounded git command in the skill checkout."""
+    command = ["git", "-C", str(repo_root), *args]
+    try:
+        result = subprocess.run(command, check=False, text=True, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        return GitCommandResult(tuple(args), 124, text_from_process(exc.stdout).strip(), text_from_process(exc.stderr).strip(), True)
+    except OSError as exc:
+        return GitCommandResult(tuple(args), 127, "", str(exc))
+    return GitCommandResult(tuple(args), result.returncode, result.stdout.strip(), result.stderr.strip())
+
+
+def unavailable_update(message: str) -> UpdateStatus:
+    """Return a status for checkouts that cannot be checked safely."""
+    return UpdateStatus("unavailable", message)
+
+
+def parse_ls_remote_head(output: str) -> str:
+    """Extract the first object id from git ls-remote output."""
+    for line in output.splitlines():
+        parts = line.split()
+        if parts:
+            return parts[0]
+    return ""
+
+
+def short_head(value: str) -> str:
+    """Return a compact commit id for update notifications."""
+    return value[:12] if value else "unknown"
+
+
+def check_skill_update(repo_root: Path | None = None, timeout: float = UPDATE_CHECK_TIMEOUT) -> UpdateStatus:
+    """Check whether the workflow skill checkout differs from its upstream head."""
+    root = (repo_root or skill_repo_root()).expanduser().resolve()
+    inside = run_git_command(root, ["rev-parse", "--is-inside-work-tree"], timeout)
+    if not inside.ok or inside.stdout != "true":
+        return unavailable_update("Workflow skill directory is not a git checkout.")
+
+    branch = run_git_command(root, ["branch", "--show-current"], timeout)
+    if not branch.ok or not branch.stdout:
+        return unavailable_update("Workflow skill checkout is detached; no upstream branch can be checked.")
+
+    remote = run_git_command(root, ["config", f"branch.{branch.stdout}.remote"], timeout)
+    merge = run_git_command(root, ["config", f"branch.{branch.stdout}.merge"], timeout)
+    if not remote.ok or not remote.stdout or not merge.ok or not merge.stdout:
+        return unavailable_update("Workflow skill checkout has no upstream branch configured.")
+
+    local = run_git_command(root, ["rev-parse", "HEAD"], timeout)
+    if not local.ok or not local.stdout:
+        return unavailable_update("Could not read the local workflow skill HEAD.")
+
+    upstream = f"{remote.stdout}/{merge.stdout.removeprefix('refs/heads/')}"
+    remote_head = run_git_command(root, ["ls-remote", "--heads", remote.stdout, merge.stdout], timeout)
+    if remote_head.timed_out:
+        return UpdateStatus("unavailable", f"Timed out checking {upstream}.", local_head=local.stdout, upstream=upstream)
+    if not remote_head.ok:
+        detail = remote_head.summary()
+        suffix = f": {detail}" if detail else "."
+        return UpdateStatus("unavailable", f"Could not check {upstream}{suffix}", local_head=local.stdout, upstream=upstream)
+
+    remote_sha = parse_ls_remote_head(remote_head.stdout)
+    if not remote_sha:
+        return UpdateStatus("unavailable", f"Could not resolve upstream branch {upstream}.", local_head=local.stdout, upstream=upstream)
+    if remote_sha == local.stdout:
+        return UpdateStatus("current", f"Workflow skill is current at {short_head(local.stdout)}.", local_head=local.stdout, remote_head=remote_sha, upstream=upstream)
+    message = f"Workflow skill update available: {short_head(local.stdout)} -> {short_head(remote_sha)} from {upstream}."
+    return UpdateStatus("available", message, local_head=local.stdout, remote_head=remote_sha, upstream=upstream)
+
+
+def update_skill_from_git(
+    repo_root: Path | None = None,
+    timeout: float = UPDATE_PULL_TIMEOUT,
+    check_timeout: float = UPDATE_CHECK_TIMEOUT,
+) -> UpdateActionResult:
+    """Run git pull --ff-only in the workflow skill checkout, then re-check status."""
+    root = (repo_root or skill_repo_root()).expanduser().resolve()
+    pull = run_git_command(root, ["pull", "--ff-only"], timeout)
+    status = check_skill_update(root, timeout=check_timeout)
+    if not pull.ok:
+        detail = pull.summary()
+        message = "git pull --ff-only timed out." if pull.timed_out else "git pull --ff-only failed."
+        if detail:
+            message = f"{message} {detail}"
+        return UpdateActionResult(False, message, status)
+    if status.state == "current":
+        return UpdateActionResult(True, f"Workflow skill updated to {short_head(status.local_head)}.", status)
+    return UpdateActionResult(True, f"git pull --ff-only completed. {status.message}", status)
 
 
 def load_runs() -> list[dict[str, Any]]:
@@ -334,7 +481,7 @@ def make_metrics_panel(run: dict[str, Any], live: dict[str, Any]) -> Panel:
         ("agent state", status_counts_text(metrics.get("agents_by_status", {}))),
         ("phases", metrics.get("phases_total", len(run.get("phases", [])))),
         ("phase state", status_counts_text(metrics.get("phases_by_status", {}))),
-        ("tokens", live.get("tokens", {}).get("total", 0)),
+        ("tokens", format_token_total(live.get("tokens", {}))),
         ("tool calls", live.get("tool_call_count", 0)),
     ]
     return Panel(make_mapping_table(rows), title="Metrics", border_style="green", box=box.ROUNDED)
@@ -435,20 +582,85 @@ def token_value(value: Any) -> int:
         return 0
 
 
-def merge_token_max(target: dict[str, int], source: dict[str, Any]) -> None:
+def empty_token_totals() -> dict[str, Any]:
+    """Return the provider-usage shape used by live telemetry."""
+    return {
+        "total": 0,
+        "input": 0,
+        "cached_input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "known": False,
+        "total_source": "unknown",
+    }
+
+
+def source_has_token_fields(source: dict[str, Any]) -> bool:
+    """Return true when a provider event carries usage, even if the values are zero."""
+    keys = {
+        "total",
+        "total_tokens",
+        "input",
+        "input_tokens",
+        "prompt_tokens",
+        "cached_input",
+        "cached_input_tokens",
+        "output",
+        "output_tokens",
+        "completion_tokens",
+        "reasoning",
+        "reasoning_tokens",
+    }
+    if any(key in source for key in keys):
+        return True
+    nested_keys = ("input_tokens_details", "output_tokens_details", "cache_creation_input_tokens", "cache_read_input_tokens")
+    return any(key in source for key in nested_keys)
+
+
+def merge_token_max(target: dict[str, Any], source: dict[str, Any]) -> None:
     """Use max values so cumulative token events are not double counted."""
+    if not source_has_token_fields(source):
+        return
+    target["known"] = True
     aliases = {
         "total": ("total", "total_tokens"),
         "input": ("input", "input_tokens", "prompt_tokens"),
+        "cached_input": ("cached_input", "cached_input_tokens", "cache_read_input_tokens"),
         "output": ("output", "output_tokens", "completion_tokens"),
         "reasoning": ("reasoning", "reasoning_tokens"),
     }
+    saw_reported_total = False
     for target_key, source_keys in aliases.items():
         for source_key in source_keys:
             if source_key in source:
                 target[target_key] = max(target.get(target_key, 0), token_value(source.get(source_key)))
-    if not target.get("total"):
-        target["total"] = max(target.get("total", 0), target.get("input", 0) + target.get("output", 0) + target.get("reasoning", 0))
+                if target_key == "total":
+                    saw_reported_total = True
+    input_details = source.get("input_tokens_details")
+    if isinstance(input_details, dict):
+        target["cached_input"] = max(target.get("cached_input", 0), token_value(input_details.get("cached_tokens")))
+    output_details = source.get("output_tokens_details")
+    if isinstance(output_details, dict):
+        target["reasoning"] = max(target.get("reasoning", 0), token_value(output_details.get("reasoning_tokens")))
+    if saw_reported_total:
+        target["total_source"] = "reported_total"
+        return
+    if target.get("total_source") != "reported_total":
+        derived = target.get("input", 0) + target.get("output", 0) + target.get("reasoning", 0)
+        target["total"] = max(target.get("total", 0), derived)
+        target["total_source"] = "derived_from_provider_parts"
+
+
+def format_token_total(tokens: dict[str, Any]) -> str:
+    """Render token totals without pretending missing usage is zero."""
+    if not tokens.get("known"):
+        return "unknown"
+    label = str(tokens.get("total", 0))
+    if tokens.get("unknown_agents"):
+        label += "+?"
+    if tokens.get("total_source") == "derived_from_provider_parts":
+        label += " derived"
+    return label
 
 
 def timestamp_epoch(value: Any) -> float:
@@ -557,7 +769,7 @@ def parse_json_activity(text: str) -> dict[str, Any]:
     output_parts: list[str] = []
     tool_calls: dict[str, str] = {}
     tool_order: list[str] = []
-    tokens = {"total": 0, "input": 0, "output": 0, "reasoning": 0}
+    tokens = empty_token_totals()
     parse_errors = 0
     last_activity_epoch = 0.0
     for fallback, line in enumerate(text.splitlines()):
@@ -635,7 +847,7 @@ def parse_text_activity(text: str) -> dict[str, Any]:
         "latest_output": trim_preview("\n".join(output_source)),
         "tool_calls": tool_lines[-6:],
         "tool_call_count": len(tool_groups),
-        "tokens": {"total": 0, "input": 0, "output": 0, "reasoning": 0},
+        "tokens": empty_token_totals(),
         "parse_errors": 0,
         "last_activity_epoch": 0.0,
     }
@@ -732,10 +944,24 @@ def collect_run_activity(run: dict[str, Any]) -> dict[str, Any]:
     """Aggregate live telemetry for a run from all agent logs."""
     activities = [agent_activity(agent, run) for agent in run.get("agents", [])]
     ordered_activities = sorted(activities, key=activity_sort_key)
-    token_totals = {"total": 0, "input": 0, "output": 0, "reasoning": 0}
+    token_totals = empty_token_totals()
+    known_agents = 0
+    unknown_agents = 0
     for activity in activities:
-        for key in token_totals:
-            token_totals[key] += token_value(activity.get("tokens", {}).get(key))
+        activity_tokens = activity.get("tokens", {})
+        if activity_tokens.get("known"):
+            known_agents += 1
+            token_totals["known"] = True
+            for key in ("total", "input", "cached_input", "output", "reasoning"):
+                token_totals[key] += token_value(activity_tokens.get(key))
+            if token_totals.get("total_source") != "reported_total":
+                token_totals["total_source"] = activity_tokens.get("total_source", "unknown")
+            if activity_tokens.get("total_source") == "reported_total":
+                token_totals["total_source"] = "reported_total"
+        else:
+            unknown_agents += 1
+    token_totals["known_agents"] = known_agents
+    token_totals["unknown_agents"] = unknown_agents
     running_agents = [agent for agent in run.get("agents", []) if agent.get("status") == "running"]
     now_epoch = time.time()
     longest_running = None
@@ -831,7 +1057,7 @@ def make_run_detail(run: dict[str, Any]) -> Group:
     )
     metrics = make_metrics_panel(run, live)
     live_rows = [
-        ("tokens", live["tokens"].get("total", 0)),
+        ("tokens", format_token_total(live.get("tokens", {}))),
         ("tool calls", live.get("tool_call_count", 0)),
         ("active", len([agent for agent in run.get("agents", []) if agent.get("status") == "running"])),
         ("longest", (live.get("longest_running") or {}).get("name", "")),
@@ -887,7 +1113,7 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
     activity = agent_activity(agent, run)
     stats = make_facts_table(
         [
-            ("tokens", activity.get("tokens", {}).get("total", 0)),
+            ("tokens", format_token_total(activity.get("tokens", {}))),
             ("tools", activity.get("tool_call_count", 0)),
             ("parse errs", activity.get("parse_errors", 0)),
             ("status", agent.get("status", "")),
@@ -1288,7 +1514,9 @@ def maybe_reexec_textual_venv() -> None:
 
 def run_textual_app() -> None:
     try:
-        from textual.app import App, ComposeResult
+        from textual.app import App, ComposeResult, SystemCommand
+        from textual.screen import Screen
+        from textual.worker import Worker, WorkerState
         from textual.widgets import Footer, Header, Static
     except ModuleNotFoundError as exc:
         if exc.name == "textual":
@@ -1345,6 +1573,8 @@ def run_textual_app() -> None:
             self.selected_row_ids: dict[str, str | None] = {tab: None for tab in TABS}
             self.fallback_indexes: dict[str, int] = {tab: 0 for tab in TABS}
             self.dashboard: Static | None = None
+            self.update_status: UpdateStatus | None = None
+            self.notified_update_head: str | None = None
 
         @property
         def tab(self) -> str:
@@ -1374,10 +1604,93 @@ def run_textual_app() -> None:
             yield Static(id="dashboard")
             yield Footer()
 
+        def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+            yield from super().get_system_commands(screen)
+            yield SystemCommand(
+                "Workflow: Check for updates",
+                "Check the workflow skill git upstream without blocking the TUI.",
+                self.action_check_for_updates,
+            )
+            yield SystemCommand(
+                "Workflow: Update skill from git",
+                "Run git pull --ff-only in the workflow skill checkout.",
+                self.action_update_skill_from_git,
+            )
+
         def on_mount(self) -> None:
             self.dashboard = self.query_one("#dashboard", Static)
             self.reload_state()
             self.set_interval(1.0, self.reload_state)
+            self.start_update_check(notify_current=False)
+            self.set_interval(UPDATE_CHECK_INTERVAL, lambda: self.start_update_check(notify_current=False))
+
+        def start_update_check(self, notify_current: bool) -> None:
+            if notify_current:
+                self.notify("Checking workflow skill updates...", title="Workflow", timeout=1.0)
+            name = "workflow-update-check-manual" if notify_current else "workflow-update-check-auto"
+            self.run_worker(
+                lambda: check_skill_update(timeout=UPDATE_CHECK_TIMEOUT),
+                name=name,
+                group="workflow-update-check",
+                exit_on_error=False,
+                exclusive=True,
+                thread=True,
+            )
+
+        def start_skill_update(self) -> None:
+            self.notify("Updating workflow skill from git...", title="Workflow", timeout=1.2)
+            self.run_worker(
+                lambda: update_skill_from_git(timeout=UPDATE_PULL_TIMEOUT, check_timeout=UPDATE_CHECK_TIMEOUT),
+                name="workflow-update-pull",
+                group="workflow-update-pull",
+                exit_on_error=False,
+                exclusive=True,
+                thread=True,
+            )
+
+        def handle_update_status(self, status: UpdateStatus, notify_current: bool) -> None:
+            self.update_status = status
+            if status.state == "available":
+                should_notify = notify_current or self.notified_update_head != status.remote_head
+                self.notified_update_head = status.remote_head
+                if should_notify:
+                    self.notify(
+                        f"{status.message} Use the command palette to run Workflow: Update skill from git.",
+                        title="Workflow update",
+                        severity="warning",
+                        timeout=8.0,
+                    )
+                return
+            if status.state == "current":
+                self.notified_update_head = None
+                if notify_current:
+                    self.notify(status.message, title="Workflow", timeout=3.0)
+                return
+            if notify_current:
+                self.notify(status.message, title="Workflow update", severity="warning", timeout=5.0)
+
+        def handle_update_action(self, result: UpdateActionResult) -> None:
+            self.update_status = result.status
+            if result.status.state == "current":
+                self.notified_update_head = None
+            severity = "error" if not result.success else "warning" if result.status.state == "available" else "information"
+            self.notify(result.message, title="Workflow update", severity=severity, timeout=6.0)
+
+        def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+            if event.state == WorkerState.ERROR and event.worker.name.startswith("workflow-update-"):
+                self.notify("Workflow update worker failed.", title="Workflow update", severity="error", timeout=5.0)
+                return
+            if event.state != WorkerState.SUCCESS:
+                return
+            if event.worker.name.startswith("workflow-update-check-"):
+                status = event.worker.result
+                if isinstance(status, UpdateStatus):
+                    self.handle_update_status(status, notify_current=event.worker.name.endswith("-manual"))
+                return
+            if event.worker.name == "workflow-update-pull":
+                result = event.worker.result
+                if isinstance(result, UpdateActionResult):
+                    self.handle_update_action(result)
 
         def reload_state(self) -> None:
             self.capture_selection()
@@ -1441,6 +1754,12 @@ def run_textual_app() -> None:
 
         def action_reload_runs(self) -> None:
             self.reload_state()
+
+        def action_check_for_updates(self) -> None:
+            self.start_update_check(notify_current=True)
+
+        def action_update_skill_from_git(self) -> None:
+            self.start_skill_update()
 
         def action_toggle_agent_scope(self) -> None:
             self.capture_selection()

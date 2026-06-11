@@ -11,7 +11,7 @@ This skill mirrors Claude Code workflow concepts using native subagents when ava
 | Dynamic workflows | `workflow_run.py` or main-session orchestration that fans out workers and records phases |
 | Agent teams | Lead-agent pattern: main session coordinates roles, state, and synthesis |
 | Background sessions | External coding-CLI workers through direct Codex, OpenCode, or `ccc` providers |
-| Workflows saved as commands | Skill scripts plus command symlinks in `~/.llm-general/bin` |
+| Workflows saved as commands | Skill scripts in `~/.agents/skills/workflow/scripts` plus command symlinks in `~/.local/bin` |
 | Subagent transcripts | Native subagent IDs plus worker transcripts or JSONL logs |
 | Hook-visible state | `run.json` state contract for external hook/tool consumers |
 | Worktree isolation | Use git worktrees or disjoint file ownership for write-heavy workers |

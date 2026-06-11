@@ -28,6 +28,8 @@ The workflow runner parses that footer and records:
 
 The default `ccc` output mode is `stream-json`. This gives the TUI the best available live output, tool-call, and token telemetry for Codex, OpenCode, and presets that forward provider JSON. Use a formatted/text mode only when human-readable stdout matters more than live telemetry.
 
+Token totals are provider-usage totals, not text estimates. When a runner emits a total token count, the TUI uses it directly. When it emits input/output/reasoning parts without a total, the TUI derives and labels the total. When no usage metadata is present, the TUI shows `unknown`.
+
 For `--runner ccc`, `--ccc-runner` is a raw `ccc` target:
 
 - Plain values such as `kimi`, `opencode`, `codex`, `claude`, `cx`, or `oc` are interpreted by `ccc` as CLI runner selectors.

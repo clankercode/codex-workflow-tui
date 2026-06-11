@@ -155,6 +155,22 @@
           <h2 id="install-title">Install the skill. Open the board. Start the lanes.</h2>
         </div>
         <div class="commands" aria-label="Command examples">
+          <button
+            class="command-row"
+            type="button"
+            data-copy="mkdir -p ~/.agents/skills && git clone https://github.com/clankercode/codex-workflow-tui.git ~/.agents/skills/workflow"
+          >
+            <span>clone the skill</span>
+            <code>mkdir -p ~/.agents/skills && git clone https://github.com/clankercode/codex-workflow-tui.git ~/.agents/skills/workflow</code>
+          </button>
+          <button
+            class="command-row"
+            type="button"
+            data-copy="mkdir -p ~/.local/bin && ln -sfn ~/.agents/skills/workflow/scripts/wf ~/.local/bin/workflow && ln -sfn ~/.agents/skills/workflow/scripts/wf ~/.local/bin/wf"
+          >
+            <span>link commands</span>
+            <code>mkdir -p ~/.local/bin && ln -sfn ~/.agents/skills/workflow/scripts/wf ~/.local/bin/workflow && ln -sfn ~/.agents/skills/workflow/scripts/wf ~/.local/bin/wf</code>
+          </button>
           <button class="command-row" type="button" data-copy="workflow tui">
             <span>open the board</span>
             <code>workflow tui</code>
@@ -170,10 +186,10 @@
           <button
             class="command-row"
             type="button"
-            data-copy="python3 scripts/workflow_tui_tmux_qa.py --output-dir /tmp/workflow-tui-qa"
+            data-copy="workflow fibonacci-stress --n 100 --output-dir ~/tmp/custom-wf-test"
           >
-            <span>visual QA</span>
-            <code>python3 scripts/workflow_tui_tmux_qa.py --output-dir /tmp/workflow-tui-qa</code>
+            <span>stress test</span>
+            <code>workflow fibonacci-stress --n 100 --output-dir ~/tmp/custom-wf-test</code>
           </button>
         </div>
       </section>

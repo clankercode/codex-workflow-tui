@@ -7,7 +7,7 @@ Use this reference when reading or extending workflow state.
 The source of truth is one JSON snapshot per run:
 
 ```text
-~/.llm-general/ai-coding/codex/workflow-system/state/runs/<run-id>/run.json
+~/.agents/workflow-system/state/runs/<run-id>/run.json
 ```
 
 Each run directory also contains:
@@ -18,7 +18,7 @@ logs/        worker transcripts, JSONL streams, and stderr logs
 run.json     current state snapshot
 ```
 
-Set `WORKFLOW_HOME` to move the whole workflow system, or `WORKFLOW_STATE_DIR` to move only state.
+That is the default for the recommended install at `~/.agents/skills/workflow` when launched through the `workflow` command. Set `WORKFLOW_HOME` to move the whole workflow system, or `WORKFLOW_STATE_DIR` to move only state.
 
 ## Top-Level Shape
 
@@ -112,6 +112,28 @@ For native subagents, set `agent_type` to `native-subagent` or the custom agent 
 For work performed directly by the coordinator session, set `agent_type` to `lead-local` so completed phases still have an owner/audit record.
 
 For external workers, `jsonl_path` is the durable transcript path. Direct Codex and OpenCode providers usually store JSONL there; `ccc-*` providers may store `transcript.txt` or `transcript.jsonl` there. The final answer is mirrored into `result` and `output_path`.
+
+## Token Telemetry
+
+Token counts are derived from provider usage metadata in agent transcripts, never from output text length.
+
+The TUI normalizes usage into:
+
+```json
+{
+  "total": 1234,
+  "input": 1000,
+  "cached_input": 400,
+  "output": 200,
+  "reasoning": 34,
+  "known": true,
+  "total_source": "reported_total"
+}
+```
+
+`total_source` is `reported_total` when the provider emits a total token count. It is `derived_from_provider_parts` when only input/output/reasoning parts are present. If no usage metadata exists, `known` is false and the TUI displays `unknown`. Mixed known/unknown run totals display `+?` to avoid presenting incomplete aggregate totals as exact.
+
+Manual scripted agents may emit explicit zero usage in JSONL when they perform no model call. That is a real zero-token count and is distinct from missing usage.
 
 ## Events
 

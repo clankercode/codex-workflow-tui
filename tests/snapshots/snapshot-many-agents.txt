@@ -9,7 +9,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │     BLCK    Agent 03                     ││ │ phase         phase-many                                   │ │
 │     PAUS    Agent 04                     ││ ╰────────────────────────────────────────────────────────────╯ │
 │     CNCL    Agent 05                     ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
-│     PEND    Agent 06                     ││ │ tokens      0                                              │ │
+│     PEND    Agent 06                     ││ │ tokens      unknown                                        │ │
 │     DONE    Agent 07                     ││ │ tools       0                                              │ │
 │     RUN     Agent 08                     ││ │ parse errs  0                                              │ │
 │     FAIL    Agent 09                     ││ │ status      paused                                         │ │

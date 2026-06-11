@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover - this workflow system is Unix-oriented 
     fcntl = None  # type: ignore[assignment]
 
 SCHEMA_VERSION = 1
-DEFAULT_ROOT = Path.home() / ".llm-general" / "ai-coding" / "codex" / "workflow-system"
+DEFAULT_ROOT = Path.home() / ".agents" / "workflow-system"
 STATUS_VALUES = {"pending", "running", "blocked", "completed", "failed", "cancelled", "paused"}
 
 

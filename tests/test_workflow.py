@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,40 @@ class WorkflowScriptTests(unittest.TestCase):
     def run_script(self, script: str, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         command = [sys.executable, str(SCRIPTS / script), *args]
         return subprocess.run(command, check=True, text=True, capture_output=True, env=env)
+
+    def git(self, cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        """Run git in tests with local-only repositories and stable author config."""
+        command = [
+            "git",
+            "-C",
+            str(cwd),
+            "-c",
+            "user.name=Workflow Test",
+            "-c",
+            "user.email=workflow-test@example.invalid",
+            *args,
+        ]
+        return subprocess.run(command, check=True, text=True, capture_output=True)
+
+    def write_commit(self, cwd: Path, text: str) -> str:
+        """Create one deterministic commit in a temporary git repository."""
+        note = cwd / "note.txt"
+        note.write_text(text, encoding="utf-8")
+        self.git(cwd, "add", "note.txt")
+        self.git(cwd, "commit", "-m", text)
+        return self.git(cwd, "rev-parse", "HEAD").stdout.strip()
+
+    def make_update_repos(self, tmp_path: Path) -> tuple[Path, Path, str]:
+        """Create a local origin, source checkout, and skill checkout for update tests."""
+        origin = tmp_path / "origin.git"
+        source = tmp_path / "source"
+        skill = tmp_path / "skill"
+        subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)], check=True, text=True, capture_output=True)
+        subprocess.run(["git", "clone", str(origin), str(source)], check=True, text=True, capture_output=True)
+        first_head = self.write_commit(source, "initial")
+        self.git(source, "push", "-u", "origin", "main")
+        subprocess.run(["git", "clone", str(origin), str(skill)], check=True, text=True, capture_output=True)
+        return source, skill, first_head
 
     def snapshot_env(self) -> dict[str, str]:
         """Return a deterministic local timezone for TUI snapshot rendering."""
@@ -177,6 +212,63 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(data["metrics"]["agents_total"], 1)
             self.assertEqual(data["metrics"]["agents_by_status"]["completed"], 1)
             self.assertEqual(data["phases"][0]["agent_ids"], ["agent-test"])
+
+    def test_wf_wrapper_defaults_state_to_checkout_parent(self) -> None:
+        """A user-scope checkout under ~/.agents/skills should keep state beside it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            skill_scripts = tmp_path / ".agents" / "skills" / "workflow" / "scripts"
+            skill_scripts.mkdir(parents=True)
+            shutil.copy2(SCRIPTS / "wf", skill_scripts / "wf")
+            shutil.copy2(SCRIPTS / "workflow_state.py", skill_scripts / "workflow_state.py")
+            (skill_scripts / "wf").chmod(0o755)
+
+            env = os.environ.copy()
+            env.pop("WORKFLOW_HOME", None)
+            env.pop("WORKFLOW_STATE_DIR", None)
+            env["HOME"] = str(tmp_path / "home")
+            created = subprocess.run(
+                [
+                    str(skill_scripts / "wf"),
+                    "init",
+                    "--title",
+                    "Portable Install",
+                    "--prompt",
+                    "portable install state root",
+                    "--cwd",
+                    str(ROOT),
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+            data = json.loads(created.stdout)
+            run = json.loads(Path(data["path"]).read_text(encoding="utf-8"))
+            self.assertTrue(str(run["paths"]["run_dir"]).startswith(str(tmp_path / ".agents" / "workflow-system")))
+
+    def test_direct_state_script_defaults_to_user_agents_state(self) -> None:
+        """Direct script usage should use a portable Codex user-scope state root."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = os.environ.copy()
+            env.pop("WORKFLOW_HOME", None)
+            env.pop("WORKFLOW_STATE_DIR", None)
+            env["HOME"] = str(tmp_path)
+            created = self.run_script(
+                "workflow_state.py",
+                "init",
+                "--title",
+                "Direct Install",
+                "--prompt",
+                "direct script state root",
+                "--cwd",
+                str(ROOT),
+                env=env,
+            )
+            data = json.loads(created.stdout)
+            run = json.loads(Path(data["path"]).read_text(encoding="utf-8"))
+            self.assertTrue(str(run["paths"]["run_dir"]).startswith(str(tmp_path / ".agents" / "workflow-system")))
 
     def test_add_agent_with_terminal_status_records_completion_time(self) -> None:
         """Backfilled/local completed agents should have lifecycle timestamps immediately."""
@@ -1142,10 +1234,117 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("verified by the tool call", parsed["latest_output"])
         self.assertEqual(activity["tool_call_count"], 1)
         self.assertEqual(activity["tokens"]["total"], 1234)
+        self.assertTrue(activity["tokens"]["known"])
+        self.assertEqual(activity["tokens"]["total_source"], "reported_total")
         self.assertIn("/usr/bin/python3", "\n".join(activity["tool_calls"]))
         self.assertIn("F(20) = 6765", activity["latest_output"])
         self.assertEqual(aggregate["tool_call_count"], 1)
         self.assertEqual(aggregate["tokens"]["total"], 1234)
+        self.assertEqual(workflow_tui.format_token_total(aggregate["tokens"]), "1234")
+
+    def test_token_totals_are_unknown_without_provider_usage(self) -> None:
+        """Do not present missing provider usage as a real zero-token count."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activity = workflow_tui.parse_text_activity("[assistant] completed without usage metadata")
+        self.assertFalse(activity["tokens"]["known"])
+        self.assertEqual(workflow_tui.format_token_total(activity["tokens"]), "unknown")
+
+    def test_token_totals_derive_from_provider_parts_when_total_absent(self) -> None:
+        """Derive totals only from provider-reported token parts, and label the result."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activity = workflow_tui.parse_json_activity(
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "input_tokens_details": {"cached_tokens": 4},
+                        "output_tokens_details": {"reasoning_tokens": 2},
+                    },
+                }
+            )
+        )
+        self.assertTrue(activity["tokens"]["known"])
+        self.assertEqual(activity["tokens"]["total"], 17)
+        self.assertEqual(activity["tokens"]["cached_input"], 4)
+        self.assertEqual(activity["tokens"]["reasoning"], 2)
+        self.assertEqual(activity["tokens"]["total_source"], "derived_from_provider_parts")
+        self.assertEqual(workflow_tui.format_token_total(activity["tokens"]), "17 derived")
+
+    def test_aggregate_token_total_marks_unknown_agents(self) -> None:
+        """Mark run token totals incomplete when any agent has no usage telemetry."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            known = tmp_path / "known.jsonl"
+            known.write_text(json.dumps({"type": "turn.completed", "usage": {"total_tokens": 10}}) + "\n", encoding="utf-8")
+            run = {
+                "agents": [
+                    {"agent_id": "known", "name": "Known", "status": "completed", "jsonl_path": str(known), "output_path": ""},
+                    {"agent_id": "unknown", "name": "Unknown", "status": "completed", "jsonl_path": str(tmp_path / "missing.jsonl"), "output_path": ""},
+                ]
+            }
+            aggregate = workflow_tui.collect_run_activity(run)
+        self.assertEqual(aggregate["tokens"]["total"], 10)
+        self.assertEqual(aggregate["tokens"]["known_agents"], 1)
+        self.assertEqual(aggregate["tokens"]["unknown_agents"], 1)
+        self.assertEqual(workflow_tui.format_token_total(aggregate["tokens"]), "10+?")
+
+    def test_skill_update_check_reports_remote_git_update(self) -> None:
+        """Detect a newer upstream commit without mutating the local checkout."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source, skill, first_head = self.make_update_repos(Path(tmp))
+            latest_head = self.write_commit(source, "remote update")
+            self.git(source, "push")
+
+            status = workflow_tui.check_skill_update(skill, timeout=5.0)
+
+            self.assertEqual(status.state, "available")
+            self.assertEqual(status.local_head, first_head)
+            self.assertEqual(status.remote_head, latest_head)
+            self.assertEqual(self.git(skill, "rev-parse", "HEAD").stdout.strip(), first_head)
+
+    def test_skill_update_action_pulls_ff_only_and_rechecks_status(self) -> None:
+        """Update the skill checkout with git pull --ff-only and return current status."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source, skill, _first_head = self.make_update_repos(Path(tmp))
+            latest_head = self.write_commit(source, "second")
+            self.git(source, "push")
+
+            result = workflow_tui.update_skill_from_git(skill, timeout=5.0, check_timeout=5.0)
+
+            self.assertTrue(result.success)
+            self.assertEqual(result.status.state, "current")
+            self.assertEqual(result.status.local_head, latest_head)
+            self.assertEqual(self.git(skill, "rev-parse", "HEAD").stdout.strip(), latest_head)
+
+    def test_skill_update_check_reports_missing_upstream_as_unavailable(self) -> None:
+        """Explain when a checkout cannot be checked because no upstream branch exists."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "skill"
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            self.write_commit(repo, "local only")
+
+            status = workflow_tui.check_skill_update(repo, timeout=5.0)
+
+            self.assertEqual(status.state, "unavailable")
+            self.assertIn("upstream", status.message)
 
     def test_jsonl_tail_detection_survives_mid_line_prefix(self) -> None:
         """Treat tailed JSONL as JSON even when the first line is truncated."""
@@ -1212,6 +1411,7 @@ class WorkflowScriptTests(unittest.TestCase):
             )
             self.assertEqual(activity["transcript_path"], str(ccc_dir / "transcript.jsonl"))
             self.assertEqual(activity["tokens"]["total"], 10)
+            self.assertEqual(activity["tokens"]["total_source"], "derived_from_provider_parts")
             self.assertIn("final ccc output", activity["latest_output"])
 
     def test_opencode_tool_use_events_feed_tui_telemetry(self) -> None:
@@ -1521,6 +1721,33 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("send-key Right", result.stdout)
         self.assertIn("send-key y", result.stdout)
         self.assertIn("send-key p", result.stdout)
+
+    def test_fibonacci_stress_creates_full_99_agent_tree(self) -> None:
+        """Exercise the full F(100) manual-agent tree in isolated workflow state."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = self.run_script(
+                "workflow_fibonacci_stress.py",
+                "--n",
+                "100",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--state-dir",
+                str(tmp_path / "state"),
+            )
+            summary = json.loads(result.stdout)
+            run = json.loads(Path(summary["run_json"]).read_text(encoding="utf-8"))
+            timing = json.loads(Path(summary["timing_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(summary["answer"], "354224848179261915075")
+            self.assertEqual(summary["agents_total"], 99)
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(run["metrics"]["agents_total"], 99)
+            self.assertEqual(len(run["phases"]), 7)
+            self.assertEqual(len(run["phases"][0]["agent_ids"]), 50)
+            self.assertEqual([len(phase["agent_ids"]) for phase in run["phases"][1:]], [25, 12, 6, 3, 2, 1])
+            self.assertEqual({artifact["kind"] for artifact in run["artifacts"]}, {"answer", "reduction-tree", "timing"})
+            self.assertEqual(timing["agents_total"], 99)
+            self.assertTrue((Path(summary["archive_dir"]) / "run.json").exists())
 
 
 if __name__ == "__main__":

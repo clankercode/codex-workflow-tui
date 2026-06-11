@@ -9,7 +9,8 @@ fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "$SOURCE")" && pwd)"
 PROG="$(basename -- "$0")"
 WORKFLOW_ROOT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
-TUI_PYTHON="${WORKFLOW_TUI_PYTHON:-$WORKFLOW_ROOT/workflow-system/.venv/bin/python}"
+export WORKFLOW_HOME="${WORKFLOW_HOME:-$WORKFLOW_ROOT/workflow-system}"
+TUI_PYTHON="${WORKFLOW_TUI_PYTHON:-$WORKFLOW_HOME/.venv/bin/python}"
 
 python_for_tui() {
   if [[ -x "$TUI_PYTHON" ]]; then
@@ -27,6 +28,7 @@ Usage:
   $PROG tui
   $PROG run [workflow_run.py args...]
   $PROG run-codex [workflow_run_codex.py args...]
+  $PROG fibonacci-stress [workflow_fibonacci_stress.py args...]
   $PROG state [workflow_state.py args...]
   $PROG list [workflow_state.py list args...]
   $PROG show <run-id> [workflow_state.py show args...]
@@ -72,6 +74,9 @@ case "$cmd" in
     ;;
   run-codex)
     exec python3 "$SCRIPT_DIR/workflow_run_codex.py" "$@"
+    ;;
+  fibonacci-stress|fib-stress)
+    exec python3 "$SCRIPT_DIR/workflow_fibonacci_stress.py" "$@"
     ;;
   state)
     exec python3 "$SCRIPT_DIR/workflow_state.py" "$@"

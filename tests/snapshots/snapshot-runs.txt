@@ -8,7 +8,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │    PAUS   Paused Operator Fixture        ││ updated     Jun 11 10:05 AEST                                  │
 │    CNCL   Cancelled Scope Fixture        ││ state       /home/xertrov/.llm-general/ai-coding/codex/workfl… │
 │    PEND   Pending Dispatch Fixture       ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
-│                                          ││ │ tokens      0                                              │ │
+│                                          ││ │ tokens      unknown                                        │ │
 │                                          ││ │ tool calls  0                                              │ │
 │                                          ││ │ active      1                                              │ │
 │                                          ││ │ longest     Security reviewer                              │ │

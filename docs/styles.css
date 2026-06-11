@@ -523,9 +523,8 @@ h3 {
 .command-row code {
   color: #dff3dd;
   font-family: inherit;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .site-footer {
