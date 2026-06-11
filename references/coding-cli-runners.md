@@ -2,6 +2,7 @@
 
 Use `workflow_run.py` when a workflow lane should run in its own process.
 The runner interface is provider-neutral: every provider builds a command, captures stdout/stderr, extracts a final result, and mirrors paths back into `run.json`.
+`workflow start` uses the same providers twice: once for the planner agent, then again for the generated worker jobs.
 
 ## Providers
 

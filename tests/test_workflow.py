@@ -616,6 +616,92 @@ class WorkflowScriptTests(unittest.TestCase):
             for expected_arg in ("@mm", "kimi"):
                 self.assertTrue(any(expected_arg in args for args in start_args), msg=f"missing {expected_arg} in {start_args}")
 
+    def test_start_mock_plan_launches_mock_workflow_from_goal(self) -> None:
+        """Create a workflow from one natural-language goal without model calls."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            launched = self.run_script(
+                "workflow_start.py",
+                "write a phd thesis on a new improved construction theory for the pyramids",
+                "--title",
+                "Pyramid Thesis",
+                "--mock",
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            created = json.loads(launched.stdout.split("\ncommand:", 1)[0])
+            run_id = created["run_id"]
+            self.assertEqual(created["jobs"], 4)
+            self.assertEqual(created["planner"], "mock")
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual(data["title"], "Pyramid Thesis")
+            self.assertEqual(data["prompt"], "write a phd thesis on a new improved construction theory for the pyramids")
+            self.assertEqual(data["metrics"]["agents_total"], 4)
+            self.assertEqual({agent["status"] for agent in data["agents"]}, {"completed"})
+            self.assertTrue(any(decision["title"] == "Workflow start plan generated" for decision in data["decisions"]))
+            plan_artifacts = [artifact for artifact in data["artifacts"] if artifact["kind"] == "generated-plan"]
+            self.assertEqual(len(plan_artifacts), 1)
+            plan = json.loads(Path(plan_artifacts[0]["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(plan["goal"], "write a phd thesis on a new improved construction theory for the pyramids")
+            self.assertEqual([job["name"] for job in plan["jobs"]], ["research", "design", "draft", "review"])
+
+    def test_wf_start_routes_to_start_script(self) -> None:
+        """Expose the natural-language start command through the installed shell entrypoint."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            launched = self.run_wf(
+                "start",
+                "summarize the current repository architecture",
+                "--title",
+                "Repo Summary",
+                "--mock",
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            created = json.loads(launched.stdout.split("\ncommand:", 1)[0])
+            self.assertEqual(created["jobs"], 4)
+            data = json.loads(self.run_script("workflow_state.py", "show", created["run_id"], "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual(data["title"], "Repo Summary")
+
+    def test_start_extracts_planner_json_from_markdown_fence(self) -> None:
+        """Accept common planner output with a fenced JSON object."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_start  # pylint: disable=import-outside-toplevel
+
+        text = textwrap.dedent(
+            """\
+            Here is the plan:
+
+            ```json
+            {
+              "title": "Example",
+              "jobs": [
+                {"name": "research", "role": "researcher", "prompt": "Research the topic."}
+              ]
+            }
+            ```
+            """
+        )
+        plan = workflow_start.parse_planner_output(text, goal="Research topic", max_jobs=4)
+        self.assertEqual(plan["title"], "Example")
+        self.assertEqual(plan["jobs"][0]["name"], "research")
+
+    def test_start_rejects_empty_goal(self) -> None:
+        """Reject empty natural-language goals before creating workflow state."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            result = self.run_wf("start", "   ", "--mock", env=env, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("goal must not be empty", result.stderr)
+            self.assertFalse((Path(tmp) / "state").exists())
+
     def test_runner_respects_max_agents_limit(self) -> None:
         """Ensure the launcher never runs more than --max-agents workers concurrently."""
         with tempfile.TemporaryDirectory() as tmp:

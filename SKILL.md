@@ -26,6 +26,7 @@ workflow init \
 4. Spawn native subagents for sidecar tasks when the current session exposes subagent tools. For each spawned subagent, add an agent record with its prompt, scope, and returned agent id.
 5. For larger or more isolated work, launch external coding-CLI workers with `workflow_run.py`. These workers can use direct Codex, `ccc`-wrapped Codex, `ccc`-wrapped OpenCode, or another `ccc` runner while updating the same state files.
    Use `--max-agents` to cap simultaneous workers and `--startup-delay` to pace launches; defaults are 4 workers and 1.0 seconds.
+   When the user gives a broad natural-language goal, use `wf start "<goal>"` to ask a planner agent for a job decomposition, save the generated plan as an artifact, and then launch the worker jobs through the same runner/rate-limit interface.
 6. Keep state current: mark phases and agents `running`, `blocked`, `completed`, or `failed`; record important choices with `workflow decision`, durable outputs with `workflow artifact`, and verification/result summaries as events.
    If the lead session implements a phase locally, add a `lead-local` agent or a decision/event before marking that phase complete so the TUI does not show a mysterious empty implementation phase.
 7. Use the TUI while work is active:
@@ -83,6 +84,15 @@ Read `references/claude-code-parity.md` when designing or extending the workflow
 ## Coding CLI Workers
 
 Use external coding-CLI workers when the task needs a separate process, durable logs, or a bigger isolated run:
+
+```bash
+workflow start "review this repository and fix the highest-impact issues" \
+  --runner ccc \
+  --ccc-runner @mm \
+  --max-agents 4
+```
+
+`workflow start` first runs a planner agent, records its generated plan as a decision and artifact, then launches the planned jobs. Use `--mock` for a no-model rehearsal, or `--mock-plan` to use the deterministic planner while still launching real workers.
 
 ```bash
 workflow run \

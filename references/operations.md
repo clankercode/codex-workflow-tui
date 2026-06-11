@@ -65,6 +65,27 @@ This keeps phase views honest: a completed phase with no agents means no worker 
 
 ## Run External Coding-CLI Workers
 
+When you have a broad goal but not a hand-written job list, let a planner agent create the workflow:
+
+```bash
+workflow start "write a concise architecture review for this repository" \
+  --runner ccc \
+  --ccc-runner @mm \
+  --max-agents 4 \
+  --startup-delay 1.0
+```
+
+`workflow start` asks the planner for up to `--max-jobs` independent jobs, creates the workflow run, records the generated plan as both a decision and a `generated-plan` artifact, and launches the jobs with the selected worker runner. Planner-specific flags are prefixed with `--planner-*`; if omitted, the planner uses the worker runner settings.
+
+Useful rehearsal modes:
+
+```bash
+workflow start "summarize the current repo" --mock
+workflow start "summarize the current repo" --mock-plan --runner ccc-opencode
+```
+
+`--mock` avoids model calls for the planner and workers. `--mock-plan` uses the deterministic local planner but still runs real workers unless combined with `--dry-run` or `--mock`.
+
 For deterministic fan-out from shell:
 
 ```bash
@@ -177,6 +198,7 @@ wf check <run-id>
 wf verify <run-id> --cmd "python3 tests/test_workflow.py"
 wf done <run-id>
 wf block <run-id> "waiting for credentials"
+wf start "review this repository and fix the highest-impact issues" --runner ccc --ccc-runner @mm
 wf preview --title "review" --job "security::Review this branch."
 wf tui
 wf run --runner ccc-opencode --title "..." --job "name::prompt"

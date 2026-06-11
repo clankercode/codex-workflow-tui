@@ -26,6 +26,7 @@ $PROG - agent workflow helper
 
 Usage:
   $PROG tui
+  $PROG start <goal> [workflow_start.py args...]
   $PROG run [workflow_run.py args...]
   $PROG run-codex [workflow_run_codex.py args...]
   $PROG fibonacci-stress [workflow_fibonacci_stress.py args...]
@@ -77,6 +78,9 @@ esac
 case "$cmd" in
   tui)
     exec "$(python_for_tui)" "$SCRIPT_DIR/workflow_tui.py" "$@"
+    ;;
+  start)
+    exec python3 "$SCRIPT_DIR/workflow_start.py" "$@"
     ;;
   run)
     exec python3 "$SCRIPT_DIR/workflow_run.py" "$@"
