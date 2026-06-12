@@ -56,7 +56,7 @@
           </div>
           <div class="hero-command" aria-label="Example command">
             <span class="prompt">$</span>
-            <code>workflow run --runner ccc-opencode --max-agents 4 --startup-delay 1.0</code>
+            <code>workflow run --title "Review lanes" --runner ccc-opencode --job "review::Review this branch."</code>
           </div>
         </div>
         <aside class="hero-readout" aria-label="Workflow telemetry summary">
@@ -139,13 +139,20 @@
           </p>
         </div>
         <pre class="state-code" aria-label="Workflow state shape"><code>{
+  "schema_version": 1,
   "run_id": "wf-20260611T070952Z",
+  "title": "Review lanes",
   "status": "running",
-  "phases": ["research", "implementation", "review"],
-  "agents": [{ "type": "ccc-opencode", "status": "running" }],
-  "events": [{ "kind": "agent", "operation": "updated" }],
-  "decisions": [],
-  "artifacts": []
+  "paths": { "run_json": ".../run.json", "logs_dir": ".../logs" },
+  "phases": [
+    { "phase_id": "phase-review", "status": "running", "agent_ids": ["agent-review"] }
+  ],
+  "agents": [
+    { "agent_id": "agent-review", "phase_id": "phase-review", "agent_type": "ccc-opencode", "status": "running", "jsonl_path": ".../logs/review.jsonl", "output_path": ".../artifacts/review.md" }
+  ],
+  "events": [{ "event_id": "evt-123", "kind": "agent", "operation": "updated", "agent_id": "agent-review" }],
+  "artifacts": [{ "artifact_id": "art-review-output", "kind": "worker-output", "path": ".../artifacts/review.md" }],
+  "checks": [{ "check_id": "chk-tests", "kind": "verification", "status": "passed", "command": "python3 tests/test_workflow.py" }]
 }</code></pre>
       </section>
 
@@ -171,6 +178,14 @@
             <span>link commands</span>
             <code>mkdir -p ~/.local/bin && ln -sfn ~/.agents/skills/workflow/scripts/wf ~/.local/bin/workflow && ln -sfn ~/.agents/skills/workflow/scripts/wf ~/.local/bin/wf</code>
           </button>
+          <button
+            class="command-row"
+            type="button"
+            data-copy="python3 -m venv ~/.agents/workflow-system/.venv && ~/.agents/workflow-system/.venv/bin/python -m pip install -r ~/.agents/skills/workflow/scripts/requirements-tui.txt"
+          >
+            <span>install TUI deps</span>
+            <code>python3 -m venv ~/.agents/workflow-system/.venv && ~/.agents/workflow-system/.venv/bin/python -m pip install -r ~/.agents/skills/workflow/scripts/requirements-tui.txt</code>
+          </button>
           <button class="command-row" type="button" data-copy="workflow tui">
             <span>open the board</span>
             <code>workflow tui</code>
@@ -178,10 +193,10 @@
           <button
             class="command-row"
             type="button"
-            data-copy="workflow run --runner ccc-opencode --max-agents 4 --startup-delay 1.0 --job 'review::Review this branch.'"
+            data-copy="workflow run --title 'Review lanes' --runner ccc-opencode --max-agents 4 --startup-delay 1.0 --job 'review::Review this branch.'"
           >
             <span>launch workers</span>
-            <code>workflow run --runner ccc-opencode --max-agents 4 --startup-delay 1.0</code>
+            <code>workflow run --title "Review lanes" --runner ccc-opencode --max-agents 4 --startup-delay 1.0 --job "review::Review this branch."</code>
           </button>
           <button
             class="command-row"

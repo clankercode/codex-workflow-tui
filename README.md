@@ -19,7 +19,7 @@ Site: https://clankercode.github.io/codex-workflow-tui/
 ```bash
 workflow tui
 workflow init --title "Example" --prompt "Do the thing" --cwd "$PWD"
-workflow run --runner ccc-opencode --max-agents 4 --startup-delay 1.0 --job "review::Review this branch."
+workflow run --title "Review lanes" --runner ccc-opencode --max-agents 4 --startup-delay 1.0 --job "review::Review this branch."
 workflow fibonacci-stress --n 100 --output-dir ~/tmp/custom-wf-test
 python3 scripts/workflow_tui_tmux_qa.py
 python3 tests/test_workflow.py

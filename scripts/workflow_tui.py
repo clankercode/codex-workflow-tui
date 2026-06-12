@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import io
 import json
 import math
@@ -53,6 +54,7 @@ STATUS_META = {
     "paused": ("PAUS", "yellow"),
 }
 TIMESTAMP_KEYS = {"ts", "created_at", "updated_at", "started_at", "completed_at"}
+SNAPSHOT_NOW_ENV = "WORKFLOW_TUI_SNAPSHOT_NOW"
 EVENT_STYLE_BY_KIND = {
     "workflow initialized": "bright_green",
     "run status": "bright_green",
@@ -232,12 +234,17 @@ def display_timestamp(value: Any) -> str:
     return parsed.astimezone().strftime("%b %d %H:%M %Z").strip()
 
 
+def snapshot_reference_time() -> datetime | None:
+    """Return the optional deterministic clock used by snapshot renderers."""
+    return parse_local_datetime(os.environ.get(SNAPSHOT_NOW_ENV))
+
+
 def display_event_timestamp(value: Any, now: datetime | None = None) -> str:
     """Return a compact local event timestamp, adding a date only for older events."""
     parsed = parse_local_datetime(value)
     if parsed is None:
         return "" if value is None else str(value)
-    reference = (now or datetime.now(parsed.tzinfo)).astimezone(parsed.tzinfo)
+    reference = (now or snapshot_reference_time() or datetime.now(parsed.tzinfo)).astimezone(parsed.tzinfo)
     if abs((reference - parsed).total_seconds()) <= 86_400:
         return parsed.strftime("%H:%M:%S %Z").strip()
     return parsed.strftime("%y-%m-%d %H:%M").strip()
@@ -1004,8 +1011,14 @@ def resolve_artifact_path(artifact: dict[str, Any], run: dict[str, Any] | None =
     return resolve_workflow_path(run, artifact.get("path"), "artifacts")
 
 
-def read_ascii_artifact_preview(path: Path | None, limit: int = MAX_ARTIFACT_PREVIEW_BYTES) -> str:
-    """Return a bounded preview for files that are plain ASCII text."""
+def is_binary_text(text: str) -> bool:
+    """Return true when decoded text contains binary-looking control data."""
+    allowed_controls = {"\t", "\n", "\r"}
+    return any((ord(char) < 32 and char not in allowed_controls) or char == "\ufffd" for char in text)
+
+
+def read_text_artifact_preview(path: Path | None, limit: int = MAX_ARTIFACT_PREVIEW_BYTES) -> str:
+    """Return a bounded preview for files that are readable UTF-8 text."""
     if not path or not path.exists() or not path.is_file():
         return ""
     try:
@@ -1016,10 +1029,14 @@ def read_ascii_artifact_preview(path: Path | None, limit: int = MAX_ARTIFACT_PRE
         return ""
     if not data:
         return ""
-    allowed_controls = {9, 10, 13}
-    if any(byte > 0x7F or (byte < 32 and byte not in allowed_controls) for byte in data):
+    truncated = size > limit
+    decoder = codecs.getincrementaldecoder("utf-8")("strict")
+    try:
+        body = decoder.decode(data[:limit], final=not truncated).rstrip()
+    except UnicodeDecodeError:
         return ""
-    body = data[:limit].decode("ascii", errors="strict").rstrip()
+    if is_binary_text(body):
+        return ""
     if not body:
         return ""
     if size > limit:
@@ -1157,7 +1174,7 @@ def copy_value_for_selection(
         if tab == "agents":
             for key in ("output_path", "jsonl_path", "log_path"):
                 resolved = resolve_agent_path(item, key, run)
-                if resolved:
+                if resolved and resolved.exists():
                     return ("agent path", str(resolved))
             return ("agent path", "")
         if tab == "artifacts":
@@ -1165,7 +1182,7 @@ def copy_value_for_selection(
             return ("artifact path", str(resolved) if resolved else "")
         return ("state path", path_text(run))
     if mode == "json":
-        return (f"{tab[:-1] if tab.endswith('s') else tab} json", json.dumps(display_timestamps_in_detail(item), indent=2, sort_keys=True))
+        return (f"{tab[:-1] if tab.endswith('s') else tab} json", json.dumps(item, indent=2, sort_keys=True))
     raise ValueError(f"unknown copy mode {mode!r}")
 
 
@@ -1412,7 +1429,7 @@ def make_artifact_detail(artifact: dict[str, Any], run: dict[str, Any] | None = 
         ("time", display_event_timestamp(artifact.get("ts", ""))),
     ]
     panels: list[Any] = [Panel(make_mapping_table(rows), title="Artifact", border_style="blue", box=box.ROUNDED)]
-    preview = read_ascii_artifact_preview(resolved_path)
+    preview = read_text_artifact_preview(resolved_path)
     if preview:
         panels.append(
             Panel(

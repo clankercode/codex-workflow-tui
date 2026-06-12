@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import textwrap
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -50,6 +49,23 @@ def highlight_color(text: str) -> tuple[int, int, int]:
     if "Agent Workflows" in text or "● agents" in text:
         return (245, 255, 232)
     return INK
+
+
+def wrap_text_to_width(draw: ImageDraw.ImageDraw, text: str, text_font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+    """Wrap words into lines that fit within the requested pixel width."""
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        candidate = f"{current} {word}".strip()
+        if draw.textlength(candidate, font=text_font) <= max_width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = word
+    if current:
+        lines.append(current)
+    return lines
 
 
 def make_tui_asset() -> None:
@@ -111,14 +127,17 @@ def make_social_card() -> None:
 
     display = font(DISPLAY, 122)
     mono = font(MONO_BOLD, 37)
+    badge_font = font(MONO_BOLD, 29)
     draw.text((168, 208), "Codex", fill=INK + (255,), font=display)
     draw.text((168, 333), "Workflow", fill=GREEN + (255,), font=display)
     tagline = "stateful multi-agent coding runs, live TUI, ccc/OpenCode workers"
-    draw.text((174, 520), tagline, fill=(186, 208, 185, 255), font=mono)
+    for line_index, line in enumerate(wrap_text_to_width(draw, tagline, mono, width - 348)):
+        draw.text((174, 516 + line_index * 48), line, fill=(186, 208, 185, 255), font=mono)
+    badge_width = 205
     for idx, label in enumerate(("runs", "phases", "agents", "events", "artifacts")):
         x = 178 + idx * 230
-        draw.rounded_rectangle((x, 666, x + 178, 724), radius=9, fill=(16, 29, 24, 255), outline=(70, 160, 100, 160), width=2)
-        draw.text((x + 24, 679), label, fill=(GREEN if label == "agents" else MUTED) + (255,), font=mono)
+        draw.rounded_rectangle((x, 666, x + badge_width, 724), radius=9, fill=(16, 29, 24, 255), outline=(70, 160, 100, 160), width=2)
+        draw.text((x + 24, 681), label, fill=(GREEN if label == "agents" else MUTED) + (255,), font=badge_font)
 
     image = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
     image.save(ASSETS / "social-card.png", quality=94)

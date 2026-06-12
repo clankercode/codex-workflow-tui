@@ -49,7 +49,8 @@ python3 ~/.agents/skills/workflow/scripts/workflow_tui.py
 ## Delegation Rules
 
 - Use native subagents first for small to medium parallel tasks inside the current turn. They are best for research, review, test triage, and disjoint code lanes.
-- Prefer the installed custom agents when they fit: `workflow-explorer` for read-only research, `workflow-reviewer` for review, `workflow-implementer` for bounded edits, and `workflow-synthesizer` for combining worker results.
+- Prefer custom workflow agents when they are installed and available in the current agent surface: `workflow-explorer` for read-only research, `workflow-reviewer` for review, `workflow-implementer` for bounded edits, and `workflow-synthesizer` for combining worker results.
+  If those custom agents are not installed, use general subagents or external workers with equivalent bounded prompts.
 - Use external coding-CLI workers for larger tasks that benefit from their own independent process, durable transcript, or long-running isolation.
 - Do not delegate the immediate blocking task. Keep the critical path local while sidecar agents work.
 - Give every agent a bounded scope, expected output, file ownership if it may edit, and a reminder that other agents may be working concurrently.

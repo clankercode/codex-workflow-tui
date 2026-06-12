@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a 99-agent Fibonacci reduction-tree workflow stress run."""
+"""Create a Fibonacci reduction-tree workflow stress run."""
 
 from __future__ import annotations
 
@@ -34,6 +34,11 @@ def fib(n: int) -> int:
 def term_count(n: int) -> int:
     """Return the number of binomial terms in F(n)."""
     return ((n - 1) // 2) + 1
+
+
+def expected_agent_count(n: int) -> int:
+    """Return the leaf-plus-reducer agent count for the reduction tree."""
+    return (2 * term_count(n)) - 1
 
 
 def make_run(title: str, prompt: str, cwd: Path, tags: list[str]) -> dict[str, Any]:
@@ -354,14 +359,17 @@ def run_stress(args: argparse.Namespace) -> dict[str, Any]:
     archive_root = output_dir / "archive"
     output_dir.mkdir(parents=True, exist_ok=True)
     archive_root.mkdir(parents=True, exist_ok=True)
-    title = args.title or f"Fib({args.n}) 99-agent reduction stress"
+    terms = term_count(args.n)
+    agents = expected_agent_count(args.n)
+    reducers = agents - terms
+    title = args.title or f"Fib({args.n}) {agents}-agent reduction stress"
     prompt = f"Stress test workflow state and TUI with a full binary reduction tree for F({args.n})."
     data = make_run(title, prompt, Path.cwd().resolve(), ["stress", "fibonacci", "manual-agents"])
     record_decision(
         data,
-        "Use 99 scripted manual agents",
-        "F(100) has 50 independent binomial terms and therefore 49 binary reducers. "
-        "Scripted agents stress workflow state, artifacts, timing, and TUI navigation without spending 99 model calls.",
+        f"Use {agents} scripted manual agents",
+        f"F({args.n}) has {terms} independent binomial terms and therefore {reducers} binary reducers. "
+        f"Scripted agents stress workflow state, artifacts, timing, and TUI navigation without spending {agents} model calls.",
     )
     start = time.perf_counter()
     value, tree_nodes, timings = build_tree(data, args.n)

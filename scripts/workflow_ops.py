@@ -181,6 +181,19 @@ def structural_issues(run: dict[str, Any]) -> list[dict[str, Any]]:
     phases = workflow_health.index_by(run.get("phases", []), "phase_id")
     agents = workflow_health.index_by(run.get("agents", []), "agent_id")
     valid_statuses = workflow_state.STATUS_VALUES
+    run_status = run.get("status")
+    if run_status not in valid_statuses:
+        issues.append(
+            workflow_health.issue(
+                run=run,
+                severity=workflow_health.CRITICAL,
+                kind="invalid-status",
+                title=f"Invalid run status: {run_status}",
+                message=f"Expected one of {sorted(valid_statuses)}.",
+                entity_type="run",
+                entity_id=str(run.get("run_id", "")),
+            )
+        )
     for collection_name in ("phases", "agents"):
         for item in run.get(collection_name, []):
             status = item.get("status")
@@ -292,7 +305,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
         data.setdefault("checks", []).append(check)
         workflow_state.add_event(
             data,
-            "info" if status == "passed" else "error",
+            "error" if status in {"failed", "error"} else "info",
             f"verification {status}: {name}",
             kind="check",
             operation="recorded",
@@ -303,26 +316,18 @@ def cmd_verify(args: argparse.Namespace) -> None:
 
     _, check, _ = workflow_state.mutate_run(args.run, mutator)
     print_json(check)
-    if check["status"] != "passed":
+    if check["status"] in {"failed", "error"}:
         raise SystemExit(exit_code or 1)
 
 
 def cmd_done(args: argparse.Namespace) -> None:
     """Safely mark a workflow run completed."""
-    run = workflow_state.load_run(args.run)
-    blockers = [] if args.force else workflow_health.completion_blockers(run, allow_unverified=args.allow_unverified)
-    if blockers:
-        if args.json:
-            print_json({"run_id": run.get("run_id", ""), "completed": False, "blockers": blockers})
-        else:
-            print(f"Refusing to complete {run.get('run_id', '')}; blockers remain:")
-            for item in blockers:
-                print(f"  {item['kind']}: {item['title']}")
-                if item.get("suggestion"):
-                    print(f"    next: {item['suggestion']}")
-        raise SystemExit(1)
-
-    def mutator(data: dict[str, Any]) -> None:
+    def mutator(data: dict[str, Any]) -> dict[str, Any]:
+        structural_blockers = [item for item in structural_issues(data) if item.get("severity") == workflow_health.CRITICAL]
+        lifecycle_blockers = [] if args.force else workflow_health.completion_blockers(data, allow_unverified=args.allow_unverified)
+        blockers = structural_blockers + lifecycle_blockers
+        if blockers:
+            raise workflow_state.AbortMutation({"run_id": data.get("run_id", args.run), "completed": False, "blockers": blockers})
         data["status"] = "completed"
         data["status_reason"] = args.reason or "completed via wf done"
         data["status_message"] = args.message or data["status_reason"]
@@ -339,9 +344,20 @@ def cmd_done(args: argparse.Namespace) -> None:
             source="workflow_ops.done",
             data={"allow_unverified": args.allow_unverified, "force": args.force},
         )
+        return {"run_id": data.get("run_id", args.run), "completed": True, "blockers": []}
 
-    workflow_state.mutate_run(args.run, mutator)
-    result = {"run_id": run.get("run_id", args.run), "status": "completed"}
+    _, outcome, _ = workflow_state.mutate_run(args.run, mutator)
+    if outcome["blockers"]:
+        if args.json:
+            print_json(outcome)
+        else:
+            print(f"Refusing to complete {outcome['run_id']}; blockers remain:")
+            for item in outcome["blockers"]:
+                print(f"  {item['kind']}: {item['title']}")
+                if item.get("suggestion"):
+                    print(f"    next: {item['suggestion']}")
+        raise SystemExit(1)
+    result = {"run_id": outcome["run_id"], "status": "completed"}
     print_json(result) if args.json else print(f"completed {result['run_id']}")
 
 

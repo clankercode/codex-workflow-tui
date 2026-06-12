@@ -6,13 +6,16 @@ The runner interface is provider-neutral: every provider builds a command, captu
 
 ## Providers
 
-```bash
-workflow run --runner codex-direct   # direct codex exec --json
-workflow run --runner ccc-codex      # codex through ccc
-workflow run --runner ccc-opencode   # OpenCode through ccc
-workflow run --runner ccc --ccc-runner kimi
-workflow run --runner ccc --ccc-runner @mm
-workflow run --runner opencode-direct
+Every `workflow run` command also needs `--title` and at least one `--job` or `--jobs-file`.
+The available runner selectors are:
+
+```text
+--runner codex-direct          direct codex exec --json
+--runner ccc-codex             codex through ccc
+--runner ccc-opencode          OpenCode through ccc
+--runner ccc --ccc-runner kimi
+--runner ccc --ccc-runner @mm
+--runner opencode-direct
 ```
 
 Prefer `ccc-*` providers when portability matters. `ccc` normalizes runner selection, permissions, output modes, and run artifacts across coding CLIs. Its artifact footer has this shape:

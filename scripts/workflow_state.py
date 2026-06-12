@@ -24,6 +24,14 @@ DEFAULT_ROOT = Path.home() / ".agents" / "workflow-system"
 STATUS_VALUES = {"pending", "running", "blocked", "completed", "failed", "cancelled", "paused"}
 
 
+class AbortMutation(Exception):
+    """Return a mutation result while leaving the run file untouched."""
+
+    def __init__(self, result: Any) -> None:
+        super().__init__("workflow mutation aborted without save")
+        self.result = result
+
+
 def workflow_root() -> Path:
     return Path(os.environ.get("WORKFLOW_HOME", DEFAULT_ROOT)).expanduser()
 
@@ -128,7 +136,10 @@ def mutate_run(identifier: str, mutator: Any) -> tuple[dict[str, Any], Any, Path
     path = run_file(identifier)
     with exclusive_lock(path.parent / ".lock"):
         data = load_run(str(path))
-        result = mutator(data)
+        try:
+            result = mutator(data)
+        except AbortMutation as exc:
+            return data, exc.result, path
         saved = save_run(data)
     return data, result, saved
 

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import argparse
 import io
 import textwrap
 import asyncio
@@ -74,9 +75,10 @@ class WorkflowScriptTests(unittest.TestCase):
         return source, skill, first_head
 
     def snapshot_env(self) -> dict[str, str]:
-        """Return a deterministic local timezone for TUI snapshot rendering."""
+        """Return a deterministic local timezone and clock for TUI snapshots."""
         env = os.environ.copy()
         env["TZ"] = "Australia/Sydney"
+        env["WORKFLOW_TUI_SNAPSHOT_NOW"] = "2026-06-11T00:06:00Z"
         return env
 
     def install_timed_fake_ccc(self, fake_bin: Path) -> Path:
@@ -927,6 +929,79 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(data["status"], "completed")
             self.assertEqual(data["metrics"]["checks_by_status"]["passed"], 1)
 
+    def test_operator_check_rejects_invalid_top_level_run_status(self) -> None:
+        """Validate the top-level run status, not only phases and agents."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Bad Run Status", "--prompt", "bad", "--cwd", str(ROOT), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            data = json.loads(run_path.read_text(encoding="utf-8"))
+            data["status"] = "bogus"
+            run_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            checked = self.run_wf("check", run_id, env=env, check=False)
+            denied = self.run_wf("done", run_id, "--allow-unverified", env=env, check=False)
+
+            self.assertNotEqual(checked.returncode, 0)
+            self.assertIn("invalid-status", checked.stdout)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("invalid-status", denied.stdout)
+
+    def test_operator_done_evaluates_blockers_inside_mutation_lock(self) -> None:
+        """Recheck completion blockers against the locked state just before writing done."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_ops  # pylint: disable=import-outside-toplevel
+
+        original_load_run = workflow_ops.workflow_state.load_run
+        original_mutate_run = workflow_ops.workflow_state.mutate_run
+        base_run = {
+            "run_id": "wf-race",
+            "status": "running",
+            "phases": [{"phase_id": "phase-done", "name": "Done", "status": "completed"}],
+            "agents": [],
+            "checks": [{"check_id": "chk-pass", "status": "passed", "required": True, "command": "true", "exit_code": 0, "summary": "pass"}],
+            "paths": {"run_json": "/tmp/wf-race/run.json"},
+        }
+        locked_state = dict(base_run)
+        locked_state["phases"] = [dict(base_run["phases"][0]), {"phase_id": "phase-race", "name": "Race", "status": "running"}]
+
+        def fake_load_run(_identifier: str) -> dict[str, object]:
+            return dict(base_run)
+
+        def fake_mutate_run(_identifier: str, mutator: object) -> tuple[dict[str, object], object, Path]:
+            try:
+                result = mutator(locked_state)  # type: ignore[misc]
+            except workflow_ops.workflow_state.AbortMutation as exc:
+                result = exc.result
+            return locked_state, result, Path("/tmp/wf-race/run.json")
+
+        workflow_ops.workflow_state.load_run = fake_load_run  # type: ignore[assignment]
+        workflow_ops.workflow_state.mutate_run = fake_mutate_run  # type: ignore[assignment]
+        try:
+            args = argparse.Namespace(run="wf-race", force=False, allow_unverified=False, json=False, reason=None, message=None)
+            with self.assertRaises(SystemExit):
+                workflow_ops.cmd_done(args)
+        finally:
+            workflow_ops.workflow_state.load_run = original_load_run  # type: ignore[assignment]
+            workflow_ops.workflow_state.mutate_run = original_mutate_run  # type: ignore[assignment]
+
+        self.assertEqual(locked_state["status"], "running")
+
+    def test_operator_record_only_optional_skipped_check_exits_successfully(self) -> None:
+        """Allow optional skipped evidence records without breaking automation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Skipped Optional", "--prompt", "skip", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+
+            result = self.run_wf("verify", run_id, "--record-only", "--status", "skipped", "--optional", "--summary", "not applicable", env=env)
+
+            self.assertEqual(json.loads(result.stdout)["status"], "skipped")
+
     def test_operator_block_and_check_surface_reason(self) -> None:
         """Persist blocked reasons and expose them through check output."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -958,6 +1033,26 @@ class WorkflowScriptTests(unittest.TestCase):
 
             self.assertNotEqual(denied.returncode, 0)
             self.assertIn("run-blocked", denied.stdout)
+
+    def test_operator_done_refusal_does_not_rewrite_run_state(self) -> None:
+        """A refused completion should not refresh updated_at or save a no-op mutation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "No Rewrite Done", "--prompt", "blocked", "--cwd", str(ROOT), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-active", "--name", "Active", "--status", "running", env=env)
+            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env)
+            before = run_path.read_text(encoding="utf-8")
+
+            denied = self.run_wf("done", run_id, env=env, check=False)
+            after = run_path.read_text(encoding="utf-8")
+
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("phase-active", denied.stdout)
+            self.assertEqual(after, before)
 
     def test_operator_verify_requires_explicit_evidence(self) -> None:
         """Reject bare manual verification records that would mint fake evidence."""
@@ -1998,8 +2093,40 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(label, "run json")
         self.assertIn('"run_id": "wf-fixture-rich"', value)
 
-    def test_ascii_artifact_detail_renders_file_preview(self) -> None:
-        """Artifact detail should render readable ASCII artifact files inline."""
+        raw_run = dict(run)
+        raw_run["duration_seconds"] = 12.4
+        label, value = workflow_tui.copy_value_for_selection(raw_run, "runs", [raw_run], 0, "json")
+        copied = json.loads(value)
+        self.assertEqual(label, "run json")
+        self.assertEqual(copied["updated_at"], "2026-06-11T00:05:00Z")
+        self.assertEqual(copied["duration_seconds"], 12.4)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            output_path = tmp_path / "artifacts" / "agent.md"
+            output_path.parent.mkdir(parents=True)
+            output_path.write_text("agent output\n", encoding="utf-8")
+            staged_run = {"paths": {"run_dir": str(tmp_path), "artifacts_dir": str(tmp_path / "artifacts"), "logs_dir": str(tmp_path / "logs")}}
+            staged_agent = {"agent_id": "agent-output", "output_path": "artifacts/agent.md", "jsonl_path": "logs/missing.jsonl", "log_path": "logs/missing.log"}
+            label, value = workflow_tui.copy_value_for_selection(staged_run, "agents", [staged_agent], 0, "path")
+        self.assertEqual(label, "agent path")
+        self.assertEqual(value, str(output_path))
+
+    def test_agent_path_copy_does_not_return_dead_paths(self) -> None:
+        """Avoid copying agent paths that cannot be opened from the current state."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run = {"paths": {"run_dir": "/tmp/wf-missing", "artifacts_dir": "/tmp/wf-missing/artifacts", "logs_dir": "/tmp/wf-missing/logs"}}
+        agent = {"agent_id": "agent-missing", "output_path": "artifacts/missing.md", "jsonl_path": "logs/missing.jsonl", "log_path": "logs/missing.log"}
+
+        label, value = workflow_tui.copy_value_for_selection(run, "agents", [agent], 0, "path")
+
+        self.assertEqual(label, "agent path")
+        self.assertEqual(value, "")
+
+    def test_text_artifact_detail_renders_file_preview(self) -> None:
+        """Artifact detail should render readable UTF-8 artifact files inline."""
         sys.path.insert(0, str(SCRIPTS))
         import workflow_tui  # pylint: disable=import-outside-toplevel
 
@@ -2013,6 +2140,31 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("Artifact Preview", rendered)
         self.assertIn("Final synthesis report", rendered)
         self.assertIn("Security: no critical issues", rendered)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            utf8_path = Path(tmp) / "artifact.md"
+            utf8_path.write_text("UTF-8 report: ready -> ship\nCost: 10 euros\n", encoding="utf-8")
+            artifact = {"artifact_id": "art-utf8", "title": "UTF8", "kind": "markdown", "path": str(utf8_path)}
+            sink = io.StringIO()
+            console = Console(file=sink, width=100, force_terminal=False, color_system=None)
+            console.print(workflow_tui.make_artifact_detail(artifact))
+            rendered = sink.getvalue()
+        self.assertIn("Artifact Preview", rendered)
+        self.assertIn("UTF-8 report: ready -> ship", rendered)
+        self.assertIn("10 euros", rendered)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            utf8_path = Path(tmp) / "split.md"
+            utf8_path.write_text("aaaa€bbbb", encoding="utf-8")
+            preview = workflow_tui.read_text_artifact_preview(utf8_path, limit=6)
+        self.assertTrue(preview.startswith("aaaa"))
+        self.assertIn("truncated after 6 bytes", preview)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            invalid_path = Path(tmp) / "invalid.md"
+            invalid_path.write_bytes(b"valid prefix \xe2")
+            preview = workflow_tui.read_text_artifact_preview(invalid_path)
+        self.assertEqual(preview, "")
 
     def test_binary_artifact_detail_does_not_render_file_preview(self) -> None:
         """Binary artifacts should keep the detail pane readable by omitting previews."""
@@ -2552,6 +2704,15 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("send-key y", result.stdout)
         self.assertIn("send-key p", result.stdout)
 
+    def test_tmux_qa_default_command_targets_local_checkout(self) -> None:
+        """Keep tmux QA from accidentally testing a stale installed workflow command."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_tmux_qa  # pylint: disable=import-outside-toplevel
+
+        command = workflow_tui_tmux_qa.workflow_command(None)
+
+        self.assertEqual(command, str(SCRIPTS / "wf"))
+
     def test_tmux_qa_staging_copies_fixture_assets_and_logs(self) -> None:
         """Keep staged tmux QA runs backed by fixture-relative artifacts and logs."""
         sys.path.insert(0, str(SCRIPTS))
@@ -2604,6 +2765,28 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual({artifact["kind"] for artifact in run["artifacts"]}, {"answer", "reduction-tree", "timing"})
             self.assertEqual(timing["agents_total"], 99)
             self.assertTrue((Path(summary["archive_dir"]) / "run.json").exists())
+
+    def test_fibonacci_stress_labels_non_100_runs_dynamically(self) -> None:
+        """Keep stress-run titles and decisions accurate for smaller Fibonacci runs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = self.run_script(
+                "workflow_fibonacci_stress.py",
+                "--n",
+                "20",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--state-dir",
+                str(tmp_path / "state"),
+            )
+            summary = json.loads(result.stdout)
+            run = json.loads(Path(summary["run_json"]).read_text(encoding="utf-8"))
+
+            self.assertEqual(summary["agents_total"], 19)
+            self.assertIn("19-agent", run["title"])
+            self.assertIn("Use 19 scripted manual agents", run["decisions"][0]["title"])
+            self.assertIn("F(20) has 10 independent binomial terms", run["decisions"][0]["rationale"])
+            self.assertNotIn("F(100)", run["decisions"][0]["rationale"])
 
 
 if __name__ == "__main__":

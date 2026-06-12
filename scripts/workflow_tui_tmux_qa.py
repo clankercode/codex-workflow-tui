@@ -221,7 +221,8 @@ def drive(args: argparse.Namespace) -> Path:
     env = os.environ.copy()
     env["WORKFLOW_STATE_DIR"] = str(state_dir)
     env["TZ"] = args.timezone
-    command = f"env WORKFLOW_STATE_DIR={shlex_quote(str(state_dir))} TZ={shlex_quote(args.timezone)} workflow tui"
+    workflow_cmd = workflow_command(args.workflow_command)
+    command = f"env WORKFLOW_STATE_DIR={shlex_quote(str(state_dir))} TZ={shlex_quote(args.timezone)} {shlex_quote(workflow_cmd)} tui"
     run(["tmux", "kill-session", "-t", args.session], check=False)
     run(["tmux", "new-session", "-d", "-s", args.session, "-x", str(args.width), "-y", str(args.height), command], env=env)
     try:
@@ -236,6 +237,7 @@ def drive(args: argparse.Namespace) -> Path:
                     f"session: {args.session}",
                     f"fixture: {Path(args.fixture).expanduser().resolve()}",
                     f"state: {state_dir}",
+                    f"workflow command: {workflow_cmd}",
                     f"size: {args.width}x{args.height}",
                     "",
                     "Actions:",
@@ -265,6 +267,13 @@ def shlex_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def workflow_command(value: str | None) -> str:
+    """Return the workflow command used by tmux QA, defaulting to this checkout."""
+    if value:
+        return str(Path(value).expanduser())
+    return str(Path(__file__).resolve().parent / "wf")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", default=str(default_fixture()))
@@ -276,6 +285,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--settle", type=float, default=1.0)
     parser.add_argument("--delay", type=float, default=0.9)
     parser.add_argument("--copy-delay", type=float, default=0.15)
+    parser.add_argument("--workflow-command", help="workflow/wf command to drive; defaults to this checkout's scripts/wf")
     parser.add_argument("--keep-session", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-assertions", action="store_true")
