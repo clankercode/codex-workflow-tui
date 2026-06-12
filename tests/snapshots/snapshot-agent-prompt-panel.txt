@@ -9,11 +9,8 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                            ││ │ phase         phase-calc                                           │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────────── Live Stats ────────────────────────────╮ │
-│                                            ││ │ tokens      1234                                                   │ │
-│                                            ││ │ tools       1                                                      │ │
-│                                            ││ │ parse errs  0                                                      │ │
-│                                            ││ │ status      running                                                │ │
-│                                            ││ │ thread      thread-live-tests                                      │ │
+│                                            ││ │ tokens      1234       tools      1          parse errs 0          │ │
+│                                            ││ │ status      running    thread     thread-li…                       │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────── Latest Tool Calls ─────────────────────────╮ │
 │                                            ││ │ command_execution · completed · /usr/bin/python3 -c "a,b=0,1\nfor  │ │
@@ -22,6 +19,9 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                            ││ ╭────────────────────────────── Prompt ──────────────────────────────╮ │
 │                                            ││ │ Compute a small independent verification and report the answer.    │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
 │                                            ││                                                                        │
 │                                            ││                                                                        │
 │                                            ││                                                                        │

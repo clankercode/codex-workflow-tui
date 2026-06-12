@@ -9,12 +9,15 @@ fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "$SOURCE")" && pwd)"
 PROG="$(basename -- "$0")"
 WORKFLOW_ROOT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
-export WORKFLOW_HOME="${WORKFLOW_HOME:-$WORKFLOW_ROOT/workflow-system}"
+export WORKFLOW_HOME="${WORKFLOW_HOME:-$HOME/.agents/workflow-system}"
 TUI_PYTHON="${WORKFLOW_TUI_PYTHON:-$WORKFLOW_HOME/.venv/bin/python}"
+LEGACY_TUI_PYTHON="$WORKFLOW_ROOT/workflow-system/.venv/bin/python"
 
 python_for_tui() {
   if [[ -x "$TUI_PYTHON" ]]; then
     printf '%s\n' "$TUI_PYTHON"
+  elif [[ -x "$LEGACY_TUI_PYTHON" ]]; then
+    printf '%s\n' "$LEGACY_TUI_PYTHON"
   else
     printf '%s\n' python3
   fi
@@ -29,6 +32,7 @@ Usage:
   $PROG start <goal> [workflow_start.py args...]
   $PROG run [workflow_run.py args...]
   $PROG run-codex [workflow_run_codex.py args...]
+  $PROG runner-matrix [workflow_runner_matrix.py args...]
   $PROG fibonacci-stress [workflow_fibonacci_stress.py args...]
   $PROG state [workflow_state.py args...]
   $PROG list [workflow_state.py list args...]
@@ -42,6 +46,9 @@ Usage:
   $PROG decision [workflow_state.py decision args...]
   $PROG artifact [workflow_state.py artifact args...]
   $PROG set-status [workflow_state.py set-status args...]
+  $PROG pause <run-id> [--reason ...]
+  $PROG resume <run-id> [--reason ...]
+  $PROG stop <run-id> [--reason ...] [--no-terminate]
   $PROG status [workflow_ops.py status args...]
   $PROG last [workflow_ops.py last args...]
   $PROG open [workflow_tui.py args...]
@@ -88,6 +95,9 @@ case "$cmd" in
   run-codex)
     exec python3 "$SCRIPT_DIR/workflow_run_codex.py" "$@"
     ;;
+  runner-matrix|matrix|runner-smoke)
+    exec python3 "$SCRIPT_DIR/workflow_runner_matrix.py" "$@"
+    ;;
   status|last|doctor|check|verify|done|block|preview)
     exec python3 "$SCRIPT_DIR/workflow_ops.py" "$cmd" "$@"
     ;;
@@ -100,7 +110,7 @@ case "$cmd" in
   state)
     exec python3 "$SCRIPT_DIR/workflow_state.py" "$@"
     ;;
-  list|show|init|add-phase|update-phase|add-agent|update-agent|event|decision|artifact|set-status|demo)
+  list|show|init|add-phase|update-phase|add-agent|update-agent|event|decision|artifact|set-status|pause|resume|stop|demo)
     exec python3 "$SCRIPT_DIR/workflow_state.py" "$cmd" "$@"
     ;;
   help|-h|--help)

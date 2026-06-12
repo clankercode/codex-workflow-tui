@@ -4,16 +4,14 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │ ▸  RUN    Live Telemetry Fixture           ││ title       Live Telemetry Fixture                                     │
 │                                            ││ status      running                                                    │
 │                                            ││ mode        codex-direct                                               │
+│                                            ││ paused      no                                                         │
+│                                            ││ stop req    no                                                         │
 │                                            ││ cwd         /home/xertrov/tmp/custom-wf-test                           │
 │                                            ││ updated     Jun 11 10:09 AEST                                          │
 │                                            ││ state       run.json                                                   │
 │                                            ││ ╭──────────────────────────── Live Stats ────────────────────────────╮ │
-│                                            ││ │ tokens      1234                                                   │ │
-│                                            ││ │ tool calls  1                                                      │ │
-│                                            ││ │ active      1                                                      │ │
-│                                            ││ │ longest     Live test worker                                       │ │
-│                                            ││ │ agents      1                                                      │ │
-│                                            ││ │ phases      1                                                      │ │
+│                                            ││ │ tokens      1234       tool calls 1          active     1          │ │
+│                                            ││ │ longest     Live test… agents     1          phases     1          │ │
 │                                            ││ │ checks      0                                                      │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭─────────────────────────── Live Output ────────────────────────────╮ │
@@ -29,6 +27,8 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ ╭────────────────────────────── Prompt ──────────────────────────────╮ │
 │                                            ││ │ Fixture workflow for live TUI telemetry panels.                    │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
 │                                            ││                                                                        │
 │                                            ││                                                                        │
 │                                            ││                                                                        │

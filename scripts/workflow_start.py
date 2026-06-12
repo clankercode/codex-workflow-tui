@@ -185,6 +185,9 @@ def planner_namespace(args: argparse.Namespace, prompt: str) -> argparse.Namespa
         approval=args.approval,
         model=args.planner_model or args.model,
         cli_agent=args.planner_cli_agent or args.cli_agent,
+        quota_retries=args.quota_retries,
+        quota_retry_buffer_secs=args.quota_retry_buffer_secs,
+        kimi_max_steps_per_turn=args.kimi_max_steps_per_turn,
         prompt=prompt,
     )
 
@@ -207,7 +210,7 @@ def run_planner(args: argparse.Namespace, goal: str) -> tuple[dict[str, Any], di
             "output_path": str(tmp_path / "planner.output.md"),
         }
         command = provider.build_command(agent, planner_args)
-        result = subprocess.run(command, text=False, capture_output=True)
+        result = subprocess.run(command, input=provider.stdin_payload(agent, planner_args), text=False, capture_output=True)
         Path(agent["jsonl_path"]).write_bytes(result.stdout)
         Path(agent["log_path"]).write_bytes(result.stderr)
         extracted = provider.extract_result(agent, result.returncode)
@@ -235,6 +238,9 @@ def worker_namespace(args: argparse.Namespace, plan: dict[str, Any], goal: str) 
         permission_mode=args.permission_mode,
         cli_agent=args.cli_agent,
         timeout_secs=args.timeout_secs,
+        quota_retries=args.quota_retries,
+        quota_retry_buffer_secs=args.quota_retry_buffer_secs,
+        kimi_max_steps_per_turn=args.kimi_max_steps_per_turn,
         model=args.model,
         sandbox=args.sandbox,
         approval=args.approval,
@@ -334,20 +340,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tag", action="append")
     parser.add_argument("--max-jobs", type=positive_int, default=4, help="maximum planner jobs; default: 4")
     parser.add_argument("--mock-plan", action="store_true", help="use deterministic local planning without model calls")
-    parser.add_argument("--planner-runner", choices=["codex-direct", "ccc-codex", "ccc-opencode", "ccc", "opencode-direct"])
+    parser.add_argument("--planner-runner", choices=["codex-direct", "ccc-codex", "ccc-opencode", "ccc", "opencode-direct", "kimi-direct"])
     parser.add_argument("--planner-ccc-runner")
     parser.add_argument("--planner-ccc-control", action="append")
     parser.add_argument("--planner-ccc-output-mode", default="stream-json", choices=["formatted", "stream-formatted", "text", "stream-text", "json", "stream-json", "pass-text", "pass-json"])
     parser.add_argument("--planner-cli-agent")
     parser.add_argument("--planner-model")
     parser.add_argument("--planner-timeout-secs", type=positive_int)
-    parser.add_argument("--runner", default="codex-direct", choices=["codex-direct", "ccc-codex", "ccc-opencode", "ccc", "opencode-direct"])
+    parser.add_argument("--runner", default="codex-direct", choices=["codex-direct", "ccc-codex", "ccc-opencode", "ccc", "opencode-direct", "kimi-direct"])
     parser.add_argument("--ccc-runner")
     parser.add_argument("--ccc-control", action="append")
     parser.add_argument("--ccc-output-mode", default="stream-json", choices=["formatted", "stream-formatted", "text", "stream-text", "json", "stream-json", "pass-text", "pass-json"])
     parser.add_argument("--permission-mode", choices=["safe", "auto", "yolo", "plan"])
     parser.add_argument("--cli-agent")
     parser.add_argument("--timeout-secs", type=positive_int)
+    parser.add_argument("--quota-retries", type=workflow_run_codex.nonnegative_int, default=2)
+    parser.add_argument("--quota-retry-buffer-secs", type=nonnegative_float, default=5.0)
+    parser.add_argument("--kimi-max-steps-per-turn", type=positive_int, default=9999)
     parser.add_argument("--model")
     parser.add_argument("--sandbox", default="read-only", choices=["read-only", "workspace-write", "danger-full-access"])
     parser.add_argument("--approval", default="never", choices=["never", "on-request", "untrusted", "on-failure"])

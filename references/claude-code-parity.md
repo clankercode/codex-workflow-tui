@@ -10,11 +10,13 @@ This skill mirrors Claude Code workflow concepts using native subagents when ava
 | Agent view | `workflow_tui.py` over explicit workflow state |
 | Dynamic workflows | `workflow_run.py` or main-session orchestration that fans out workers and records phases |
 | Agent teams | Lead-agent pattern: main session coordinates roles, state, and synthesis |
-| Background sessions | External coding-CLI workers through direct Codex, OpenCode, or `ccc` providers |
+| Background sessions | External coding-CLI workers through direct Codex, OpenCode, Kimi, or `ccc` providers |
 | Workflows saved as commands | Skill scripts in `~/.agents/skills/workflow/scripts` plus command symlinks in `~/.local/bin` |
 | Subagent transcripts | Native subagent IDs plus worker transcripts or JSONL logs |
 | Hook-visible state | `run.json` state contract for external hook/tool consumers |
 | Worktree isolation | Use git worktrees or disjoint file ownership for write-heavy workers |
+| Pause and resume | `workflow pause` stops new worker launches; `workflow resume` continues unfinished workers |
+| Stop without losing completed work | `workflow stop` cancels unfinished workers while preserving completed artifacts |
 
 ## UX Targets
 
@@ -33,6 +35,8 @@ Replicate the parts that make Claude workflows operationally rich:
 Native subagents currently depend on the host session. Do not assume a runtime will automatically create a team because a task is large.
 
 Direct Codex JSONL and `ccc` run artifacts are the stable automation substrates for this workflow system. App-server and remote control are promising for future live steering, but they are more version-sensitive and should not be the only state source.
+
+Claude Code workflows resume stopped or paused runs inside the same session by reusing completed agent results and rerunning only unfinished work. This implementation keeps that spirit but uses durable local JSON state: completed agents and artifacts remain intact, pause is cooperative, and stop is best-effort process termination plus cancellation state.
 
 ## Recommended Workflow Shapes
 

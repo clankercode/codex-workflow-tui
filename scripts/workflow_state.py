@@ -8,6 +8,7 @@ import contextlib
 import json
 import os
 import re
+import signal
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -22,6 +23,7 @@ except ImportError:  # pragma: no cover - this workflow system is Unix-oriented 
 SCHEMA_VERSION = 1
 DEFAULT_ROOT = Path.home() / ".agents" / "workflow-system"
 STATUS_VALUES = {"pending", "running", "blocked", "completed", "failed", "cancelled", "paused"}
+TERMINAL_STATUS_VALUES = {"completed", "failed", "cancelled"}
 
 
 class AbortMutation(Exception):
@@ -230,6 +232,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "decisions": [],
         "artifacts": [],
         "checks": [],
+        "control": {},
         "metrics": {},
     }
     add_event(data, "info", "workflow initialized", kind="workflow", operation="initialized", source="workflow_state.init")
@@ -488,6 +491,128 @@ def cmd_set_status(args: argparse.Namespace) -> None:
     print(json.dumps({"run_id": data["run_id"], "status": data["status"]}, indent=2))
 
 
+def active_status(status: Any) -> bool:
+    return str(status or "") in {"pending", "running", "blocked", "paused"}
+
+
+def terminate_worker(agent: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort terminate a worker process or process group recorded in state."""
+    group_id = agent.get("process_group_id")
+    process_id = agent.get("process_id")
+    target = group_id or process_id
+    if not target:
+        return {"sent": False, "reason": "no recorded process id"}
+    try:
+        if group_id:
+            os.killpg(int(group_id), signal.SIGTERM)
+            return {"sent": True, "target": "process_group", "pid": int(group_id), "signal": "SIGTERM"}
+        os.kill(int(process_id), signal.SIGTERM)
+        return {"sent": True, "target": "process", "pid": int(process_id), "signal": "SIGTERM"}
+    except ProcessLookupError:
+        return {"sent": False, "target": "process_group" if group_id else "process", "pid": int(target), "reason": "not found"}
+    except PermissionError:
+        return {"sent": False, "target": "process_group" if group_id else "process", "pid": int(target), "reason": "permission denied"}
+    except OSError as exc:
+        return {"sent": False, "target": "process_group" if group_id else "process", "pid": int(target), "reason": str(exc)}
+
+
+def cmd_pause(args: argparse.Namespace) -> None:
+    def mutator(data: dict[str, Any]) -> None:
+        previous_status = data.get("status", "")
+        if previous_status in TERMINAL_STATUS_VALUES:
+            raise AbortMutation({"run_id": data["run_id"], "status": previous_status, "changed": False})
+        control = data.setdefault("control", {})
+        control["paused"] = True
+        control["pause_requested_at"] = now()
+        control["pause_reason"] = args.reason or "operator requested pause"
+        data["status"] = "paused"
+        add_event(
+            data,
+            "warning",
+            "workflow paused",
+            kind="run",
+            operation="paused",
+            source="workflow_state.pause",
+            data={"previous_status": previous_status, "reason": control["pause_reason"]},
+        )
+
+    data, result, _ = mutate_run(args.run, mutator)
+    payload = result or {"run_id": data["run_id"], "status": data["status"], "changed": True}
+    print(json.dumps(payload, indent=2))
+
+
+def cmd_resume(args: argparse.Namespace) -> None:
+    def mutator(data: dict[str, Any]) -> None:
+        previous_status = data.get("status", "")
+        control = data.setdefault("control", {})
+        if control.get("stop_requested") or previous_status in TERMINAL_STATUS_VALUES:
+            raise AbortMutation({"run_id": data["run_id"], "status": previous_status, "changed": False})
+        control["paused"] = False
+        control["resumed_at"] = now()
+        control["resume_reason"] = args.reason or "operator requested resume"
+        if previous_status == "paused":
+            data["status"] = "running"
+        for agent in data.get("agents", []):
+            if agent.get("status") == "paused" and not agent.get("process_id"):
+                agent["status"] = "pending"
+                agent["updated_at"] = now()
+        add_event(
+            data,
+            "info",
+            "workflow resumed",
+            kind="run",
+            operation="resumed",
+            source="workflow_state.resume",
+            data={"previous_status": previous_status, "reason": control["resume_reason"]},
+        )
+
+    data, result, _ = mutate_run(args.run, mutator)
+    payload = result or {"run_id": data["run_id"], "status": data["status"], "changed": True}
+    print(json.dumps(payload, indent=2))
+
+
+def cmd_stop(args: argparse.Namespace) -> None:
+    def mutator(data: dict[str, Any]) -> dict[str, Any]:
+        timestamp = now()
+        previous_status = data.get("status", "")
+        control = data.setdefault("control", {})
+        control["stop_requested"] = True
+        control["stopped_at"] = timestamp
+        control["stop_reason"] = args.reason or "operator requested stop"
+        stopped_agents: list[dict[str, Any]] = []
+        for agent in data.get("agents", []):
+            if active_status(agent.get("status")):
+                termination = terminate_worker(agent) if args.terminate else {"sent": False, "reason": "termination disabled"}
+                agent["status"] = "cancelled"
+                agent["completed_at"] = timestamp
+                agent["updated_at"] = timestamp
+                agent["summary"] = agent.get("summary") or "cancelled by operator"
+                agent["stop_result"] = termination
+                stopped_agents.append({"agent_id": agent.get("agent_id", ""), **termination})
+        for phase in data.get("phases", []):
+            if active_status(phase.get("status")):
+                phase["status"] = "cancelled"
+                phase["completed_at"] = timestamp
+        data["status"] = "cancelled"
+        add_event(
+            data,
+            "warning",
+            "workflow stopped",
+            kind="run",
+            operation="stopped",
+            source="workflow_state.stop",
+            data={
+                "previous_status": previous_status,
+                "reason": control["stop_reason"],
+                "terminated_agents": stopped_agents,
+            },
+        )
+        return {"run_id": data["run_id"], "status": data["status"], "terminated_agents": stopped_agents, "changed": True}
+
+    _, result, _ = mutate_run(args.run, mutator)
+    print(json.dumps(result, indent=2))
+
+
 def load_all_runs() -> list[dict[str, Any]]:
     runs: list[dict[str, Any]] = []
     for path in runs_root().glob("*/run.json"):
@@ -662,6 +787,22 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("run")
     status.add_argument("status")
     status.set_defaults(func=cmd_set_status)
+
+    pause = sub.add_parser("pause", help="pause a run before launching more workers")
+    pause.add_argument("run")
+    pause.add_argument("--reason")
+    pause.set_defaults(func=cmd_pause)
+
+    resume = sub.add_parser("resume", help="resume a paused run")
+    resume.add_argument("run")
+    resume.add_argument("--reason")
+    resume.set_defaults(func=cmd_resume)
+
+    stop = sub.add_parser("stop", help="cancel a run and terminate recorded active workers")
+    stop.add_argument("run")
+    stop.add_argument("--reason")
+    stop.add_argument("--no-terminate", dest="terminate", action="store_false", help="only update state; do not signal processes")
+    stop.set_defaults(func=cmd_stop, terminate=True)
 
     list_cmd = sub.add_parser("list", help="list runs")
     list_cmd.add_argument("--json", action="store_true")

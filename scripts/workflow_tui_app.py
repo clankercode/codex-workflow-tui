@@ -143,6 +143,21 @@ def run_textual_app(tui: Any) -> None:
                 "Run git pull --ff-only in the workflow skill checkout.",
                 self.action_update_skill_from_git,
             )
+            yield SystemCommand(
+                "Workflow: Pause selected run",
+                "Pause the selected workflow before launching more workers.",
+                self.action_pause_selected_run,
+            )
+            yield SystemCommand(
+                "Workflow: Resume selected run",
+                "Resume the selected paused workflow.",
+                self.action_resume_selected_run,
+            )
+            yield SystemCommand(
+                "Workflow: Stop selected run",
+                "Cancel the selected workflow and terminate recorded active workers.",
+                self.action_stop_selected_run,
+            )
 
         def on_mount(self) -> None:
             self.dashboard = self.query_one("#dashboard", Static)
@@ -170,6 +185,25 @@ def run_textual_app(tui: Any) -> None:
                 lambda: tui.update_skill_from_git(timeout=tui.UPDATE_PULL_TIMEOUT, check_timeout=tui.UPDATE_CHECK_TIMEOUT),
                 name="workflow-update-pull",
                 group="workflow-update-pull",
+                exit_on_error=False,
+                exclusive=True,
+                thread=True,
+            )
+
+        def selected_run_id_for_action(self) -> str:
+            selected = self.selected_run
+            return str((selected or {}).get("run_id") or self.selected_run_id or "")
+
+        def start_workflow_control(self, action: str) -> None:
+            run_id = self.selected_run_id_for_action()
+            if not run_id:
+                self.notify("No workflow run is selected.", title="Workflow", severity="warning", timeout=1.5)
+                return
+            self.notify(f"{action.title()} requested for {run_id}.", title="Workflow", timeout=1.2)
+            self.run_worker(
+                lambda: tui.workflow_control_action(run_id, action),
+                name=f"workflow-control-{action}",
+                group="workflow-control",
                 exit_on_error=False,
                 exclusive=True,
                 thread=True,
@@ -218,6 +252,13 @@ def run_textual_app(tui: Any) -> None:
                 result = event.worker.result
                 if isinstance(result, tui.UpdateActionResult):
                     self.handle_update_action(result)
+                return
+            if event.worker.name.startswith("workflow-control-"):
+                result = event.worker.result
+                if isinstance(result, tui.WorkflowControlResult):
+                    severity = "information" if result.success else "error"
+                    self.notify(result.message, title="Workflow", severity=severity, timeout=4.0)
+                    self.reload_state()
 
         def reload_state(self) -> None:
             self.capture_selection()
@@ -308,6 +349,15 @@ def run_textual_app(tui: Any) -> None:
 
         def action_update_skill_from_git(self) -> None:
             self.start_skill_update()
+
+        def action_pause_selected_run(self) -> None:
+            self.start_workflow_control("pause")
+
+        def action_resume_selected_run(self) -> None:
+            self.start_workflow_control("resume")
+
+        def action_stop_selected_run(self) -> None:
+            self.start_workflow_control("stop")
 
         def check_action(self, action: str, _parameters: tuple[object, ...]) -> bool | None:
             if not tui.action_enabled_for_tab(self.tab, action):

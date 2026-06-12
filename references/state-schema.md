@@ -42,6 +42,7 @@ That is the default for the recommended install at `~/.agents/skills/workflow` w
   "decisions": [],
   "artifacts": [],
   "checks": [],
+  "control": {},
   "metrics": {}
 }
 ```
@@ -61,6 +62,28 @@ paused
 ```
 
 `completed` means the work item met its acceptance criteria. `failed` means it terminated with a failed command, unrecovered exception, or invalid result. `blocked` means human input or external state is required.
+
+## Control State
+
+Pause, resume, and stop requests are persisted under the optional top-level `control` object:
+
+```json
+{
+  "control": {
+    "paused": true,
+    "pause_requested_at": "2026-06-11T04:50:00Z",
+    "pause_reason": "operator requested pause",
+    "resumed_at": null,
+    "stop_requested": false
+  }
+}
+```
+
+`workflow pause <run-id>` sets the run status to `paused` and tells cooperative runners not to launch more workers. Already-running workers are allowed to finish.
+
+`workflow resume <run-id>` clears `control.paused` and changes a paused run back to `running`.
+
+`workflow stop <run-id>` sets `control.stop_requested`, marks unfinished phases and agents `cancelled`, and best-effort terminates recorded active worker process groups. Completed agent results and artifacts remain intact.
 
 ## Phase Records
 
@@ -95,6 +118,7 @@ Phase ids may be stable human ids such as `phase-research`, or generated ids. Pr
   "model": "gpt-5.5",
   "thread_id": "",
   "process_id": 12345,
+  "process_group_id": 12345,
   "write_scope": ["src/review"],
   "jsonl_path": ".../logs/codex-01-reviewer.jsonl",
   "log_path": ".../logs/codex-01-reviewer.stderr.log",
@@ -113,6 +137,8 @@ For native subagents, set `agent_type` to `native-subagent` or the custom agent 
 For work performed directly by the coordinator session, set `agent_type` to `lead-local` so completed phases still have an owner/audit record.
 
 For external workers, `jsonl_path` is the durable transcript path. Direct Codex and OpenCode providers usually store JSONL there; `ccc-*` providers may store `transcript.txt` or `transcript.jsonl` there. The final answer is mirrored into `result` and `output_path`.
+
+External cooperative workers should record both `process_id` and `process_group_id` when available. `workflow stop` prefers `process_group_id` so child CLI processes are terminated together.
 
 ## Token Telemetry
 

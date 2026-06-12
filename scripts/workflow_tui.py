@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import contextlib
 import io
 import json
 import math
@@ -103,6 +104,15 @@ class UpdateActionResult:
     success: bool
     message: str
     status: UpdateStatus
+
+
+@dataclass(frozen=True)
+class WorkflowControlResult:
+    """Result of a pause, resume, or stop action from the live TUI."""
+
+    action: str
+    success: bool
+    message: str
 
 
 def skill_repo_root() -> Path:
@@ -206,6 +216,27 @@ def update_skill_from_git(
     if status.state == "current":
         return UpdateActionResult(True, f"Workflow skill updated to {short_head(status.local_head)}.", status)
     return UpdateActionResult(True, f"git pull --ff-only completed. {status.message}", status)
+
+
+def workflow_control_action(run_id: str, action: str, reason: str = "TUI command palette") -> WorkflowControlResult:
+    """Apply a workflow control action through the durable state layer."""
+    commands = {
+        "pause": workflow_state.cmd_pause,
+        "resume": workflow_state.cmd_resume,
+        "stop": workflow_state.cmd_stop,
+    }
+    if action not in commands:
+        return WorkflowControlResult(action, False, f"Unknown workflow action: {action}")
+    if not run_id:
+        return WorkflowControlResult(action, False, "No workflow run is selected.")
+    args = argparse.Namespace(run=run_id, reason=reason, terminate=True)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            commands[action](args)
+    except (OSError, SystemExit, KeyError, json.JSONDecodeError) as exc:
+        return WorkflowControlResult(action, False, f"{action.title()} failed: {exc}")
+    verb = {"pause": "paused", "resume": "resumed", "stop": "stopped"}[action]
+    return WorkflowControlResult(action, True, f"Workflow {run_id} {verb}.")
 
 
 def load_runs() -> list[dict[str, Any]]:
@@ -465,6 +496,19 @@ def display_path_value(path: Path | None, width: int = 42) -> str:
     return compact_path(str(path), width) if path else ""
 
 
+def compact_tool_input(value: Any, width: int = 64) -> str:
+    """Render a tool input without letting absolute paths dominate panels."""
+    if isinstance(value, dict):
+        for key in ("command", "description"):
+            if value.get(key):
+                return str(value[key])
+        for key in ("filePath", "path", "pattern", "cwd"):
+            if value.get(key):
+                return compact_path(str(value[key]), width)
+        return compact_path(compact_json(value), width)
+    return compact_path(str(value), width)
+
+
 def make_footer(run: dict[str, Any] | None, width: int) -> Text:
     label = "path: "
     path = compact_path(path_text(run), max(0, width - len(label)))
@@ -671,21 +715,38 @@ def make_runs_table(runs: list[dict[str, Any]], selected: int, visible: int) -> 
     return table
 
 
-def safe_read_tail(path_value: str | Path | None, limit: int = TAIL_BYTES) -> str:
-    """Read the tail of a text file without assuming it is small or stable."""
+def safe_read_tail_info(path_value: str | Path | None, limit: int = TAIL_BYTES) -> tuple[str, bool]:
+    """Read a text tail and report whether the read started mid-file."""
     if not path_value:
-        return ""
+        return "", False
     path = Path(path_value).expanduser()
     if not path.exists() or not path.is_file():
-        return ""
+        return "", False
     try:
         with path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
             size = handle.tell()
-            handle.seek(max(0, size - limit))
-            return handle.read().decode("utf-8", errors="replace")
+            start = max(0, size - limit)
+            handle.seek(start)
+            return handle.read().decode("utf-8", errors="replace"), start > 0
     except OSError:
-        return ""
+        return "", False
+
+
+def safe_read_tail(path_value: str | Path | None, limit: int = TAIL_BYTES) -> str:
+    """Read the tail of a text file without assuming it is small or stable."""
+    text, _ = safe_read_tail_info(path_value, limit)
+    return text
+
+
+def discard_partial_first_jsonl_record(text: str, truncated: bool) -> str:
+    """Drop the first record when a JSONL tail starts in the middle of a file."""
+    if not truncated:
+        return text
+    lines = text.splitlines()
+    if not lines:
+        return text
+    return "\n".join(lines[1:])
 
 
 def trim_preview(text: str, limit: int = MAX_PREVIEW_CHARS) -> str:
@@ -844,14 +905,13 @@ def summarize_tool_call(event: dict[str, Any]) -> str:
     source = part or item or event
     name = source.get("tool") or source.get("name") or source.get("type") or "tool"
     status = state.get("status") or source.get("status") or event.get("status") or ""
-    title = state.get("title") or source.get("title") or ""
+    title = compact_tool_input(state.get("title") or source.get("title") or "")
     input_value = state.get("input") or source.get("input") or source.get("arguments") or {}
     if source.get("type") == "command_execution":
         input_value = source.get("command") or input_value
-    if isinstance(input_value, dict):
-        input_text = input_value.get("command") or input_value.get("description") or compact_json(input_value)
-    else:
         input_text = str(input_value)
+    else:
+        input_text = compact_tool_input(input_value)
     pieces = [str(name)]
     if status:
         pieces.append(str(status))
@@ -959,8 +1019,9 @@ def parse_text_activity(text: str) -> dict[str, Any]:
             current_tool.append(line.removeprefix("[tool:result]").strip())
             saw_result = True
             continue
-        if re.search(r"\b(tool|bash|command|called)\b", line, re.IGNORECASE):
-            tool_groups.append([line])
+        kimi_match = re.match(r"^•\s+Used\s+(.+)$", line)
+        if kimi_match:
+            tool_groups.append([kimi_match.group(1).strip()])
             current_tool = None
             saw_result = False
     tool_lines = [" ".join(group)[:220] for group in tool_groups]
@@ -1061,11 +1122,17 @@ def agent_activity(agent: dict[str, Any], run: dict[str, Any] | None = None) -> 
     stderr_text = safe_read_tail(resolve_agent_path(agent, "log_path", run))
     ccc_dir = parse_ccc_output_log(stderr_text)
     if ccc_dir:
-        transcript_path = ccc_dir / "transcript.jsonl"
-        if not transcript_path.exists():
-            transcript_path = ccc_dir / "transcript.txt"
-        output_path = ccc_dir / "output.txt"
-    transcript_text = safe_read_tail(transcript_path)
+        ccc_transcript_path = ccc_dir / "transcript.jsonl"
+        if not ccc_transcript_path.exists():
+            ccc_transcript_path = ccc_dir / "transcript.txt"
+        ccc_output_path = ccc_dir / "output.txt"
+        if ccc_transcript_path.exists():
+            transcript_path = ccc_transcript_path
+        if ccc_output_path.exists():
+            output_path = ccc_output_path
+    transcript_text, transcript_truncated = safe_read_tail_info(transcript_path)
+    if transcript_path and transcript_path.suffix.lower() == ".jsonl":
+        transcript_text = discard_partial_first_jsonl_record(transcript_text, transcript_truncated)
     output_text = safe_read_tail(output_path)
     if should_parse_json_activity(transcript_text, transcript_path):
         activity = parse_json_activity(transcript_text)
@@ -1132,6 +1199,13 @@ def collect_run_activity(run: dict[str, Any]) -> dict[str, Any]:
         elapsed = max(0.0, now_epoch - float(started))
         if longest_running is None or elapsed > longest_running["elapsed_seconds"]:
             longest_running = {"name": agent.get("name", ""), "agent_id": agent.get("agent_id", ""), "elapsed_seconds": round(elapsed, 1)}
+    longest_completed = None
+    for agent in run.get("agents", []):
+        duration = parse_duration_seconds(agent.get("duration_seconds"))
+        if duration is None:
+            continue
+        if longest_completed is None or duration > longest_completed["duration_seconds"]:
+            longest_completed = {"name": agent.get("name", ""), "agent_id": agent.get("agent_id", ""), "duration_seconds": duration}
     return {
         "activities": activities,
         "tokens": token_totals,
@@ -1139,7 +1213,21 @@ def collect_run_activity(run: dict[str, Any]) -> dict[str, Any]:
         "latest_tool_calls": [call for activity in ordered_activities for call in activity.get("tool_calls", [])][-8:],
         "latest_output": next((activity["latest_output"] for activity in reversed(ordered_activities) if activity.get("latest_output")), ""),
         "longest_running": longest_running,
+        "longest_completed": longest_completed,
     }
+
+
+def longest_agent_label(live: dict[str, Any]) -> str:
+    """Return a compact label for the run stats longest-agent field."""
+    longest_running = live.get("longest_running") or {}
+    if longest_running:
+        elapsed = format_duration_seconds(longest_running.get("elapsed_seconds")) or ""
+        return " ".join(part for part in (str(longest_running.get("name", "")), elapsed) if part)
+    longest_completed = live.get("longest_completed") or {}
+    if longest_completed:
+        duration = format_duration_seconds(longest_completed.get("duration_seconds")) or ""
+        return " ".join(part for part in (str(longest_completed.get("name", "")), duration) if part)
+    return ""
 
 
 def copy_value_for_selection(
@@ -1195,15 +1283,36 @@ def make_facts_table(rows: list[tuple[str, Any]]) -> Table:
     return table
 
 
+def make_facts_grid(rows: list[tuple[str, Any]], columns: int = 3) -> Table:
+    """Render short facts across the available width."""
+    table = Table.grid(expand=True)
+    for _ in range(columns):
+        table.add_column(width=12, no_wrap=True)
+        table.add_column(ratio=1)
+    for offset in range(0, len(rows), columns):
+        cells: list[Any] = []
+        for cell_index, (label, value) in enumerate(rows[offset : offset + columns]):
+            label_text = f" {label}" if cell_index else label
+            cells.append(Text(label_text, style="bold bright_black"))
+            cells.append(Text("" if value is None else str(value), overflow="ellipsis", no_wrap=True))
+        while len(cells) < columns * 2:
+            cells.extend(["", ""])
+        table.add_row(*cells)
+    return table
+
+
 def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) -> Group:
     live = collect_run_activity(run)
     metrics = run.get("metrics", {})
+    control = run.get("control") or {}
     facts = make_facts_table(
         [
             ("id", run.get("run_id", "")),
             ("title", run.get("title", "")),
             ("status", run.get("status", "")),
             ("mode", run.get("mode", "")),
+            ("paused", "yes" if control.get("paused") else "no"),
+            ("stop req", "yes" if control.get("stop_requested") else "no"),
             ("cwd", run.get("cwd", "")),
             ("updated", display_timestamp(run.get("updated_at", ""))),
             ("state", path_text(run)),
@@ -1219,12 +1328,12 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
         ("tokens", format_token_total(live.get("tokens", {}))),
         ("tool calls", live.get("tool_call_count", 0)),
         ("active", len([agent for agent in run.get("agents", []) if agent.get("status") == "running"])),
-        ("longest", (live.get("longest_running") or {}).get("name", "")),
+        ("longest", longest_agent_label(live)),
         ("agents", metrics.get("agents_total", len(run.get("agents", [])))),
         ("phases", metrics.get("phases_total", len(run.get("phases", [])))),
         ("checks", metrics.get("checks_total", len(run.get("checks", [])))),
     ]
-    live_stats = Panel(make_facts_table(live_rows), title="Live Stats", border_style="magenta", box=box.ROUNDED)
+    live_stats = Panel(make_facts_grid(live_rows), title="Live Stats", border_style="magenta", box=box.ROUNDED)
     tool_text = "\n".join(live.get("latest_tool_calls", [])[-8:]) or "No tool calls recorded yet."
     latest = Panel(Text(live.get("latest_output") or "No live output yet.", overflow="fold"), title="Live Output", border_style="yellow", box=box.ROUNDED)
     panels: list[Any] = [facts, live_stats, latest]
@@ -1277,15 +1386,14 @@ def make_agent_table(agents: list[dict[str, Any]], selected: int, visible: int, 
 
 def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None = None, agent_view: str = "live") -> Group:
     activity = agent_activity(agent, run)
-    stats = make_facts_table(
-        [
-            ("tokens", format_token_total(activity.get("tokens", {}))),
-            ("tools", activity.get("tool_call_count", 0)),
-            ("parse errs", activity.get("parse_errors", 0)),
-            ("status", agent.get("status", "")),
-            ("thread", agent.get("thread_id", "")),
-        ]
-    )
+    stats_rows = [
+        ("tokens", format_token_total(activity.get("tokens", {}))),
+        ("tools", activity.get("tool_call_count", 0)),
+        ("parse errs", activity.get("parse_errors", 0)),
+        ("status", agent.get("status", "")),
+        ("thread", agent.get("thread_id", "")),
+    ]
+    stats = make_facts_grid(stats_rows)
     tool_text = "\n".join(activity.get("tool_calls", [])[-6:]) or "No tool calls recorded yet."
     output_text = activity.get("latest_output") or agent.get("summary") or "No live output yet."
     info_rows = [

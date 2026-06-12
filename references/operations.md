@@ -114,6 +114,17 @@ workflow run \
   --job "security::Review this branch for security risks. Return file-linked findings."
 ```
 
+Use `--runner kimi-direct` for direct Kimi CLI workers:
+
+```bash
+workflow run \
+  --title "Kimi review" \
+  --cwd "$PWD" \
+  --runner kimi-direct \
+  --max-agents 3 \
+  --job "review::Review this branch for correctness and maintainability."
+```
+
 The launcher creates one run, one phase, one agent record per worker, durable transcripts, stderr logs, and final output files.
 It also records the runner/concurrency choice as a decision and exposes each worker final output in the Artifacts tab.
 
@@ -131,11 +142,47 @@ workflow run \
   --job "review::Review the current branch."
 ```
 
+To smoke-test several runners with the same reusable job set:
+
+```bash
+workflow runner-matrix \
+  --target codex-direct \
+  --target kimi-direct \
+  --target ccc:kimi \
+  --target minimax=ccc:@mm \
+  --output-dir ~/tmp/workflow-runner-matrix
+```
+
+The matrix command writes a summary JSON, copies the smoke jobs file into the output directory, and archives each target's workflow state, logs, and artifacts.
+Use `--mock` first to validate state and archive behavior without model calls.
+
 Use `--sandbox workspace-write` only for workers that may edit files, and give each worker a disjoint file scope in its prompt.
 
 Use `--mock` or `--dry-run` to test state and TUI behavior without model calls.
 
 For provider details, read `coding-cli-runners.md`.
+
+## Pause, Resume, And Stop
+
+Workflow control is cooperative and state-driven:
+
+```bash
+workflow pause <run-id> --reason "waiting for quota window"
+workflow resume <run-id>
+workflow stop <run-id> --reason "wrong prompt"
+```
+
+Pause prevents cooperative runners from launching more workers. It does not interrupt already-running workers; they can finish and record their artifacts.
+
+Resume clears the pause flag and lets pending workers launch again.
+
+Stop cancels unfinished phases and agents, records the stop request in `control`, and best-effort sends `SIGTERM` to recorded worker process groups. Completed agent outputs are preserved. Use `--no-terminate` when you only want state updated.
+
+The live TUI exposes these actions from `Ctrl-P`:
+
+- `Workflow: Pause selected run`
+- `Workflow: Resume selected run`
+- `Workflow: Stop selected run`
 
 ## Run The Fibonacci Stress Test
 

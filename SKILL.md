@@ -24,7 +24,7 @@ workflow init \
 
 3. Add phases that match how the work will be judged. Prefer phases such as `research`, `design`, `implementation`, `review`, and `verification`.
 4. Spawn native subagents for sidecar tasks when the current session exposes subagent tools. For each spawned subagent, add an agent record with its prompt, scope, and returned agent id.
-5. For larger or more isolated work, launch external coding-CLI workers with `workflow_run.py`. These workers can use direct Codex, `ccc`-wrapped Codex, `ccc`-wrapped OpenCode, or another `ccc` runner while updating the same state files.
+5. For larger or more isolated work, launch external coding-CLI workers with `workflow_run.py`. These workers can use direct Codex, direct Kimi, `ccc`-wrapped Codex, `ccc`-wrapped OpenCode, or another `ccc` runner while updating the same state files.
    Use `--max-agents` to cap simultaneous workers and `--startup-delay` to pace launches; defaults are 4 workers and 1.0 seconds.
    When the user gives a broad natural-language goal, use `wf start "<goal>"` to ask a planner agent for a job decomposition, save the generated plan as an artifact, and then launch the worker jobs through the same runner/rate-limit interface.
 6. Keep state current: mark phases and agents `running`, `blocked`, `completed`, or `failed`; record important choices with `workflow decision`, durable outputs with `workflow artifact`, and verification/result summaries as events.
@@ -38,7 +38,7 @@ workflow tui
 The live TUI is Textual-based and the snapshot renderer uses Rich panels/tables.
 The installed `workflow`/`wf` aliases use the private workflow virtualenv when it exists.
 In the TUI, use arrow keys to move rows and sections, `a` to toggle phase/all agent scope, `v` to toggle live output/prompt, `y` to copy the selected id, `p` to copy the useful path, and `Ctrl-Y` to copy selected-row JSON.
-Use `Ctrl-P` for the Textual command palette; it includes `Workflow: Check for updates` and `Workflow: Update skill from git`.
+Use `Ctrl-P` for the Textual command palette; it includes update checks plus pause, resume, and stop controls for the selected run.
 
 or, without the installed alias:
 
@@ -107,13 +107,41 @@ workflow run \
   --job "tests::Review this branch for missing or weak tests. Return gaps and suggested checks."
 ```
 
+For direct Kimi workers, use `--runner kimi-direct`. The runner uses Kimi's quiet print mode and sends the prompt on stdin, which is safer for larger prompts than placing them on argv:
+
+```bash
+workflow run --runner kimi-direct --title "review" --job "review::Review this branch."
+```
+
 For generic `ccc`, `--ccc-runner` accepts either a CLI selector such as `kimi` or a preset such as `@mm`:
 
 ```bash
 workflow run --runner ccc --ccc-runner @mm --title "review" --job "review::Review this branch."
 ```
 
+To compare several runners with the same reusable smoke jobs, use the runner matrix harness:
+
+```bash
+workflow runner-matrix \
+  --target kimi-direct \
+  --target ccc:kimi \
+  --target minimax=ccc:@mm \
+  --output-dir ~/tmp/workflow-runner-matrix
+```
+
+Use `--mock` or `--dry-run` for no-model rehearsals. Use `--all-common` to expand the common direct and `ccc` target set.
+
 Read `references/coding-cli-runners.md` before using this path for write access.
+
+Pause or stop an active run when needed:
+
+```bash
+workflow pause <run-id>
+workflow resume <run-id>
+workflow stop <run-id>
+```
+
+Pause is cooperative and stops new worker launches; stop cancels unfinished state and best-effort terminates recorded worker process groups.
 
 ## Stress Testing
 

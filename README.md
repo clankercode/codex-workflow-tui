@@ -9,7 +9,7 @@ Site: https://clankercode.github.io/codex-workflow-tui/
 - A global Codex skill named `workflow`
 - Persistent workflow state beside the skill checkout, e.g. `~/.agents/workflow-system/state`
 - Native subagent operating guidance for parallel research, implementation, review, and synthesis
-- External coding-CLI workers through direct Codex, direct OpenCode, and `ccc` providers
+- External coding-CLI workers through direct Codex, direct OpenCode, direct Kimi, and `ccc` providers
 - Rate limits for worker startup and concurrency
 - A Rich/Textual TUI for active runs, phases, agents, events, decisions, artifacts, live output, and copyable ids/paths
 - Snapshot fixtures and tmux-driven visual QA tests
@@ -20,6 +20,8 @@ Site: https://clankercode.github.io/codex-workflow-tui/
 workflow tui
 workflow init --title "Example" --prompt "Do the thing" --cwd "$PWD"
 workflow run --title "Review lanes" --runner ccc-opencode --max-agents 4 --startup-delay 1.0 --job "review::Review this branch."
+workflow run --title "Kimi lane" --runner kimi-direct --job "review::Review this branch."
+workflow runner-matrix --target kimi-direct --target ccc:kimi --mock --output-dir ~/tmp/workflow-runner-matrix
 workflow fibonacci-stress --n 100 --output-dir ~/tmp/custom-wf-test
 python3 scripts/workflow_tui_tmux_qa.py
 python3 tests/test_workflow.py
@@ -67,3 +69,4 @@ Start with `SKILL.md`, then see:
 - `references/coding-cli-runners.md`
 - `references/claude-code-parity.md`
 - `references/codex-cli-workers.md`
+- `examples/runner-smoke-jobs.json`

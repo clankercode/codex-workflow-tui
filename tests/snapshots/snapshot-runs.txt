@@ -4,16 +4,14 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │ ▸  RUN    Fixture Workflow With Paralle… ││ title       Fixture Workflow With Parallel Review              │
 │    DONE   Completed Smoke Fixture        ││ status      running                                            │
 │    FAIL   Failed Worker Fixture          ││ mode        hybrid                                             │
-│    BLCK   Blocked Decision Fixture       ││ cwd         /home/xertrov/src/demo                             │
-│    PAUS   Paused Operator Fixture        ││ updated     Jun 11 10:05 AEST                                  │
-│    CNCL   Cancelled Scope Fixture        ││ state       /home/xertrov/.llm-general/ai-coding/codex/workfl… │
-│    PEND   Pending Dispatch Fixture       ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
-│                                          ││ │ tokens      unknown                                        │ │
-│                                          ││ │ tool calls  0                                              │ │
-│                                          ││ │ active      1                                              │ │
-│                                          ││ │ longest     Security reviewer                              │ │
-│                                          ││ │ agents      3                                              │ │
-│                                          ││ │ phases      3                                              │ │
+│    BLCK   Blocked Decision Fixture       ││ paused      no                                                 │
+│    PAUS   Paused Operator Fixture        ││ stop req    no                                                 │
+│    CNCL   Cancelled Scope Fixture        ││ cwd         /home/xertrov/src/demo                             │
+│    PEND   Pending Dispatch Fixture       ││ updated     Jun 11 10:05 AEST                                  │
+│                                          ││ state       /home/xertrov/.llm-general/ai-coding/codex/workfl… │
+│                                          ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
+│                                          ││ │ tokens      unknown  tool calls 0       active     1       │ │
+│                                          ││ │ longest     Securit… agents     3       phases     3       │ │
 │                                          ││ │ checks      1                                              │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
@@ -23,6 +21,8 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                          ││ │ Build and review a Codex workflow system with a polished   │ │
 │                                          ││ │ TUI, fixtures, snapshots, and clear state.                 │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │

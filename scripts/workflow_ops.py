@@ -494,7 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     preview = sub.add_parser("preview", help="preview a worker launch without writing state")
     preview.add_argument("--title", required=True)
-    preview.add_argument("--runner", default="codex-direct", choices=["codex-direct", "ccc-codex", "ccc-opencode", "ccc", "opencode-direct"])
+    preview.add_argument("--runner", default="codex-direct", choices=["codex-direct", "ccc-codex", "ccc-opencode", "ccc", "opencode-direct", "kimi-direct"])
     preview.add_argument("--ccc-runner")
     preview.add_argument("--cwd", default=os.getcwd())
     preview.add_argument("--job", action="append")

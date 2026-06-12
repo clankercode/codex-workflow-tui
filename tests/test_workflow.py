@@ -10,7 +10,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import argparse
+import contextlib
 import io
 import textwrap
 import asyncio
@@ -160,6 +162,45 @@ class WorkflowScriptTests(unittest.TestCase):
         events_path = tmp_path / "ccc-events.jsonl"
         return [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
 
+    def install_fake_kimi(self, fake_bin: Path, *, output: str = "fake kimi result\n") -> tuple[Path, Path]:
+        """Install a fake kimi binary that records argv and stdin."""
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        fake_kimi = fake_bin / "kimi"
+        args_path = fake_bin.parent / "kimi-args.json"
+        fake_kimi.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env python3
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                payload = {
+                    "args": sys.argv[1:],
+                    "stdin": sys.stdin.read(),
+                }
+                Path(os.environ["KIMI_ARGS_PATH"]).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+                sys.stdout.write(os.environ.get("KIMI_FAKE_OUTPUT", "fake kimi result\\n"))
+                sys.stderr.write("To resume this session: kimi -r ses_fake\\n")
+                """
+            ),
+            encoding="utf-8",
+        )
+        fake_kimi.chmod(0o755)
+        return fake_kimi, args_path
+
+    def kimi_fake_env(self, tmp_path: Path, *, output: str = "fake kimi result\n") -> tuple[dict[str, str], Path]:
+        """Return an environment wired to a fake kimi binary."""
+        fake_bin = tmp_path / "bin"
+        _, args_path = self.install_fake_kimi(fake_bin)
+        env = os.environ.copy()
+        env["PATH"] = f"{fake_bin}:{env['PATH']}"
+        env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+        env["KIMI_ARGS_PATH"] = str(args_path)
+        env["KIMI_FAKE_OUTPUT"] = output
+        return env, args_path
+
     def test_state_cli_tracks_phases_agents_and_metrics(self) -> None:
         """Ensure state commands create a run and keep derived metrics current."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -220,8 +261,8 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(data["metrics"]["agents_by_status"]["completed"], 1)
             self.assertEqual(data["phases"][0]["agent_ids"], ["agent-test"])
 
-    def test_wf_wrapper_defaults_state_to_checkout_parent(self) -> None:
-        """A user-scope checkout under ~/.agents/skills should keep state beside it."""
+    def test_wf_wrapper_defaults_state_to_user_agents_root(self) -> None:
+        """Installed command wrappers should share the documented user state root."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             skill_scripts = tmp_path / ".agents" / "skills" / "workflow" / "scripts"
@@ -252,7 +293,7 @@ class WorkflowScriptTests(unittest.TestCase):
             )
             data = json.loads(created.stdout)
             run = json.loads(Path(data["path"]).read_text(encoding="utf-8"))
-            self.assertTrue(str(run["paths"]["run_dir"]).startswith(str(tmp_path / ".agents" / "workflow-system")))
+            self.assertTrue(str(run["paths"]["run_dir"]).startswith(str(tmp_path / "home" / ".agents" / "workflow-system")))
 
     def test_direct_state_script_defaults_to_user_agents_state(self) -> None:
         """Direct script usage should use a portable Codex user-scope state root."""
@@ -381,6 +422,237 @@ class WorkflowScriptTests(unittest.TestCase):
             reopened = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
             self.assertIsNone(reopened["phases"][0]["completed_at"])
             self.assertIsNone(reopened["agents"][0]["completed_at"])
+
+    def test_pause_resume_stop_update_workflow_control_state(self) -> None:
+        """Persist cooperative workflow control flags and cancel unfinished work on stop."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_script(
+                "workflow_state.py",
+                "init",
+                "--title",
+                "Control Lifecycle",
+                "--prompt",
+                "exercise pause resume stop",
+                "--cwd",
+                str(ROOT),
+                env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_script(
+                "workflow_state.py",
+                "add-phase",
+                run_id,
+                "--phase-id",
+                "phase-control",
+                "--name",
+                "Control",
+                "--status",
+                "running",
+                env=env,
+            )
+            self.run_script(
+                "workflow_state.py",
+                "add-agent",
+                run_id,
+                "--phase",
+                "phase-control",
+                "--agent-id",
+                "agent-control",
+                "--name",
+                "Control Agent",
+                "--status",
+                "pending",
+                env=env,
+            )
+
+            paused = json.loads(self.run_script("workflow_state.py", "pause", run_id, "--reason", "test pause", env=env).stdout)
+            self.assertTrue(paused["changed"])
+            paused_run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(paused_run["status"], "paused")
+            self.assertTrue(paused_run["control"]["paused"])
+            self.assertEqual(paused_run["control"]["pause_reason"], "test pause")
+
+            resumed = json.loads(self.run_script("workflow_state.py", "resume", run_id, env=env).stdout)
+            self.assertTrue(resumed["changed"])
+            resumed_run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(resumed_run["status"], "running")
+            self.assertFalse(resumed_run["control"]["paused"])
+
+            stopped = json.loads(self.run_script("workflow_state.py", "stop", run_id, "--no-terminate", env=env).stdout)
+            self.assertTrue(stopped["changed"])
+            stopped_run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(stopped_run["status"], "cancelled")
+            self.assertTrue(stopped_run["control"]["stop_requested"])
+            self.assertEqual(stopped_run["phases"][0]["status"], "cancelled")
+            self.assertEqual(stopped_run["agents"][0]["status"], "cancelled")
+
+    def test_wf_wrapper_dispatches_pause_resume_stop(self) -> None:
+        """Expose lifecycle controls from the installed short workflow command."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf(
+                "init",
+                "--title",
+                "WF Control",
+                "--prompt",
+                "exercise wf controls",
+                "--cwd",
+                str(ROOT),
+                env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("pause", run_id, env=env)
+            self.assertEqual(json.loads(self.run_wf("show", run_id, "--json", env=env).stdout)["status"], "paused")
+            self.run_wf("resume", run_id, env=env)
+            self.assertEqual(json.loads(self.run_wf("show", run_id, "--json", env=env).stdout)["status"], "running")
+            self.run_wf("stop", run_id, "--no-terminate", env=env)
+            self.assertEqual(json.loads(self.run_wf("show", run_id, "--json", env=env).stdout)["status"], "cancelled")
+
+    def test_mock_worker_waits_while_run_is_paused(self) -> None:
+        """Paused cooperative runs should not launch pending workers until resumed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            old_env = os.environ.get("WORKFLOW_STATE_DIR")
+            os.environ["WORKFLOW_STATE_DIR"] = env["WORKFLOW_STATE_DIR"]
+            sys.path.insert(0, str(SCRIPTS))
+            try:
+                import workflow_run_codex  # pylint: disable=import-outside-toplevel
+                import workflow_state  # pylint: disable=import-outside-toplevel
+
+                created = self.run_script(
+                    "workflow_state.py",
+                    "init",
+                    "--title",
+                    "Paused Mock Worker",
+                    "--prompt",
+                    "exercise paused runner",
+                    "--cwd",
+                    str(ROOT),
+                    env=env,
+                )
+                run_id = json.loads(created.stdout)["run_id"]
+                self.run_script(
+                    "workflow_state.py",
+                    "add-phase",
+                    run_id,
+                    "--phase-id",
+                    workflow_run_codex.PHASE_ID,
+                    "--name",
+                    "Workers",
+                    "--status",
+                    "running",
+                    env=env,
+                )
+                output_path = tmp_path / "worker.final.md"
+                self.run_script(
+                    "workflow_state.py",
+                    "add-agent",
+                    run_id,
+                    "--phase",
+                    workflow_run_codex.PHASE_ID,
+                    "--agent-id",
+                    "agent-paused",
+                    "--name",
+                    "Paused Agent",
+                    "--status",
+                    "pending",
+                    "--prompt",
+                    "do mock work",
+                    "--jsonl-path",
+                    str(tmp_path / "worker.jsonl"),
+                    "--log-path",
+                    str(tmp_path / "worker.stderr.log"),
+                    "--output-path",
+                    str(output_path),
+                    env=env,
+                )
+                self.run_script("workflow_state.py", "pause", run_id, env=env)
+                args = argparse.Namespace(mock=True, dry_run=False, max_agents=1, startup_delay=0.0)
+
+                async def exercise() -> str:
+                    run = workflow_state.load_run(run_id)
+                    task = asyncio.create_task(workflow_run_codex.run_all(run, args, workflow_run_codex.CodexDirectProvider()))
+                    await asyncio.sleep(0.2)
+                    paused_run = workflow_state.load_run(run_id)
+                    self.assertEqual(paused_run["agents"][0]["status"], "paused")
+                    self.assertFalse(output_path.exists())
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        workflow_state.cmd_resume(argparse.Namespace(run=run_id, reason=None))
+                    return await asyncio.wait_for(task, timeout=4.0)
+
+                status = asyncio.run(exercise())
+                self.assertEqual(status, "completed")
+                self.assertIn("Mock result", output_path.read_text(encoding="utf-8"))
+            finally:
+                if old_env is None:
+                    os.environ.pop("WORKFLOW_STATE_DIR", None)
+                else:
+                    os.environ["WORKFLOW_STATE_DIR"] = old_env
+
+    def test_quota_retry_backoff_stops_when_workflow_is_stopped(self) -> None:
+        """Stop requests should interrupt quota backoff before the next launch."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            old_env = os.environ.get("WORKFLOW_STATE_DIR")
+            os.environ["WORKFLOW_STATE_DIR"] = env["WORKFLOW_STATE_DIR"]
+            sys.path.insert(0, str(SCRIPTS))
+            try:
+                import workflow_run_codex  # pylint: disable=import-outside-toplevel
+
+                created = self.run_script(
+                    "workflow_state.py",
+                    "init",
+                    "--title",
+                    "Quota Stop",
+                    "--prompt",
+                    "exercise quota stop",
+                    "--cwd",
+                    str(ROOT),
+                    env=env,
+                )
+                run_id = json.loads(created.stdout)["run_id"]
+                self.run_script(
+                    "workflow_state.py",
+                    "add-agent",
+                    run_id,
+                    "--agent-id",
+                    "agent-quota-stop",
+                    "--name",
+                    "Quota Agent",
+                    "--status",
+                    "running",
+                    "--prompt",
+                    "do quota work",
+                    "--jsonl-path",
+                    str(tmp_path / "worker.jsonl"),
+                    "--log-path",
+                    str(tmp_path / "worker.stderr.log"),
+                    "--output-path",
+                    str(tmp_path / "worker.final.md"),
+                    env=env,
+                )
+
+                async def exercise() -> bool:
+                    task = asyncio.create_task(workflow_run_codex.sleep_until_quota_retry_allowed(run_id, "agent-quota-stop", 0.1))
+                    await asyncio.sleep(0.02)
+                    self.run_script("workflow_state.py", "stop", run_id, "--no-terminate", env=env)
+                    return await asyncio.wait_for(task, timeout=1.0)
+
+                self.assertFalse(asyncio.run(exercise()))
+                stopped_run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+                self.assertEqual(stopped_run["agents"][0]["status"], "cancelled")
+            finally:
+                if old_env is None:
+                    os.environ.pop("WORKFLOW_STATE_DIR", None)
+                else:
+                    os.environ["WORKFLOW_STATE_DIR"] = old_env
 
     def test_state_cli_rejects_duplicate_ids(self) -> None:
         """Protect tooling consumers from ambiguous phase and agent identifiers."""
@@ -524,6 +796,80 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(result.result, "F(100) = 354224848179261915075")
             self.assertEqual(output_path.read_text(encoding="utf-8"), "F(100) = 354224848179261915075")
 
+    def test_kimi_direct_runner_pipes_prompt_and_records_output(self) -> None:
+        """Run Kimi directly in quiet stdin mode and persist the final answer."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env, args_path = self.kimi_fake_env(tmp_path, output="KIMI_DIRECT_OK\n")
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Fake Kimi Workers",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "kimi-direct",
+                "--model",
+                "kimi-code/kimi-for-coding",
+                "--startup-delay",
+                "0",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            fake_call = json.loads(args_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual(data["mode"], "kimi-direct")
+            self.assertEqual(agent["agent_type"], "kimi-cli")
+            self.assertEqual(agent["thread_id"], "ses_fake")
+            self.assertEqual(agent["result"], "KIMI_DIRECT_OK\n")
+            self.assertEqual(Path(agent["output_path"]).read_text(encoding="utf-8"), "KIMI_DIRECT_OK\n")
+            self.assertIn("--quiet", fake_call["args"])
+            self.assertIn("--input-format", fake_call["args"])
+            self.assertIn("--work-dir", fake_call["args"])
+            self.assertIn(str(ROOT), fake_call["args"])
+            self.assertIn("kimi-code/kimi-for-coding", fake_call["args"])
+            self.assertIn("--max-steps-per-turn", fake_call["args"])
+            self.assertIn("9999", fake_call["args"])
+            self.assertEqual(fake_call["stdin"], "Alpha prompt\n")
+            self.assertIn("<prompt-on-stdin>", agent["command_preview"])
+
+    def test_start_can_use_kimi_direct_as_planner(self) -> None:
+        """Allow wf start to ask Kimi directly for the workflow plan."""
+        planner_json = json.dumps(
+            {
+                "title": "Kimi Planned Workflow",
+                "summary": "one fake Kimi-planned job",
+                "jobs": [{"name": "alpha", "role": "tester", "prompt": "Alpha worker prompt"}],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env, args_path = self.kimi_fake_env(tmp_path, output=planner_json + "\n")
+            launched = self.run_script(
+                "workflow_start.py",
+                "plan with kimi",
+                "--planner-runner",
+                "kimi-direct",
+                "--runner",
+                "codex-direct",
+                "--dry-run",
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            created = json.loads(launched.stdout.split("\ncommand:", 1)[0])
+            data = json.loads(self.run_script("workflow_state.py", "show", created["run_id"], "--json", env=env).stdout)
+            fake_call = json.loads(args_path.read_text(encoding="utf-8"))
+            self.assertEqual(created["planner"], "kimi-direct")
+            self.assertEqual(data["title"], "Kimi Planned Workflow")
+            self.assertEqual(data["agents"][0]["name"], "alpha")
+            self.assertIn("Return ONLY a JSON object", fake_call["stdin"])
+            self.assertIn("--quiet", fake_call["args"])
+
     def test_ccc_opencode_runner_records_ccc_artifacts(self) -> None:
         """Verify ccc providers use ccc's artifact footer as the result contract."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -569,16 +915,480 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(data["mode"], "ccc-opencode")
             self.assertEqual(agent["agent_type"], "ccc-opencode")
             self.assertEqual(agent["result"], "final from fake ccc\n")
-            self.assertEqual(agent["output_path"], str(fake_run_dir / "output.txt"))
-            self.assertEqual(agent["jsonl_path"], str(fake_run_dir / "transcript.txt"))
+            self.assertTrue(agent["output_path"].endswith(".final.md"))
+            self.assertTrue(agent["jsonl_path"].endswith(".jsonl"))
+            self.assertEqual(Path(agent["output_path"]).read_text(encoding="utf-8"), "final from fake ccc\n")
+            self.assertEqual(Path(agent["jsonl_path"]).read_text(encoding="utf-8"), "[assistant] final from fake ccc\n")
             self.assertEqual(agent["thread_id"], fake_run_dir.name)
-            self.assertEqual(data["artifacts"][0]["path"], str(fake_run_dir / "output.txt"))
+            self.assertEqual(data["artifacts"][0]["path"], agent["output_path"])
             fake_args = args_path.read_text(encoding="utf-8").splitlines()
             self.assertIn("--output-mode", fake_args)
             self.assertIn("stream-json", fake_args)
             self.assertIn("opencode", fake_args)
             self.assertIn("--", fake_args)
             self.assertEqual(fake_args[-1], "Alpha prompt")
+
+    def test_ccc_opencode_runner_records_live_telemetry_in_state(self) -> None:
+        """Summarize ccc/OpenCode transcript tokens and tools back into run state."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_run_dir = tmp_path / "ccc-run"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import os
+                    import sys
+                    from pathlib import Path
+
+                    run_dir = Path(os.environ["CCC_FAKE_RUN_DIR"])
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    (run_dir / "output.txt").write_text("final telemetry answer\\n", encoding="utf-8")
+                    events = [
+                        {"type": "text", "part": {"text": "Checking the project."}},
+                        {
+                            "type": "tool_use",
+                            "part": {
+                                "type": "tool",
+                                "tool": "read",
+                                "callID": "call_1",
+                                "state": {"status": "completed", "input": {"filePath": "README.md"}},
+                            },
+                        },
+                        {"type": "step_finish", "part": {"type": "step-finish", "tokens": {"total": 777, "input": 700, "output": 77}}},
+                    ]
+                    transcript = "\\n".join(json.dumps(event) for event in events) + "\\n"
+                    (run_dir / "transcript.jsonl").write_text(transcript, encoding="utf-8")
+                    sys.stdout.write(transcript)
+                    sys.stderr.write(f">> ccc:output-log >> {run_dir}\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_RUN_DIR"] = str(fake_run_dir)
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Fake Ccc Telemetry",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "ccc-opencode",
+                "--startup-delay",
+                "0",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["status"], "completed")
+            self.assertTrue(agent["jsonl_path"].endswith(".jsonl"))
+            self.assertIn("Checking the project.", Path(agent["jsonl_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(agent["tool_call_count"], 1)
+            self.assertEqual(agent["tokens"]["total"], 777)
+            self.assertEqual(agent["token_total"], 777)
+            self.assertIn("read", "\n".join(agent["latest_tool_calls"]))
+            self.assertIn("final telemetry answer", agent["latest_output"])
+
+    def test_ccc_runner_persists_live_telemetry_while_worker_is_running(self) -> None:
+        """Write tool/token telemetry into run.json before a long worker exits."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_run_dir = tmp_path / "ccc-run"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import os
+                    import sys
+                    import time
+                    from pathlib import Path
+
+                    event = {
+                        "type": "tool_use",
+                        "part": {
+                            "type": "tool",
+                            "tool": "read",
+                            "callID": "call_live",
+                            "state": {"status": "completed", "input": {"filePath": "README.md"}},
+                        },
+                    }
+                    sys.stdout.write(json.dumps(event) + "\\n")
+                    sys.stdout.write(json.dumps({"type": "step_finish", "part": {"tokens": {"total": 42, "input": 40, "output": 2}}}) + "\\n")
+                    sys.stdout.flush()
+                    time.sleep(5)
+                    run_dir = Path(os.environ["CCC_FAKE_RUN_DIR"])
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    (run_dir / "output.txt").write_text("live telemetry done\\n", encoding="utf-8")
+                    (run_dir / "transcript.jsonl").write_text(json.dumps(event) + "\\n", encoding="utf-8")
+                    sys.stderr.write(f">> ccc:output-log >> {run_dir}\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_RUN_DIR"] = str(fake_run_dir)
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "workflow_run.py"),
+                    "--title",
+                    "Live Telemetry",
+                    "--cwd",
+                    str(ROOT),
+                    "--runner",
+                    "ccc-opencode",
+                    "--startup-delay",
+                    "0",
+                    "--job",
+                    "alpha::Alpha prompt",
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+            try:
+                run_file = None
+                deadline = time.time() + 8
+                while time.time() < deadline:
+                    candidates = list((tmp_path / "state" / "runs").glob("*/run.json"))
+                    if candidates:
+                        run_file = candidates[0]
+                        break
+                    time.sleep(0.1)
+                self.assertIsNotNone(run_file)
+                observed_live = False
+                while time.time() < deadline:
+                    data = json.loads(run_file.read_text(encoding="utf-8"))  # type: ignore[union-attr]
+                    agent = data["agents"][0]
+                    if agent.get("status") == "running" and agent.get("tool_call_count", 0) >= 1:
+                        observed_live = True
+                        self.assertEqual(agent["tokens"]["total"], 42)
+                        break
+                    time.sleep(0.2)
+                self.assertTrue(observed_live, msg=run_file.read_text(encoding="utf-8"))  # type: ignore[union-attr]
+                stdout, stderr = proc.communicate(timeout=10)
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        proc.communicate(timeout=2)
+            self.assertEqual(proc.returncode, 0, msg=(stdout if "stdout" in locals() else "") + (stderr if "stderr" in locals() else ""))
+
+    def test_runner_captures_json_lines_larger_than_asyncio_line_limit(self) -> None:
+        """Capture large OpenCode JSONL records without readline-limit failures."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_run_dir = tmp_path / "ccc-run"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import os
+                    import sys
+                    from pathlib import Path
+
+                    run_dir = Path(os.environ["CCC_FAKE_RUN_DIR"])
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    (run_dir / "output.txt").write_text("large line survived\\n", encoding="utf-8")
+                    event = {"type": "text", "part": {"text": "x" * 70000}}
+                    sys.stdout.write(json.dumps(event) + "\\n")
+                    sys.stderr.write(f">> ccc:output-log >> {run_dir}\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_RUN_DIR"] = str(fake_run_dir)
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Large Jsonl Line",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "ccc-opencode",
+                "--startup-delay",
+                "0",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual(agent["result"], "large line survived\n")
+            self.assertGreater(Path(data["agents"][0]["jsonl_path"]).stat().st_size, 64 * 1024)
+
+    def test_runner_captures_stderr_lines_larger_than_asyncio_line_limit(self) -> None:
+        """Capture large stderr records without readline-limit failures."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_run_dir = tmp_path / "ccc-run"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import os
+                    import sys
+                    from pathlib import Path
+
+                    run_dir = Path(os.environ["CCC_FAKE_RUN_DIR"])
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    (run_dir / "output.txt").write_text("large stderr survived\\n", encoding="utf-8")
+                    (run_dir / "transcript.txt").write_text("[assistant] ok\\n", encoding="utf-8")
+                    sys.stderr.write("e" * 70000 + "\\n")
+                    sys.stderr.write(f">> ccc:output-log >> {run_dir}\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_RUN_DIR"] = str(fake_run_dir)
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Large Stderr Line",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "ccc-opencode",
+                "--startup-delay",
+                "0",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual(agent["result"], "large stderr survived\n")
+            self.assertGreater(Path(agent["log_path"]).stat().st_size, 64 * 1024)
+
+    def test_terminate_process_group_stops_worker_children(self) -> None:
+        """Ensure failed stream handling can clean up the launched worker group."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_run_codex  # pylint: disable=import-outside-toplevel
+
+        async def run_case() -> int:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                "import time; time.sleep(60)",
+                start_new_session=True,
+            )
+            await workflow_run_codex.terminate_process_group(proc, grace_seconds=0.2)
+            return await proc.wait()
+
+        self.assertNotEqual(asyncio.run(run_case()), 0)
+
+    def test_telemetry_fields_are_optional_when_tui_parser_cannot_load(self) -> None:
+        """Do not fail workers when the optional TUI telemetry parser is unavailable."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_run_codex  # pylint: disable=import-outside-toplevel
+
+        original_import = __import__
+
+        def failing_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "workflow_tui":
+                raise ModuleNotFoundError("workflow_tui")
+            return original_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=failing_import):
+            self.assertEqual(workflow_run_codex.telemetry_fields_for_agent({}), {})
+
+    def test_quota_retry_waits_until_next_half_hour_window(self) -> None:
+        """Retry quota-limit failures at the next :00 or :30 wall-clock window."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_run_codex
+
+        before_half = datetime(2026, 6, 13, 3, 10, 0, tzinfo=timezone.utc)
+        after_half = datetime(2026, 6, 13, 3, 45, 0, tzinfo=timezone.utc)
+        self.assertEqual(workflow_run_codex.seconds_until_next_quota_window(before_half, buffer_seconds=5), 20 * 60 + 5)
+        self.assertEqual(workflow_run_codex.seconds_until_next_quota_window(after_half, buffer_seconds=5), 15 * 60 + 5)
+        self.assertTrue(workflow_run_codex.quota_limit_detected("provider returned 429 usage limit for this period"))
+
+    def test_quota_retry_detection_uses_only_current_attempt_output(self) -> None:
+        """Do not let a previous quota line make a later unrelated failure retry."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_run_codex
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "worker.stderr.log"
+            log_path.write_text("429 usage limit for this period\n", encoding="utf-8")
+            offset = workflow_run_codex.file_size(log_path)
+            log_path.write_text(log_path.read_text(encoding="utf-8") + "syntax error\n", encoding="utf-8")
+            current_attempt = workflow_run_codex.read_text_from_offset(log_path, offset)
+            self.assertEqual(current_attempt, "syntax error\n")
+            self.assertFalse(workflow_run_codex.quota_limit_detected(current_attempt))
+
+    def test_ccc_runner_retries_once_after_quota_limit(self) -> None:
+        """Recover a ccc-backed worker when the first attempt exits with quota text."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import os
+                    import sys
+                    from pathlib import Path
+
+                    counter = Path(os.environ["CCC_COUNTER"])
+                    count = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
+                    count += 1
+                    counter.write_text(str(count), encoding="utf-8")
+                    if count == 1:
+                        stale_dir = Path(os.environ["CCC_STALE_RUN_DIR"])
+                        stale_dir.mkdir(parents=True, exist_ok=True)
+                        (stale_dir / "output.txt").write_text("stale quota output\\n", encoding="utf-8")
+                        (stale_dir / "transcript.txt").write_text("[assistant] stale quota output\\n", encoding="utf-8")
+                        sys.stderr.write("429 usage limit for this period\\n")
+                        sys.stderr.write(f">> ccc:output-log >> {stale_dir}\\n")
+                        raise SystemExit(1)
+                    run_dir = Path(os.environ["CCC_RUN_DIR"])
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    (run_dir / "output.txt").write_text("recovered after quota\\n", encoding="utf-8")
+                    (run_dir / "transcript.txt").write_text("[assistant] recovered after quota\\n", encoding="utf-8")
+                    sys.stdout.write("[assistant] recovered after quota\\n")
+                    sys.stderr.write(f">> ccc:output-log >> {run_dir}\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["WORKFLOW_QUOTA_RETRY_SLEEP_OVERRIDE_SECS"] = "0"
+            env["CCC_COUNTER"] = str(tmp_path / "counter.txt")
+            env["CCC_STALE_RUN_DIR"] = str(tmp_path / "ccc-stale-run")
+            env["CCC_RUN_DIR"] = str(tmp_path / "ccc-run")
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Quota Retry",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "ccc",
+                "--ccc-runner",
+                "@kimi",
+                "--startup-delay",
+                "0",
+                "--quota-retries",
+                "1",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual((tmp_path / "counter.txt").read_text(encoding="utf-8"), "2")
+            self.assertEqual(agent["quota_retry_count"], 1)
+            self.assertEqual(agent["result"], "recovered after quota\n")
+            self.assertEqual(Path(agent["output_path"]).read_text(encoding="utf-8"), "recovered after quota\n")
+            self.assertIn("429 usage limit", Path(agent["log_path"]).read_text(encoding="utf-8"))
+
+    def test_ccc_runner_retries_once_after_non_quota_failure(self) -> None:
+        """Recover from one transient provider failure without quota backoff."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import os
+                    import sys
+                    from pathlib import Path
+
+                    counter = Path(os.environ["CCC_COUNTER"])
+                    count = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
+                    count += 1
+                    counter.write_text(str(count), encoding="utf-8")
+                    if count == 1:
+                        sys.stdout.write('{"type":"error","error":{"name":"UnknownError","data":{"message":"Failed to execute statement"}}}\\n')
+                        raise SystemExit(1)
+                    run_dir = Path(os.environ["CCC_RUN_DIR"])
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    (run_dir / "output.txt").write_text("recovered after transient failure\\n", encoding="utf-8")
+                    (run_dir / "transcript.txt").write_text("[assistant] recovered after transient failure\\n", encoding="utf-8")
+                    sys.stdout.write("[assistant] recovered after transient failure\\n")
+                    sys.stderr.write(f">> ccc:output-log >> {run_dir}\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_COUNTER"] = str(tmp_path / "counter.txt")
+            env["CCC_RUN_DIR"] = str(tmp_path / "ccc-run")
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Failure Retry",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "ccc-opencode",
+                "--startup-delay",
+                "0",
+                "--failure-retries",
+                "1",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual((tmp_path / "counter.txt").read_text(encoding="utf-8"), "2")
+            self.assertEqual(agent["failure_retry_count"], 1)
+            self.assertEqual(agent["result"], "recovered after transient failure\n")
 
     def test_generic_ccc_runner_accepts_presets_and_cli_names(self) -> None:
         """Allow --ccc-runner to target both @presets and plain ccc CLI selectors."""
@@ -617,6 +1427,69 @@ class WorkflowScriptTests(unittest.TestCase):
             start_args = [event["args"] for event in self.read_ccc_events(tmp_path) if event["event"] == "start"]
             for expected_arg in ("@mm", "kimi"):
                 self.assertTrue(any(expected_arg in args for args in start_args), msg=f"missing {expected_arg} in {start_args}")
+
+    def test_ccc_kimi_runner_passes_large_kimi_step_limit(self) -> None:
+        """Raise Kimi's per-turn step/tool-call limit for ccc-backed Kimi workers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = self.ccc_fake_env(tmp_path)
+            for selector in ("@kimi", "kimi", "k"):
+                with self.subTest(selector=selector):
+                    self.run_script(
+                        "workflow_run.py",
+                        "--title",
+                        f"Fake Ccc Kimi {selector}",
+                        "--cwd",
+                        str(ROOT),
+                        "--runner",
+                        "ccc",
+                        "--ccc-runner",
+                        selector,
+                        "--startup-delay",
+                        "0",
+                        "--job",
+                        "alpha::Alpha prompt",
+                        env=env,
+            )
+            start_args = [event["args"] for event in self.read_ccc_events(tmp_path) if event["event"] == "start"]
+            def has_subsequence(args: list[str], expected: list[str]) -> bool:
+                return any(args[index : index + len(expected)] == expected for index in range(0, len(args) - len(expected) + 1))
+
+            for selector in ("@kimi", "kimi", "k"):
+                matching = [args for args in start_args if selector in args]
+                self.assertTrue(matching, msg=f"missing start for {selector}: {start_args}")
+                self.assertTrue(
+                    any(has_subsequence(args, ["--runner-arg", "--max-steps-per-turn", "--runner-arg", "9999"]) for args in matching),
+                    msg=f"missing Kimi step limit for {selector}: {matching}",
+                )
+                self.assertTrue(any("--work-dir" in args and str(ROOT) in args for args in matching), msg=f"missing Kimi work dir for {selector}: {matching}")
+
+    def test_ccc_opencode_presets_receive_explicit_workdir(self) -> None:
+        """Keep ccc/OpenCode workers inside the workflow target cwd."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = self.ccc_fake_env(tmp_path)
+            target_cwd = tmp_path / "target-workdir"
+            target_cwd.mkdir()
+            self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Fake Ccc Mimo",
+                "--cwd",
+                str(target_cwd),
+                "--runner",
+                "ccc",
+                "--ccc-runner",
+                "@mimo25p",
+                "--startup-delay",
+                "0",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            start_args = [event["args"] for event in self.read_ccc_events(tmp_path) if event["event"] == "start"]
+            self.assertTrue(start_args)
+            self.assertTrue(any("--runner-arg" in args and "--dir" in args and str(target_cwd) in args for args in start_args), msg=start_args)
 
     def test_start_mock_plan_launches_mock_workflow_from_goal(self) -> None:
         """Create a workflow from one natural-language goal without model calls."""
@@ -1691,6 +2564,84 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(observations["back_phases_refreshes"], 4)
         self.assertFalse(observations["phases_scope"])
 
+    def test_live_tui_palette_exposes_workflow_control_actions(self) -> None:
+        """Make pause, resume, and stop discoverable through the Textual command palette."""
+        import types
+
+        sys.path.insert(0, str(SCRIPTS))
+        module_names = [
+            "textual",
+            "textual.app",
+            "textual.screen",
+            "textual.worker",
+            "textual.widgets",
+            "workflow_tui_app",
+        ]
+        original_modules = {name: sys.modules.get(name) for name in module_names}
+        for name in module_names:
+            sys.modules.pop(name, None)
+
+        labels: list[str] = []
+
+        class FakeApp:
+            def __init__(self) -> None:
+                self.size = types.SimpleNamespace(width=110, height=30)
+
+            def get_system_commands(self, _screen: object) -> list[object]:
+                return []
+
+            def run(self) -> None:
+                list(self.get_system_commands(None))
+
+        class FakeSystemCommand:
+            def __init__(self, title: str, *_args: object, **_kwargs: object) -> None:
+                labels.append(title)
+
+        class FakeStatic:
+            pass
+
+        class FakeTui:
+            TABS = ("runs", "phases", "agents", "events", "decisions", "artifacts")
+            AGENT_SCOPES = ("phase", "all")
+            AGENT_VIEWS = ("live", "prompt")
+            UPDATE_CHECK_INTERVAL = 999.0
+            UPDATE_CHECK_TIMEOUT = 1.0
+            UPDATE_PULL_TIMEOUT = 1.0
+
+        try:
+            sys.modules["textual"] = types.ModuleType("textual")
+            app_module = types.ModuleType("textual.app")
+            app_module.App = FakeApp
+            app_module.ComposeResult = object
+            app_module.SystemCommand = FakeSystemCommand
+            sys.modules["textual.app"] = app_module
+            screen_module = types.ModuleType("textual.screen")
+            screen_module.Screen = object
+            sys.modules["textual.screen"] = screen_module
+            worker_module = types.ModuleType("textual.worker")
+            worker_module.Worker = type("Worker", (), {"StateChanged": object})
+            worker_module.WorkerState = types.SimpleNamespace(ERROR="error", SUCCESS="success")
+            sys.modules["textual.worker"] = worker_module
+            widgets_module = types.ModuleType("textual.widgets")
+            widgets_module.Footer = FakeStatic
+            widgets_module.Header = FakeStatic
+            widgets_module.Static = FakeStatic
+            sys.modules["textual.widgets"] = widgets_module
+
+            import workflow_tui_app  # pylint: disable=import-outside-toplevel
+
+            workflow_tui_app.run_textual_app(FakeTui)
+        finally:
+            for name, original in original_modules.items():
+                if original is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = original
+
+        self.assertIn("Workflow: Pause selected run", labels)
+        self.assertIn("Workflow: Resume selected run", labels)
+        self.assertIn("Workflow: Stop selected run", labels)
+
     def test_textual_venv_reexec_uses_cli_entrypoint(self) -> None:
         """Re-entering the workflow venv should launch the CLI backend, not the app helper."""
         import builtins
@@ -2224,6 +3175,29 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(aggregate["tokens"]["total"], 1234)
         self.assertEqual(workflow_tui.format_token_total(aggregate["tokens"]), "1234")
 
+    def test_tool_call_summary_compacts_path_inputs(self) -> None:
+        """Keep file tool calls readable by compacting path-like arguments."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        event = {
+            "type": "tool_use",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "input": {"filePath": "/home/xertrov/tmp/workflow/very/long/tree/planning-output/draft/08-implementation-task-dag.md"},
+                },
+            },
+        }
+
+        summary = workflow_tui.summarize_tool_call(event)
+
+        self.assertIn("read · completed", summary)
+        self.assertIn("08-implementation-task-dag.md", summary)
+        self.assertNotIn("filePath", summary)
+
     def test_token_totals_are_unknown_without_provider_usage(self) -> None:
         """Do not present missing provider usage as a real zero-token count."""
         sys.path.insert(0, str(SCRIPTS))
@@ -2278,6 +3252,24 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(aggregate["tokens"]["known_agents"], 1)
         self.assertEqual(aggregate["tokens"]["unknown_agents"], 1)
         self.assertEqual(workflow_tui.format_token_total(aggregate["tokens"]), "10+?")
+
+    def test_run_activity_reports_longest_completed_agent(self) -> None:
+        """Show the slowest completed agent when no worker is active."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run = {
+            "agents": [
+                {"agent_id": "fast", "name": "Fast", "status": "completed", "duration_seconds": 12.0},
+                {"agent_id": "slow", "name": "Slow", "status": "completed", "duration_seconds": 125.0},
+            ],
+        }
+
+        aggregate = workflow_tui.collect_run_activity(run)
+
+        self.assertEqual(aggregate["longest_completed"]["name"], "Slow")
+        self.assertIn("Slow", workflow_tui.longest_agent_label(aggregate))
+        self.assertIn("2m", workflow_tui.longest_agent_label(aggregate))
 
     def test_skill_update_check_reports_remote_git_update(self) -> None:
         """Detect a newer upstream commit without mutating the local checkout."""
@@ -2344,6 +3336,37 @@ class WorkflowScriptTests(unittest.TestCase):
         activity = workflow_tui.parse_json_activity(text)
         self.assertEqual(activity["tool_call_count"], 1)
         self.assertIn("json parser survived", activity["latest_output"])
+
+    def test_agent_activity_drops_partial_jsonl_tail_record(self) -> None:
+        """Do not count a normal tail boundary as a malformed JSONL event."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            jsonl_path = tmp_path / "worker.jsonl"
+            output_path = tmp_path / "worker.final.md"
+            output_path.write_text("final answer\n", encoding="utf-8")
+            long_event = json.dumps({"type": "text", "part": {"text": "x" * 2000}})
+            valid_event = json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"id": "cmd-1", "type": "command_execution", "command": "echo ok", "status": "completed"},
+                }
+            )
+            final_event = json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "tail parser survived"}})
+            jsonl_path.write_text(f"{long_event}\n{valid_event}\n{final_event}\n", encoding="utf-8")
+
+            old_tail_bytes = workflow_tui.TAIL_BYTES
+            workflow_tui.TAIL_BYTES = 512
+            try:
+                activity = workflow_tui.agent_activity({"jsonl_path": str(jsonl_path), "output_path": str(output_path), "log_path": ""})
+            finally:
+                workflow_tui.TAIL_BYTES = old_tail_bytes
+
+            self.assertEqual(activity["parse_errors"], 0)
+            self.assertEqual(activity["tool_call_count"], 1)
+            self.assertEqual(activity["latest_output"], "final answer")
 
     def test_formatted_ccc_text_in_jsonl_path_uses_text_parser(self) -> None:
         """Do not discard ccc formatted stdout just because workflow captured it as .jsonl."""
@@ -2444,6 +3467,41 @@ class WorkflowScriptTests(unittest.TestCase):
         )
         self.assertEqual(activity["tool_call_count"], 1)
         self.assertIn("F(20) = 6765", activity["latest_output"])
+
+    def test_kimi_text_transcript_counts_only_used_tool_lines(self) -> None:
+        """Avoid treating Kimi chat/thinking lines that mention tools as tool calls."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activity = workflow_tui.parse_text_activity(
+            "\n".join(
+                [
+                    "• I need to use the command broker docs, but this is just thinking.",
+                    "• Used ReadFile (docs/10_filesystem_command_model.md)",
+                    "• This command model has several constraints.",
+                    "• Used Shell (mkdir -p planning-output/draft)",
+                    "• The tool call list should not include this chat line.",
+                ]
+            )
+        )
+        self.assertEqual(activity["tool_call_count"], 2)
+        joined_tools = "\n".join(activity["tool_calls"])
+        self.assertIn("ReadFile", joined_tools)
+        self.assertIn("Shell", joined_tools)
+        self.assertNotIn("chat line", joined_tools)
+
+    def test_live_stats_grid_uses_horizontal_space(self) -> None:
+        """Render live stats as multiple label/value pairs per row."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        console = Console(width=100, record=True, file=io.StringIO())
+        console.print(workflow_tui.make_facts_grid([("tokens", "10"), ("tools", "2"), ("active", "1"), ("agents", "4")], columns=4))
+        rendered = console.export_text()
+        self.assertIn("tokens", rendered)
+        self.assertIn("tools", rendered.splitlines()[0])
+        self.assertIn("active", rendered.splitlines()[0])
+        self.assertIn("agents", rendered.splitlines()[0])
 
     def test_snapshot_agent_live_panels_match_fixture(self) -> None:
         """Snapshot live output and latest tool-call panels from a static fixture."""
@@ -2787,6 +3845,353 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertIn("Use 19 scripted manual agents", run["decisions"][0]["title"])
             self.assertIn("F(20) has 10 independent binomial terms", run["decisions"][0]["rationale"])
             self.assertNotIn("F(100)", run["decisions"][0]["rationale"])
+
+    def test_runner_matrix_parses_direct_and_ccc_targets(self) -> None:
+        """Normalize direct runners and ccc runner or preset targets."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_runner_matrix  # pylint: disable=import-outside-toplevel
+
+        direct = workflow_runner_matrix.parse_target("kimi-direct")
+        ccc_runner = workflow_runner_matrix.parse_target("ccc:kimi")
+        ccc_preset = workflow_runner_matrix.parse_target("minimax=ccc:@mm")
+
+        self.assertEqual(direct.label, "kimi-direct")
+        self.assertEqual(direct.runner, "kimi-direct")
+        self.assertIsNone(direct.ccc_runner)
+        self.assertEqual(ccc_runner.label, "ccc-kimi")
+        self.assertEqual(ccc_runner.runner, "ccc")
+        self.assertEqual(ccc_runner.ccc_runner, "kimi")
+        self.assertEqual(ccc_preset.label, "minimax")
+        self.assertEqual(ccc_preset.runner, "ccc")
+        self.assertEqual(ccc_preset.ccc_runner, "@mm")
+
+    def test_runner_matrix_mock_run_archives_each_target(self) -> None:
+        """Run the reusable runner matrix without model calls and archive every run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_script(
+                "workflow_runner_matrix.py",
+                "--title",
+                "Reusable Matrix",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--target",
+                "kimi-direct",
+                "--target",
+                "minimax=ccc:@mm",
+                "--mock",
+                "--startup-delay",
+                "0",
+                "--max-agents",
+                "2",
+                env=env,
+            )
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary["status"], "completed")
+            self.assertEqual([item["label"] for item in summary["targets"]], ["kimi-direct", "minimax"])
+            self.assertTrue(Path(summary["summary_path"]).exists())
+            for item in summary["targets"]:
+                self.assertEqual(item["status"], "completed")
+                self.assertEqual(item["jobs"], 3)
+                self.assertTrue((Path(item["archive_dir"]) / "run.json").exists())
+                self.assertTrue((Path(item["archive_dir"]) / "stdout.log").exists())
+                self.assertTrue((Path(item["archive_dir"]) / "stderr.log").exists())
+            first_run = json.loads((Path(summary["targets"][0]["archive_dir"]) / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(first_run["mode"], "kimi-direct")
+            self.assertEqual(first_run["metrics"]["agents_total"], 3)
+
+    def test_runner_matrix_archive_run_json_is_portable_for_tui_replay(self) -> None:
+        """Archived ccc runs should still render after live state and ccc dirs vanish."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_runner_matrix  # pylint: disable=import-outside-toplevel
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_run_dir = tmp_path / "ccc-run"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import os
+                    import sys
+                    from pathlib import Path
+
+                    run_dir = Path(os.environ["CCC_FAKE_RUN_DIR"])
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    (run_dir / "output.txt").write_text("archived final output\\n", encoding="utf-8")
+                    events = [
+                        {"type": "text", "part": {"text": "archived live output"}},
+                        {
+                            "type": "tool_use",
+                            "part": {
+                                "type": "tool",
+                                "tool": "read",
+                                "callID": "call_archive",
+                                "state": {"status": "completed", "input": {"filePath": "README.md"}},
+                            },
+                        },
+                        {"type": "step_finish", "part": {"tokens": {"total": 99, "input": 90, "output": 9}}},
+                    ]
+                    transcript = "\\n".join(json.dumps(event) for event in events) + "\\n"
+                    (run_dir / "transcript.jsonl").write_text(transcript, encoding="utf-8")
+                    sys.stdout.write(transcript)
+                    sys.stderr.write(f">> ccc:output-log >> {run_dir}\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_RUN_DIR"] = str(fake_run_dir)
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Portable Archive",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "ccc-opencode",
+                "--startup-delay",
+                "0",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            live_run_json = tmp_path / "state" / "runs" / run_id / "run.json"
+            archive_dir = tmp_path / "archive" / run_id
+            workflow_runner_matrix.copy_run_archive(live_run_json, archive_dir)
+            shutil.rmtree(live_run_json.parent)
+            shutil.rmtree(fake_run_dir)
+
+            archived_run = json.loads((archive_dir / "run.json").read_text(encoding="utf-8"))
+            agent = archived_run["agents"][0]
+            self.assertEqual(archived_run["paths"]["run_json"], "run.json")
+            self.assertEqual(agent["jsonl_path"], f"logs/{agent['agent_id']}.jsonl")
+            self.assertEqual(agent["output_path"], f"artifacts/{agent['agent_id']}.final.md")
+            self.assertEqual(agent["transcript_path"], agent["jsonl_path"])
+            self.assertEqual(agent["activity_output_path"], agent["output_path"])
+            self.assertTrue(all(str(artifact["path"]).startswith("artifacts/") for artifact in archived_run["artifacts"]))
+            loaded_run = workflow_tui.load_fixture(str(archive_dir / "run.json"))[0]
+            activity = workflow_tui.agent_activity(loaded_run["agents"][0], loaded_run)
+            self.assertEqual(activity["tool_call_count"], 1)
+            self.assertEqual(activity["tokens"]["total"], 99)
+            self.assertIn("archived final output", activity["latest_output"])
+
+    def test_runner_matrix_failed_phase_without_run_path_archives_logs(self) -> None:
+        """Killed phases without a parsed run path should fail cleanly, not copy '.'."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_runner_matrix  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            phase = {"name": "draft", "title": "Draft", "jobs_file": tmp_path / "jobs.json"}
+            phase["jobs_file"].write_text("[]\n", encoding="utf-8")
+            spec = workflow_runner_matrix.WorkflowSpec("Spec", tmp_path / "workflow.json", [phase])
+            target = workflow_runner_matrix.MatrixTarget("killed", "ccc", "@kimi")
+            fake_result = subprocess.CompletedProcess(["fake"], -15, stdout="", stderr="terminated\n")
+            with mock.patch.object(workflow_runner_matrix, "build_command", return_value=["fake"]), mock.patch.object(workflow_runner_matrix.subprocess, "run", return_value=fake_result):
+                result = workflow_runner_matrix.run_phase(
+                    target,
+                    argparse.Namespace(),
+                    spec,
+                    phase,
+                    tmp_path,
+                    1,
+                    tmp_path / "archive",
+                )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["returncode"], -15)
+            self.assertEqual(result["run_json"], "")
+            self.assertEqual((Path(result["archive_dir"]) / "stderr.log").read_text(encoding="utf-8"), "terminated\n")
+
+    def test_runner_matrix_archives_script_declared_output_subdir(self) -> None:
+        """Copy the workflow spec's output_subdir instead of hard-coding planning-output."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_runner_matrix  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workdir = tmp_path / "workdir"
+            workdir.mkdir()
+            phase = {"name": "draft", "title": "Draft", "jobs_file": tmp_path / "jobs.json"}
+            phase["jobs_file"].write_text('[{"name":"a","prompt":"p"}]\n', encoding="utf-8")
+            spec = workflow_runner_matrix.WorkflowSpec("Spec", tmp_path / "workflow.json", [phase], "custom-output")
+            target = workflow_runner_matrix.MatrixTarget("mocked", "kimi-direct")
+            args = argparse.Namespace(max_agents=1)
+
+            def fake_run_phase(*_args: object, **_kwargs: object) -> dict[str, object]:
+                (workdir / "custom-output").mkdir()
+                (workdir / "custom-output" / "plan.md").write_text("custom\n", encoding="utf-8")
+                return {"name": "draft", "title": "Draft", "status": "completed", "run_status": "completed", "returncode": 0, "run_id": "run-1", "run_json": "", "archive_dir": str(tmp_path / "archive" / "mocked" / "draft" / "run-1"), "jobs": 1, "duration_seconds": 0.0, "command": []}
+
+            with (
+                mock.patch.object(workflow_runner_matrix, "copy_project_for_target", return_value=workdir),
+                mock.patch.object(workflow_runner_matrix, "workflow_spec_for_target", return_value=spec),
+                mock.patch.object(workflow_runner_matrix, "run_phase", side_effect=fake_run_phase),
+            ):
+                result = workflow_runner_matrix.run_target(target, args, tmp_path / "out", tmp_path / "archive", None, {})
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual((Path(result["workdir_output"]) / "plan.md").read_text(encoding="utf-8"), "custom\n")
+
+    def test_runner_matrix_uses_script_generated_workflow_and_project_copies(self) -> None:
+        """Save script-generated workflow JSON and run each target in its own project copy."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            project_src = tmp_path / "project-src"
+            project_src.mkdir()
+            (project_src / "README.md").write_text("# Example Project\n", encoding="utf-8")
+            (project_src / ".git").mkdir()
+            (project_src / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+            generator = tmp_path / "workflow_generator.py"
+            generator.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import sys
+
+                    project_dir = sys.argv[sys.argv.index("--project-dir") + 1]
+                    print(json.dumps({
+                        "title": "Generated Planning Workflow",
+                        "phases": [
+                            {"name": "draft", "jobs": [{
+                                "name": "architecture",
+                                "role": "planner",
+                                "prompt": f"Read {project_dir} and produce an architecture plan."
+                            }]},
+                            {"name": "review", "jobs": [{
+                                "name": "architecture-review",
+                                "role": "reviewer",
+                                "prompt": f"Review plans in {project_dir}."
+                            }]}
+                        ]
+                    }))
+                    """
+                ),
+                encoding="utf-8",
+            )
+            generator.chmod(0o755)
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_script(
+                "workflow_runner_matrix.py",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--project-src",
+                str(project_src),
+                "--workflow-script",
+                str(generator),
+                "--workflow-script-arg=--project-dir",
+                "--workflow-script-arg",
+                "{project_dir}",
+                "--target",
+                "kimi-direct",
+                "--mock",
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            summary = json.loads(result.stdout)
+            workflow_file = Path(summary["workflow_file"])
+            target = summary["targets"][0]
+            workdir = Path(target["workdir"])
+            self.assertTrue(workflow_file.exists())
+            self.assertEqual(json.loads(workflow_file.read_text(encoding="utf-8"))["title"], "Generated Planning Workflow")
+            self.assertTrue((workdir / "README.md").exists())
+            self.assertFalse((workdir / ".git").exists())
+            self.assertEqual(target["jobs"], 2)
+            self.assertEqual([phase["name"] for phase in target["phases"]], ["draft", "review"])
+            first_phase_archive = Path(target["phases"][0]["archive_dir"])
+            run = json.loads((first_phase_archive / "run.json").read_text(encoding="utf-8"))
+            self.assertIn(str(workdir), run["agents"][0]["prompt"])
+
+    def test_runner_matrix_applies_per_target_max_agents(self) -> None:
+        """Allow runner families to use different concurrency caps."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_script(
+                "workflow_runner_matrix.py",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--target",
+                "kimi=ccc:@kimi",
+                "--target",
+                "mimo25p=ccc:@mimo25p",
+                "--target-max",
+                "kimi=4",
+                "--target-max",
+                "mimo25p=8",
+                "--mock",
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            summary = json.loads(result.stdout)
+            by_label = {target["label"]: target for target in summary["targets"]}
+            self.assertEqual(by_label["kimi"]["max_agents"], 4)
+            self.assertEqual(by_label["mimo25p"]["max_agents"], 8)
+            self.assertIn("--max-agents", by_label["mimo25p"]["command"])
+            self.assertEqual(by_label["mimo25p"]["command"][by_label["mimo25p"]["command"].index("--max-agents") + 1], "8")
+
+    def test_project_planning_workflow_example_emits_workflow_plan(self) -> None:
+        """Keep the reusable architecture-to-task workflow generator executable."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "examples" / "project_planning_workflow.py"),
+                    "--project-dir",
+                    str(tmp_path),
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            plan = json.loads(result.stdout)
+            self.assertEqual(plan["kind"], "workflow-plan")
+            self.assertEqual([phase["name"] for phase in plan["phases"]], ["draft", "review", "correct", "synthesize", "final-review", "final-fix", "final-rereview"])
+            self.assertGreaterEqual(sum(len(phase["jobs"]) for phase in plan["phases"]), 26)
+            self.assertIn("individual implementation tasks", plan["goal"])
+            self.assertEqual(plan["output_subdir"], "planning-output")
+            self.assertTrue(all(str(tmp_path) not in job["prompt"] for phase in plan["phases"] for job in phase["jobs"]))
+            self.assertTrue(all("Current working directory: `.`" in job["prompt"] for phase in plan["phases"] for job in phase["jobs"]))
+            self.assertTrue(all("Do not launch nested agents" in job["prompt"] for phase in plan["phases"] for job in phase["jobs"]))
+
+    def test_wf_runner_matrix_dispatches_to_script(self) -> None:
+        """Expose the reusable runner matrix through the installed shell entrypoint."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf(
+                "runner-matrix",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--target",
+                "codex-direct",
+                "--mock",
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary["status"], "completed")
+            self.assertEqual(summary["targets"][0]["runner"], "codex-direct")
 
 
 if __name__ == "__main__":

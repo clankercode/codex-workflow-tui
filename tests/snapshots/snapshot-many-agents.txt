@@ -9,15 +9,15 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │     BLCK    Agent 03                     ││ │ phase         phase-many                                   │ │
 │     PAUS    Agent 04                     ││ ╰────────────────────────────────────────────────────────────╯ │
 │     CNCL    Agent 05                     ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
-│     PEND    Agent 06                     ││ │ tokens      unknown                                        │ │
-│     DONE    Agent 07                     ││ │ tools       0                                              │ │
-│     RUN     Agent 08                     ││ │ parse errs  0                                              │ │
-│     FAIL    Agent 09                     ││ │ status      paused                                         │ │
-│     BLCK    Agent 10                     ││ │ thread                                                     │ │
+│     PEND    Agent 06                     ││ │ tokens      unknown  tools      0       parse errs 0       │ │
+│     DONE    Agent 07                     ││ │ status      paused   thread                                │ │
+│     RUN     Agent 08                     ││ ╰────────────────────────────────────────────────────────────╯ │
+│     FAIL    Agent 09                     ││ ╭─────────────────────── Live Output ────────────────────────╮ │
+│     BLCK    Agent 10                     ││ │ slice 11 summary                                           │ │
 │   ▸ PAUS    Agent 11                     ││ ╰────────────────────────────────────────────────────────────╯ │
-│                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
-│                                          ││ │ slice 11 summary                                           │ │
-│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │

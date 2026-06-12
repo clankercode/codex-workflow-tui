@@ -9,15 +9,15 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                          ││ │ phase         phase-review                                 │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
-│                                          ││ │ tokens      unknown                                        │ │
-│                                          ││ │ tools       0                                              │ │
-│                                          ││ │ parse errs  0                                              │ │
-│                                          ││ │ status      completed                                      │ │
-│                                          ││ │ thread      thread-tests                                   │ │
+│                                          ││ │ tokens      unknown  tools      0       parse errs 0       │ │
+│                                          ││ │ status      complet… thread     thread…                    │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
 │                                          ││ │ Found one missing negative case                            │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │

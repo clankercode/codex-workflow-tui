@@ -16,6 +16,7 @@ The available runner selectors are:
 --runner ccc --ccc-runner kimi
 --runner ccc --ccc-runner @mm
 --runner opencode-direct
+--runner kimi-direct
 ```
 
 Prefer `ccc-*` providers when portability matters. `ccc` normalizes runner selection, permissions, output modes, and run artifacts across coding CLIs. Its artifact footer has this shape:
@@ -78,6 +79,18 @@ workflow run \
   --job "security::Review this branch for security risks. Return file-linked findings."
 ```
 
+Parallel Kimi workers directly:
+
+```bash
+workflow run \
+  --runner kimi-direct \
+  --title "parallel Kimi review" \
+  --cwd "$PWD" \
+  --max-agents 3 \
+  --startup-delay 1.0 \
+  --job "review::Review this branch for correctness and maintainability."
+```
+
 Pass extra `ccc` controls one token at a time:
 
 ```bash
@@ -89,6 +102,67 @@ workflow run \
   --title "review" \
   --job "review::Review the current branch."
 ```
+
+## Runner Matrix Smoke Tests
+
+Use `workflow runner-matrix` when you want to compare multiple agents or runners against the same reusable workflow.
+Target specs are explicit so a matrix does not accidentally spend across every installed model:
+
+```bash
+workflow runner-matrix \
+  --target codex-direct \
+  --target kimi-direct \
+  --target ccc:kimi \
+  --target minimax=ccc:@mm \
+  --output-dir ~/tmp/workflow-runner-matrix
+```
+
+Target forms:
+
+- `kimi-direct`, `codex-direct`, `opencode-direct`, `ccc-codex`, or `ccc-opencode`
+- `ccc:<selector>` for a generic `ccc` CLI selector, such as `ccc:kimi`
+- `<label>=ccc:<selector>` for friendly archive labels, such as `minimax=ccc:@mm`
+
+The harness uses `examples/runner-smoke-jobs.json` by default, writes a copy to the output directory, runs one workflow per target, and archives each run under `<output-dir>/archive/<label>/<run-id>/`.
+It also writes `<output-dir>/runner-matrix-summary.json`.
+Use `--mock` or `--dry-run` for no-model rehearsals.
+Use `--all-common` to expand `codex-direct`, `kimi-direct`, `opencode-direct`, `ccc:opencode`, and `ccc:kimi`.
+
+Runner matrices can also load reusable workflow-plan scripts:
+
+```bash
+workflow runner-matrix \
+  --project-src ~/tmp/agent-capacity-market-workflow-test/source-plan \
+  --workflow-script ~/.agents/skills/workflow/examples/project_planning_workflow.py \
+  --workflow-script-arg=--project-dir \
+  --workflow-script-arg '{project_dir}' \
+  --target kimi=ccc:@kimi \
+  --target mimo25p=ccc:@mimo25p \
+  --target glm5t=ccc:@glm5t \
+  --target-max kimi=4 \
+  --target-max mimo25p=8 \
+  --target-max glm5t=4 \
+  --output-dir ~/tmp/agent-capacity-market-workflow-test/runs
+```
+
+The script prints a reusable workflow object:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Project planning",
+  "summary": "optional objective",
+  "goal": "optional original goal",
+  "jobs": [{"name": "architecture", "role": "planner", "prompt": "bounded worker prompt"}]
+}
+```
+
+When `--project-src` is set, the matrix copies that directory once per target under `<output-dir>/workdirs/<label>/`, excluding `.git` and common caches.
+Script args may include `{project_dir}`, `{target}`, `{label}`, and `{output_dir}` placeholders.
+The generated workflow JSON is saved before execution under `<output-dir>/workflows/<label>.workflow.json`; a derived jobs array is passed to `workflow run`.
+
+This is dynamic pre-run expansion. The current runner does not yet expand additional jobs from structured worker results while a phase is running; add that only behind an explicit future envelope such as `{"kind":"workflow-expansion","schema_version":1,"jobs":[...]}` with max-round and max-job guards.
 
 ## Safety
 
@@ -102,3 +176,5 @@ For `codex-direct`, use `--sandbox read-only` unless the worker needs to edit. F
 - `ccc-codex` is better when you want the same invocation shape as other CLIs.
 - `ccc-opencode` is the preferred OpenCode path because `ccc` writes normalized `output.txt` and transcript artifacts.
 - `opencode-direct` uses `opencode run --format json`; it is useful for experiments, but `ccc-opencode` is the sturdier default.
+- `kimi-direct` uses `kimi --quiet --input-format text --work-dir <cwd>` and pipes the prompt on stdin. It records stdout as the final output. Use `--model` to override Kimi's configured default.
+- `ccc --ccc-runner kimi` remains useful when you want ccc-managed artifacts and the same runner selection surface as other coding CLIs.

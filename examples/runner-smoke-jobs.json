@@ -1,0 +1,17 @@
+[
+  {
+    "name": "identity",
+    "prompt": "Do not modify files. Reply with exactly: WORKFLOW_RUNNER_SMOKE_ALPHA",
+    "role": "smoke-test"
+  },
+  {
+    "name": "arithmetic",
+    "prompt": "Do not modify files. Compute 17 * 23 and return the final integer.",
+    "role": "smoke-test"
+  },
+  {
+    "name": "structured",
+    "prompt": "Do not modify files. Return a JSON object with \"runner_smoke\": true and \"answer\": \"ok\".",
+    "role": "smoke-test"
+  }
+]
