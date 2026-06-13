@@ -8,9 +8,9 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │       WARN   artifact…   Artifact mis…   ││ │ phase                                                      │ │
 │       WARN   agent-ou…   Output missi…   ││ │ agent                                                      │ │
 │       WARN   agent-st…   Agent stale:…   ││ │ artifact                                                   │ │
-│       WARN   run-bloc…   Run blocked     ││ │ check         chk-unit                                     │ │
-│       WARN   run-canc…   Run cancelled   ││ │ time          Jun 11 10:06 AEST                            │ │
-│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│       WARN   phase-em…   Phase comple…   ││ │ check         chk-unit                                     │ │
+│       WARN   run-bloc…   Run blocked     ││ │ time          Jun 11 10:06 AEST                            │ │
+│       WARN   run-canc…   Run cancelled   ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭───────────────────────── Details ──────────────────────────╮ │
 │                                          ││ │ snapshot mismatch                                          │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │

@@ -17,6 +17,10 @@ This skill mirrors Claude Code workflow concepts using native subagents when ava
 | Worktree isolation | Use git worktrees or disjoint file ownership for write-heavy workers |
 | Pause and resume | `workflow pause` stops new worker launches; `workflow resume` continues unfinished workers |
 | Stop without losing completed work | `workflow stop` cancels unfinished workers while preserving completed artifacts |
+| `pipeline()` — per-item staging, no barrier between stages | Lead-driven staging: launch each item's next-phase lane as its prior lane returns, rather than barriering the whole batch. Single-runner per-item pipelining is an engine gap (see Practical Differences). |
+| `parallel()` barrier | One `workflow run` job set, or a phase the lead waits on in full — use only when the next stage needs all results at once |
+| `schema`-validated structured returns | Prompt workers for a parseable shape, persist as `--result-file`, lead validates and re-dispatches on malformed output |
+| Quality patterns (adversarial verify, loop-until-dry, judge panel, completeness critic) | `references/workflow-patterns.md` |
 
 ## UX Targets
 

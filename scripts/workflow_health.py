@@ -185,6 +185,15 @@ def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SEC
             )
         )
 
+    # A phase is "audited" if at least one agent or artifact is tied to it.
+    # A completed phase with neither hides who (or whether anyone) did the work —
+    # SKILL.md asks the lead to leave a lead-local agent (or artifact) trail.
+    audited_phase_ids = {
+        str(agent.get("phase_id", "")) for agent in run.get("agents", []) if agent.get("phase_id")
+    } | {
+        str(artifact.get("phase_id", "")) for artifact in run.get("artifacts", []) if artifact.get("phase_id")
+    }
+
     for phase in run.get("phases", []):
         status = str(phase.get("status", ""))
         if status in BAD_STATUSES:
@@ -203,6 +212,23 @@ def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SEC
                     ts=str(phase.get("completed_at") or phase.get("updated_at") or phase.get("started_at") or run.get("updated_at") or ""),
                 )
             )
+        elif status == "completed":
+            phase_id = str(phase.get("phase_id", ""))
+            if phase_id and phase_id not in audited_phase_ids:
+                findings.append(
+                    issue(
+                        run=run,
+                        severity=WARNING,
+                        kind="phase-empty",
+                        title=f"Phase completed with no agents: {phase.get('name', phase.get('phase_id', 'phase'))}",
+                        message="This phase is completed but has no agents or artifacts recording who did the work.",
+                        suggestion="Add a lead-local agent (or an artifact) before completing, or reopen the phase.",
+                        entity_type="phase",
+                        entity_id=phase_id,
+                        phase_id=phase_id,
+                        ts=str(phase.get("completed_at") or phase.get("updated_at") or run.get("updated_at") or ""),
+                    )
+                )
 
     for agent in run.get("agents", []):
         status = str(agent.get("status", ""))

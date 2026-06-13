@@ -64,9 +64,11 @@ git pull --ff-only
 
 Start with `SKILL.md`, then see:
 
+- `references/workflow-patterns.md` — orchestration pattern library (pipeline-by-default, adversarial/diverse verify, loop-until-dry, completeness critic, structured returns)
 - `references/operations.md`
 - `references/state-schema.md`
 - `references/coding-cli-runners.md`
 - `references/claude-code-parity.md`
+- `references/known-gaps-and-roadmap.md` — where the engine trails the methodology, ranked
 - `references/codex-cli-workers.md`
 - `examples/runner-smoke-jobs.json`

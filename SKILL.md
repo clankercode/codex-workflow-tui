@@ -57,6 +57,18 @@ python3 ~/.agents/skills/workflow/scripts/workflow_tui.py
 - Prefer read-only agents for research and review. Give write access only when the lane owns a disjoint file set or worktree.
 - For write-heavy parallelism, use worktrees or explicit file ownership. Avoid two agents editing the same file.
 - Always verify subagent and worker results before presenting them as true.
+- A worker's final output is data for the lead, not prose for a human. Ask for a parseable shape (JSON or markdown with fixed headings), state the schema in the prompt, and re-dispatch the lane on malformed output instead of parsing slop. Persist it as the agent `--result-file`.
+
+## Concurrency Discipline
+
+Right-size and right-shape the fan-out before launching it.
+
+- **Scale to the request.** "find any bugs" → a few finders, single-vote verify. "thoroughly audit" → larger pool, 3–5-vote verify, explicit synthesis. A quick check → maybe no workflow at all. Over-orchestration is its own cost.
+- **Pipeline by default; barrier only when needed.** "fan out N lanes, wait for all, then synthesize" is a *barrier* — correct only when the next stage needs every prior result at once (dedup/merge across the full set, early-exit on an aggregate, or a prompt that references "the other findings"). Otherwise it wastes wall-clock: the slow lane stalls all the fast ones. Prefer to start each downstream lane as soon as its upstream lane returns, so item A can be in `verify` while item B is still in `find`.
+- **Smell test:** if a cheap per-item transform sits between two fan-outs with no cross-item dependency, you don't need the barrier between them.
+- **Verify before you trust, and refute by default.** For findings that would be expensive if wrong, spawn independent skeptics (or distinct-lens verifiers) and keep only what survives.
+
+Read `references/workflow-patterns.md` for the full pattern library (adversarial verify, perspective-diverse verify, judge panel, loop-until-dry, multi-modal sweep, completeness critic, no-silent-caps, structured returns) and worked compositions.
 
 ## State Contract
 
@@ -79,8 +91,9 @@ This skill deliberately mirrors the useful parts of Claude Code workflows:
 - dynamic workflows: scripted fan-out/fan-in with persistent phase and agent results
 - agent teams: role separation, task ownership, and synthesis by a lead agent
 - hooks/status: machine-readable state that external tools can watch
+- pipelining and quality patterns: pipeline-by-default staging plus adversarial/diverse verification, loop-until-dry discovery, and completeness critics
 
-Read `references/claude-code-parity.md` when designing or extending the workflow system.
+Read `references/claude-code-parity.md` when designing or extending the workflow system, and `references/workflow-patterns.md` for the orchestration pattern library.
 
 ## Coding CLI Workers
 
@@ -160,7 +173,8 @@ Token totals in the TUI come only from reported usage metadata. If a provider re
 Before saying the workflow is done:
 
 1. Re-open the run state and confirm every required phase is complete or explicitly waived.
-2. Read every subagent or worker summary, not just the top-level status.
-3. Run the verification commands appropriate to the actual work.
-4. Record verification as a workflow event.
-5. Mark the run `completed` only after the evidence supports it.
+2. Read every subagent or worker summary, not just the top-level status. A completed phase with zero agents is a red flag — either real work is unrecorded or no work happened.
+3. Confirm no coverage was silently capped. If `--max-agents` truncated a job list, a pool was sampled, or retries were skipped, that limit must be recorded as an event or decision — not left implied.
+4. Run the verification commands appropriate to the actual work.
+5. Record verification with `workflow verify` (a structured check), not just an event.
+6. Mark the run `completed` only after the evidence supports it.

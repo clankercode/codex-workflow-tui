@@ -2148,6 +2148,52 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertFalse(any(item["kind"] == "check-failed" for item in blockers))
         self.assertTrue(workflow_health.passed_checks(run))
 
+    def test_completed_phase_without_agents_warns_but_does_not_block(self) -> None:
+        """A completed phase with no agents/artifacts surfaces a non-blocking phase-empty nudge."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        run = {
+            "run_id": "wf-test",
+            "status": "running",
+            "phases": [{"phase_id": "phase-impl", "name": "Implementation", "status": "completed"}],
+            "agents": [],
+            "artifacts": [],
+        }
+
+        findings = workflow_health.analyze_run(run)
+        self.assertTrue(any(item["kind"] == "phase-empty" for item in findings))
+        empty = next(item for item in findings if item["kind"] == "phase-empty")
+        self.assertEqual(empty["severity"], workflow_health.WARNING)
+
+        # It is a nudge, not a gate: it must not block `wf done`.
+        blockers = workflow_health.completion_blockers(run)
+        self.assertFalse(any(item["kind"] == "phase-empty" for item in blockers))
+
+    def test_completed_phase_with_lead_local_agent_or_artifact_is_not_flagged_empty(self) -> None:
+        """A lead-local agent (or an artifact) tied to the phase satisfies the audit trail."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        with_agent = {
+            "run_id": "wf-test",
+            "status": "running",
+            "phases": [{"phase_id": "phase-impl", "status": "completed"}],
+            "agents": [{"agent_id": "a1", "phase_id": "phase-impl", "agent_type": "lead-local", "status": "completed"}],
+            "artifacts": [],
+        }
+        with_artifact = {
+            "run_id": "wf-test",
+            "status": "running",
+            "phases": [{"phase_id": "phase-impl", "status": "completed"}],
+            "agents": [],
+            "artifacts": [{"artifact_id": "art1", "phase_id": "phase-impl", "path": __file__}],
+        }
+
+        for run in (with_agent, with_artifact):
+            findings = workflow_health.analyze_run(run)
+            self.assertFalse(any(item["kind"] == "phase-empty" for item in findings))
+
     def test_operator_done_requires_required_passing_check(self) -> None:
         """Ensure optional checks do not satisfy the default completion gate."""
         with tempfile.TemporaryDirectory() as tmp:
