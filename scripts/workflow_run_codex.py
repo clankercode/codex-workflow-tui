@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -251,7 +252,7 @@ class CccProvider(RunnerProvider):
         "glm5t",
         "glm51",
     }
-    CODEX_SELECTOR_LABELS = {"codex", "c", "cx", "cx-coder", "cx-reviewer"}
+    CODEX_SELECTOR_LABELS = {"codex", "claude", "c", "cx", "cx-coder", "cx-reviewer"}
 
     def __init__(self, selector: str, agent_type: str, selector_kind: str = "runner") -> None:
         label_source = selector[1:] if selector.startswith("@") else selector
@@ -365,7 +366,8 @@ def parse_job(value: str) -> dict[str, str]:
     if "::" in value:
         name, prompt = value.split("::", 1)
     else:
-        name, prompt = f"job-{abs(hash(value)) % 10000}", value
+        digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
+        name, prompt = f"job-{digest}", value
     return {"name": name.strip(), "role": name.strip(), "prompt": prompt.strip()}
 
 
@@ -429,7 +431,7 @@ def record_runner_decision(run_id: str, args: argparse.Namespace, provider: Runn
                 f"Run {job_count} coding-CLI worker(s) with max_agents={args.max_agents}, "
                 f"startup_delay={args.startup_delay}, sandbox={args.sandbox}."
             ),
-            "made_by": "workflow_run.py",
+            "made_by": "workflow_run_codex.py",
         }
         run.setdefault("decisions", []).append(decision)
         workflow_state.add_event(

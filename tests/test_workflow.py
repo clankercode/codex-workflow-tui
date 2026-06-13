@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -318,6 +319,33 @@ class WorkflowScriptTests(unittest.TestCase):
             run = json.loads(Path(data["path"]).read_text(encoding="utf-8"))
             self.assertTrue(str(run["paths"]["run_dir"]).startswith(str(tmp_path / ".agents" / "workflow-system")))
 
+    def test_init_rejects_invalid_mode(self) -> None:
+        """--mode must be one of the documented vocabulary values."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            denied = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "workflow_state.py"),
+                    "init",
+                    "--title",
+                    "Bad Mode",
+                    "--prompt",
+                    "mode test",
+                    "--cwd",
+                    str(ROOT),
+                    "--mode",
+                    "bogus",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("invalid choice", denied.stderr)
+
     def test_add_agent_with_terminal_status_records_completion_time(self) -> None:
         """Backfilled/local completed agents should have lifecycle timestamps immediately."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -510,6 +538,18 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(json.loads(self.run_wf("show", run_id, "--json", env=env).stdout)["status"], "running")
             self.run_wf("stop", run_id, "--no-terminate", env=env)
             self.assertEqual(json.loads(self.run_wf("show", run_id, "--json", env=env).stdout)["status"], "cancelled")
+
+    def test_missing_run_emits_friendly_message(self) -> None:
+        """A missing run id should suggest wf list instead of a raw traceback."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            for cmd in ("show", "check", "done"):
+                with self.subTest(cmd=cmd):
+                    result = self.run_wf(cmd, "wf-missing-run-id", env=env, check=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("no run 'wf-missing-run-id'", result.stderr)
+                    self.assertIn("try: wf list", result.stderr)
 
     def test_workflow_ops_pause_resume_stop_json(self) -> None:
         """Lifecycle controls are available directly through workflow_ops.py."""
@@ -1589,6 +1629,19 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertIn("Planner job list truncated", decision_titles)
             self.assertTrue(any(event.get("kind") == "planning" and event.get("operation") == "truncated" for event in data["events"]))
 
+    def test_bare_prompt_job_name_is_stable_sha1(self) -> None:
+        """parse_job without '::' must use a stable, collision-resistant id."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_run_codex  # pylint: disable=import-outside-toplevel
+
+        prompt = "find bugs in the auth module"
+        job = workflow_run_codex.parse_job(prompt)
+        expected = f"job-{hashlib.sha1(prompt.encode('utf-8')).hexdigest()[:8]}"
+        self.assertEqual(job["name"], expected)
+        self.assertEqual(job["prompt"], prompt)
+        # Same prompt yields same name across calls.
+        self.assertEqual(workflow_run_codex.parse_job(prompt)["name"], expected)
+
     def test_generic_ccc_runner_accepts_presets_and_cli_names(self) -> None:
         """Allow --ccc-runner to target both @presets and plain ccc CLI selectors."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1626,6 +1679,35 @@ class WorkflowScriptTests(unittest.TestCase):
             start_args = [event["args"] for event in self.read_ccc_events(tmp_path) if event["event"] == "start"]
             for expected_arg in ("@mm", "kimi"):
                 self.assertTrue(any(expected_arg in args for args in start_args), msg=f"missing {expected_arg} in {start_args}")
+
+    def test_ccc_claude_selector_forwards_cwd(self) -> None:
+        """The 'claude' ccc selector should receive explicit cwd forwarding."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = self.ccc_fake_env(tmp_path)
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Fake Ccc Claude",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "ccc",
+                "--ccc-runner",
+                "claude",
+                "--startup-delay",
+                "0",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["mode"], "ccc-claude")
+            self.assertIn("--cd", agent["command_preview"])
+            start_args = [event["args"] for event in self.read_ccc_events(tmp_path) if event["event"] == "start"]
+            self.assertTrue(any("--runner-arg" in args and "--cd" in args for args in start_args))
 
     def test_ccc_kimi_runner_passes_large_kimi_step_limit(self) -> None:
         """Raise Kimi's per-turn step/tool-call limit for ccc-backed Kimi workers."""
@@ -2597,6 +2679,24 @@ class WorkflowScriptTests(unittest.TestCase):
         finally:
             workflow_state.fcntl = original_fcntl
             workflow_state._FCNTL_WARNING_EMITTED = original_flag
+
+    def test_doctor_reports_wf_symlink_resolves_to_checkout(self) -> None:
+        """doctor reports whether the installed wf/workflow wrappers point here."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            fake_bin = Path(tmp) / "bin"
+            fake_bin.mkdir()
+            local_wf = ROOT / "scripts" / "wf"
+            (fake_bin / "wf").symlink_to(local_wf)
+            (fake_bin / "workflow").symlink_to(local_wf)
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            result = self.run_wf("doctor", "--json", env=env)
+            data = json.loads(result.stdout)
+            by_name = {check["name"]: check for check in data["checks"]}
+            self.assertTrue(by_name["wf-in-checkout"]["ok"])
+            self.assertTrue(by_name["workflow-in-checkout"]["ok"])
+            self.assertIn(str(local_wf), by_name["wf-in-checkout"]["path"])
 
     def test_operator_doctor_distinguishes_required_and_optional_checks(self) -> None:
         """Keep optional provider commands from making doctor report a broken install."""

@@ -148,7 +148,7 @@ def mutate_run(identifier: str, mutator: Any) -> tuple[dict[str, Any], Any, Path
     """Load, mutate, and save a run under its per-run lock."""
     path = run_file(identifier)
     with exclusive_lock(path.parent / ".lock"):
-        data = load_run(str(path))
+        data = load_run(identifier)
         try:
             result = mutator(data)
         except AbortMutation as exc:
@@ -243,7 +243,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "tags": args.tag or [],
         "created_at": now(),
         "updated_at": now(),
-        "coordinator": {"tool": getattr(args, "coordinator_tool", None) or "codex", "thread_id": args.thread_id or None},
+        "coordinator": {"tool": getattr(args, "coordinator_tool", None) or "codex-direct", "thread_id": args.thread_id or None},
         "paths": {
             "run_dir": str(directory),
             "run_json": str(directory / "run.json"),
@@ -710,16 +710,17 @@ def format_summary(data: dict[str, Any], detail: bool = False) -> str:
 
 
 def cmd_demo(args: argparse.Namespace) -> None:
-    class DemoArgs:
-        title = args.title
-        prompt = "Demonstration workflow state for TUI validation."
-        prompt_file = None
-        cwd = os.getcwd()
-        mode = "demo"
-        tag = ["demo"]
-        thread_id = None
-
-    cmd_init(DemoArgs)
+    demo_args = argparse.Namespace(
+        title=args.title,
+        prompt="Demonstration workflow state for TUI validation.",
+        prompt_file=None,
+        cwd=os.getcwd(),
+        mode="demo",
+        tag=["demo"],
+        thread_id=None,
+        coordinator_tool=None,
+    )
+    cmd_init(demo_args)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -731,10 +732,10 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--prompt")
     init.add_argument("--prompt-file")
     init.add_argument("--cwd", default=os.getcwd())
-    init.add_argument("--mode", default="hybrid")
+    init.add_argument("--mode", default="hybrid", choices=["hybrid", "native-subagents", "external", "lead-local"])
     init.add_argument("--tag", action="append")
     init.add_argument("--thread-id")
-    init.add_argument("--coordinator-tool", default="codex")
+    init.add_argument("--coordinator-tool", default="codex-direct")
     init.set_defaults(func=cmd_init)
 
     phase = sub.add_parser("add-phase", help="add a phase")
@@ -864,10 +865,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def friendly_missing_run(exc: FileNotFoundError) -> str:
+    """Return a friendly run-not-found hint from a raw FileNotFoundError."""
+    path = Path(str(exc.filename)) if exc.filename else None
+    if path and path.name == "run.json":
+        return f"no run {path.parent.name!r} (try: wf list)"
+    return str(exc)
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except FileNotFoundError as exc:
+        raise SystemExit(friendly_missing_run(exc)) from None
 
 
 if __name__ == "__main__":

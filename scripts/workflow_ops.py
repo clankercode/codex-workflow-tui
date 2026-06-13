@@ -111,6 +111,20 @@ def command_status(name: str, *, required: bool = False) -> dict[str, Any]:
     return {"name": name, "ok": bool(path), "path": path or "", "required": required}
 
 
+def command_points_to_checkout(name: str) -> dict[str, Any]:
+    """Check whether an installed workflow wrapper resolves to this checkout."""
+    path = shutil.which(name)
+    if not path:
+        return {"name": f"{name}-in-checkout", "ok": False, "path": "not in PATH", "required": False}
+    try:
+        resolved = Path(path).resolve()
+    except OSError as exc:
+        return {"name": f"{name}-in-checkout", "ok": False, "path": str(exc), "required": False}
+    # The installed `workflow`/`wf` wrappers are typically symlinks to scripts/wf.
+    expected = Path(__file__).resolve().with_name("wf")
+    return {"name": f"{name}-in-checkout", "ok": resolved == expected, "path": str(resolved), "required": False}
+
+
 def writable_dir(path: Path) -> bool:
     """Return whether a directory can be written."""
     try:
@@ -129,6 +143,8 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     checks.append({"name": "workflow-home", "ok": writable_dir(workflow_state.workflow_root()), "path": str(workflow_state.workflow_root()), "required": True})
     for command in ("workflow", "wf", "codex", "ccc", "opencode", "tmux", "git"):
         checks.append(command_status(command, required=False))
+    for command in ("workflow", "wf"):
+        checks.append(command_points_to_checkout(command))
     try:
         import rich  # noqa: F401  # pylint: disable=import-outside-toplevel,unused-import
 
@@ -555,9 +571,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def friendly_missing_run(exc: FileNotFoundError) -> str:
+    """Return a friendly run-not-found hint from a raw FileNotFoundError."""
+    path = Path(str(exc.filename)) if exc.filename else None
+    if path and path.name == "run.json":
+        return f"no run {path.parent.name!r} (try: wf list)"
+    return str(exc)
+
+
 def main() -> None:
     args = build_parser().parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except FileNotFoundError as exc:
+        raise SystemExit(friendly_missing_run(exc)) from None
 
 
 if __name__ == "__main__":
