@@ -98,7 +98,7 @@ case "$cmd" in
   runner-matrix|matrix|runner-smoke)
     exec python3 "$SCRIPT_DIR/workflow_runner_matrix.py" "$@"
     ;;
-  status|last|doctor|check|verify|done|block|preview)
+  status|last|doctor|check|verify|done|block|preview|pause|resume|stop)
     exec python3 "$SCRIPT_DIR/workflow_ops.py" "$cmd" "$@"
     ;;
   open)
@@ -110,7 +110,7 @@ case "$cmd" in
   state)
     exec python3 "$SCRIPT_DIR/workflow_state.py" "$@"
     ;;
-  list|show|init|add-phase|update-phase|add-agent|update-agent|event|decision|artifact|set-status|pause|resume|stop|demo)
+  list|show|init|add-phase|update-phase|add-agent|update-agent|event|decision|artifact|set-status|demo)
     exec python3 "$SCRIPT_DIR/workflow_state.py" "$cmd" "$@"
     ;;
   help|-h|--help)

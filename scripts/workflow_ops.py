@@ -394,6 +394,21 @@ def cmd_block(args: argparse.Namespace) -> None:
     print_json({"run_id": args.run, "status": "blocked", "reason": args.reason})
 
 
+def cmd_pause(args: argparse.Namespace) -> None:
+    """Pause a run through the operator interface."""
+    workflow_state.cmd_pause(args)
+
+
+def cmd_resume(args: argparse.Namespace) -> None:
+    """Resume a paused run through the operator interface."""
+    workflow_state.cmd_resume(args)
+
+
+def cmd_stop(args: argparse.Namespace) -> None:
+    """Stop a run through the operator interface."""
+    workflow_state.cmd_stop(args)
+
+
 def cmd_preview(args: argparse.Namespace) -> None:
     """Preview a worker launch without writing state."""
     jobs = []
@@ -505,6 +520,22 @@ def build_parser() -> argparse.ArgumentParser:
     block.add_argument("--message")
     block.add_argument("--blocked-by")
     block.set_defaults(func=cmd_block)
+
+    pause = sub.add_parser("pause", help="pause a run before launching more workers")
+    pause.add_argument("run")
+    pause.add_argument("--reason")
+    pause.set_defaults(func=cmd_pause)
+
+    resume = sub.add_parser("resume", help="resume a paused run")
+    resume.add_argument("run")
+    resume.add_argument("--reason")
+    resume.set_defaults(func=cmd_resume)
+
+    stop = sub.add_parser("stop", help="cancel a run and terminate recorded active workers")
+    stop.add_argument("run")
+    stop.add_argument("--reason")
+    stop.add_argument("--no-terminate", dest="terminate", action="store_false", help="only update state; do not signal processes")
+    stop.set_defaults(func=cmd_stop, terminate=True)
 
     preview = sub.add_parser("preview", help="preview a worker launch without writing state")
     preview.add_argument("--title", required=True)

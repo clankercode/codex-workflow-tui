@@ -511,6 +511,30 @@ class WorkflowScriptTests(unittest.TestCase):
             self.run_wf("stop", run_id, "--no-terminate", env=env)
             self.assertEqual(json.loads(self.run_wf("show", run_id, "--json", env=env).stdout)["status"], "cancelled")
 
+    def test_workflow_ops_pause_resume_stop_json(self) -> None:
+        """Lifecycle controls are available directly through workflow_ops.py."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_script(
+                "workflow_state.py",
+                "init",
+                "--title",
+                "Ops Control",
+                "--prompt",
+                "exercise ops controls",
+                "--cwd",
+                str(ROOT),
+                env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            pause = json.loads(self.run_script("workflow_ops.py", "pause", run_id, "--reason", "ops pause", env=env).stdout)
+            self.assertEqual(pause["status"], "paused")
+            resume = json.loads(self.run_script("workflow_ops.py", "resume", run_id, env=env).stdout)
+            self.assertEqual(resume["status"], "running")
+            stop = json.loads(self.run_script("workflow_ops.py", "stop", run_id, "--no-terminate", env=env).stdout)
+            self.assertEqual(stop["status"], "cancelled")
+
     def test_mock_worker_waits_while_run_is_paused(self) -> None:
         """Paused cooperative runs should not launch pending workers until resumed."""
         with tempfile.TemporaryDirectory() as tmp:
