@@ -25,6 +25,11 @@ sys.dont_write_bytecode = True
 
 import workflow_state
 
+try:
+    import jsonschema
+except Exception:  # pragma: no cover - optional runtime dependency
+    jsonschema = None  # type: ignore[assignment]
+
 PHASE_ID = "phase-cli-workers"
 CCC_FOOTER_RE = re.compile(r"^>> ccc:output-log >> (.+)$", re.MULTILINE)
 KIMI_RESUME_RE = re.compile(r"\bkimi\s+-r\s+(\S+)")
@@ -521,8 +526,15 @@ def add_agent(
     )
     with open(os.devnull, "w", encoding="utf-8") as sink, contextlib.redirect_stdout(sink):
         workflow_state.cmd_add_agent(agent_args)
-    if stage or depends_on:
-        update_agent(run["run_id"], agent_id, stage=stage, depends_on=depends_on)
+    extra: dict[str, Any] = {}
+    if stage:
+        extra["stage"] = stage
+    if depends_on:
+        extra["depends_on"] = depends_on
+    if job.get("schema"):
+        extra["schema"] = _resolve_schema(job["schema"])
+    if extra:
+        update_agent(run["run_id"], agent_id, **extra)
     return workflow_state.load_run(run["run_id"])
 
 
@@ -796,7 +808,6 @@ async def run_worker(
         try:
             if not await wait_until_launch_allowed(run_id, agent["agent_id"]):
                 return
-            command = [] if args.mock or args.dry_run else provider.build_command(agent, args)
             if args.mock:
                 await startup_limiter.mark_virtual_start()
                 started_epoch = time.time()
@@ -844,10 +855,13 @@ async def run_worker(
             failure_retry_count = 0
             attempt = 0
             last_timed_out = False
+            last_validation_error: str | None = None
+            result_json: Any | None = None
             while True:
                 if not await wait_until_launch_allowed(run_id, agent["agent_id"]):
                     return
                 attempt += 1
+                command = provider.build_command(agent, args)
                 proc = await startup_limiter.create_process(command, cwd=args.cwd)
                 if started_epoch is None:
                     started_epoch = time.time()
@@ -901,6 +915,27 @@ async def run_worker(
                     stderr_text += f"\nworkflow timeout after {timeout}s\n"
                 else:
                     exit_code = wait_task.result()
+
+                extracted = provider.extract_result(agent, exit_code, stdout_text=stdout_text, stderr_text=stderr_text)
+                validation_error: str | None = None
+                if exit_code == 0:
+                    schema = agent.get("schema") or getattr(args, "result_schema_obj", None)
+                    if schema is not None and jsonschema is not None:
+                        try:
+                            parsed = json.loads(extracted.result)
+                            jsonschema.validate(parsed, schema)
+                            result_json = parsed
+                        except Exception as exc:
+                            validation_error = f"{type(exc).__name__}: {exc}"
+                            last_validation_error = validation_error
+                            exit_code = 1
+                            stderr_text += f"\nschema validation failed: {validation_error}\n"
+                    elif schema is not None and jsonschema is None:
+                        validation_error = "jsonschema package is not installed"
+                        last_validation_error = validation_error
+                        exit_code = 1
+                        stderr_text += f"\nschema validation failed: {validation_error}\n"
+
                 if exit_code != 0 and quota_retry_count < quota_retries and quota_limit_detected(stdout_text, stderr_text):
                     quota_retry_count += 1
                     sleep_seconds = quota_retry_sleep_seconds(args)
@@ -918,11 +953,24 @@ async def run_worker(
                     continue
                 if exit_code != 0 and failure_retry_count < failure_retries:
                     failure_retry_count += 1
+                    if validation_error:
+                        prompt_hint = (
+                            f"\n\nPrior attempt failed schema validation: {validation_error}\n"
+                            "Correct the output shape and try again."
+                        )
+                        agent["prompt"] = agent.get("prompt", "") + prompt_hint
+                        prompt_path = agent.get("prompt_file")
+                        if prompt_path:
+                            Path(prompt_path).write_text(agent["prompt"] + "\n", encoding="utf-8")
                     update_agent(
                         run_id,
                         agent["agent_id"],
                         status="running",
-                        summary=f"worker failed; retry {failure_retry_count}/{failure_retries}",
+                        summary=(
+                            f"schema validation failed; retry {failure_retry_count}/{failure_retries}"
+                            if validation_error
+                            else f"worker failed; retry {failure_retry_count}/{failure_retries}"
+                        ),
                         exit_code=exit_code,
                         failure_retry_count=failure_retry_count,
                     )
@@ -930,10 +978,12 @@ async def run_worker(
                     continue
                 break
 
-            extracted = provider.extract_result(agent, exit_code, stdout_text=stdout_text, stderr_text=stderr_text)
             status = "completed" if exit_code == 0 else "failed"
             summary = extracted.summary
             result = extracted.result
+            if last_validation_error and status == "failed":
+                summary = "schema validation failed"
+                result = f"schema validation failed: {last_validation_error}"
             if last_timed_out and status == "failed":
                 timeout_message = f"workflow timeout after {timeout}s"
                 summary = timeout_message
@@ -941,17 +991,22 @@ async def run_worker(
             if stop_requested(run_control(run_id)):
                 status = "cancelled"
                 summary = summary or "cancelled by workflow stop request"
+            update_fields: dict[str, Any] = {
+                "status": status,
+                "result": result,
+                "summary": summary,
+                "exit_code": exit_code,
+                "thread_id": extracted.thread_id,
+                "jsonl_path": extracted.jsonl_path,
+                "log_path": extracted.log_path,
+                "output_path": extracted.output_path,
+            }
+            if result_json is not None:
+                update_fields["result_json"] = result_json
             update_agent(
                 run_id,
                 agent["agent_id"],
-                status=status,
-                result=result,
-                summary=summary,
-                exit_code=exit_code,
-                thread_id=extracted.thread_id,
-                jsonl_path=extracted.jsonl_path,
-                log_path=extracted.log_path,
-                output_path=extracted.output_path,
+                **update_fields,
                 **telemetry_fields_for_agent(
                     {
                         **agent,
@@ -987,6 +1042,24 @@ def _depends_on_names(agent: dict[str, Any]) -> set[str]:
     if isinstance(raw, list):
         return {str(value).strip() for value in raw if str(value).strip()}
     return {piece.strip() for piece in str(raw).split(",") if piece.strip()}
+
+
+def _resolve_schema(value: Any) -> dict[str, Any] | None:
+    """Resolve a schema value to a JSON schema dict.
+
+    Accepts an inline dict, a JSON string, or a path to a JSON schema file.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    text = str(value).strip()
+    if text.startswith("{"):
+        return json.loads(text)
+    path = Path(text).expanduser()
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    raise SystemExit(f"schema not found or invalid: {value}")
 
 
 def _normalize_expansion_job(item: Any, index: int) -> dict[str, str] | None:
@@ -1065,10 +1138,17 @@ def _add_expansion_agent(
     )
     with open(os.devnull, "w", encoding="utf-8") as sink, contextlib.redirect_stdout(sink):
         workflow_state.cmd_add_agent(agent_args)
+    extra: dict[str, Any] = {}
     stage = job.get("stage", "")
     depends_on = job.get("depends_on", "")
-    if stage or depends_on:
-        update_agent(run_id, agent_id, stage=stage, depends_on=depends_on)
+    if stage:
+        extra["stage"] = stage
+    if depends_on:
+        extra["depends_on"] = depends_on
+    if job.get("schema"):
+        extra["schema"] = _resolve_schema(job["schema"])
+    if extra:
+        update_agent(run_id, agent_id, **extra)
     return workflow_state.load_run(run_id), agent_id
 
 
@@ -1363,6 +1443,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quota-retries", type=nonnegative_int, default=2, help="quota/rate-limit retries; default: 2")
     parser.add_argument("--quota-retry-buffer-secs", type=nonnegative_float, default=5.0, help="seconds added after the next :00/:30 retry window; default: 5.0")
     parser.add_argument("--failure-retries", type=nonnegative_int, default=0, help="non-quota worker retries; default: 0")
+    parser.add_argument("--result-schema", help="path to a JSON schema file applied to worker output")
     parser.add_argument("--kimi-max-steps-per-turn", type=positive_int, default=9999, help="Kimi max steps/tool calls per turn; default: 9999")
     parser.add_argument("--model")
     parser.add_argument("--sandbox", default="read-only", choices=["read-only", "workspace-write", "danger-full-access"])
@@ -1379,6 +1460,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     args.cwd = str(Path(args.cwd).expanduser().resolve())
+    if args.result_schema:
+        args.result_schema_obj = _resolve_schema(args.result_schema)
+    else:
+        args.result_schema_obj = None
     jobs = load_jobs(args)
     provider = build_provider(args)
     run = create_run(args, jobs, provider)

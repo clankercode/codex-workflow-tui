@@ -155,8 +155,16 @@ class WorkflowScriptTests(unittest.TestCase):
                 import json
                 import os
                 import sys
+                from pathlib import Path
 
-                output = os.environ.get("CODEX_FAKE_OUTPUT", "fake codex result")
+                state_path = os.environ.get("CODEX_FAKE_STATE")
+                attempt = 0
+                if state_path:
+                    path = Path(state_path)
+                    if path.exists():
+                        attempt = int(path.read_text(encoding="utf-8").strip() or "0")
+                    path.write_text(str(attempt + 1), encoding="utf-8")
+                output = os.environ.get(f"CODEX_FAKE_OUTPUT_{attempt}") or os.environ.get("CODEX_FAKE_OUTPUT", "fake codex result")
                 exit_code = int(os.environ.get("CODEX_FAKE_EXIT_CODE", "0"))
                 event = {
                     "type": "item.completed",
@@ -1827,6 +1835,121 @@ class WorkflowScriptTests(unittest.TestCase):
                 any(event["data"]["cap"] == "max-job" and event["data"]["dropped"] == 3 for event in truncation_events),
                 msg=f"expected max-job truncation with 3 dropped, got {truncation_events}",
             )
+
+    def test_schema_validation_passes_and_stores_result_json(self) -> None:
+        """A worker output matching --result-schema stores the parsed object."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            schema_path = tmp_path / "schema.json"
+            schema_path.write_text(
+                json.dumps({"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}),
+                encoding="utf-8",
+            )
+            env = self.codex_fake_env(tmp_path)
+            env["CODEX_FAKE_OUTPUT"] = json.dumps({"answer": "yes"})
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Schema Valid",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--result-schema",
+                str(schema_path),
+                "--job",
+                "ask::Return JSON.",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            agent = data["agents"][0]
+            self.assertEqual(agent["status"], "completed")
+            self.assertEqual(agent["result_json"], {"answer": "yes"})
+
+    def test_schema_validation_failure_marks_agent_failed(self) -> None:
+        """A worker output that violates the schema is marked failed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            schema_path = tmp_path / "schema.json"
+            schema_path.write_text(
+                json.dumps({"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}),
+                encoding="utf-8",
+            )
+            env = self.codex_fake_env(tmp_path)
+            env["CODEX_FAKE_OUTPUT"] = "not valid json"
+            launched = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "workflow_run.py"),
+                    "--title",
+                    "Schema Invalid",
+                    "--cwd",
+                    str(ROOT),
+                    "--runner",
+                    "codex-direct",
+                    "--startup-delay",
+                    "0",
+                    "--result-schema",
+                    str(schema_path),
+                    "--job",
+                    "ask::Return JSON.",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "failed")
+            agent = data["agents"][0]
+            self.assertEqual(agent["status"], "failed")
+            self.assertIn("schema validation failed", agent["result"])
+
+    def test_schema_validation_failure_is_retried_with_error_in_prompt(self) -> None:
+        """Schema failures consume failure retries and include the error in the retry prompt."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            schema_path = tmp_path / "schema.json"
+            schema_path.write_text(
+                json.dumps({"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}),
+                encoding="utf-8",
+            )
+            state_path = tmp_path / "codex-state.txt"
+            state_path.write_text("0", encoding="utf-8")
+            env = self.codex_fake_env(tmp_path)
+            env["CODEX_FAKE_STATE"] = str(state_path)
+            env["CODEX_FAKE_OUTPUT_0"] = json.dumps({"answer": 123})
+            env["CODEX_FAKE_OUTPUT_1"] = json.dumps({"answer": "yes"})
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Schema Retry",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--failure-retries",
+                "1",
+                "--result-schema",
+                str(schema_path),
+                "--job",
+                "ask::Return JSON.",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            agent = data["agents"][0]
+            self.assertEqual(agent["status"], "completed")
+            self.assertEqual(agent["result_json"], {"answer": "yes"})
+            self.assertEqual(agent["failure_retry_count"], 1)
 
     def test_generic_ccc_runner_accepts_presets_and_cli_names(self) -> None:
         """Allow --ccc-runner to target both @presets and plain ccc CLI selectors."""

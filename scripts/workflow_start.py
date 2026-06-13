@@ -192,6 +192,7 @@ def planner_namespace(args: argparse.Namespace, prompt: str) -> argparse.Namespa
         cli_agent=args.planner_cli_agent or args.cli_agent,
         quota_retries=args.quota_retries,
         quota_retry_buffer_secs=args.quota_retry_buffer_secs,
+        result_schema=args.result_schema,
         kimi_max_steps_per_turn=args.kimi_max_steps_per_turn,
         prompt=prompt,
     )
@@ -385,6 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--permission-mode", choices=["safe", "auto", "yolo", "plan"])
     parser.add_argument("--cli-agent")
     parser.add_argument("--timeout-secs", type=positive_int)
+    parser.add_argument("--result-schema", help="path to a JSON schema file applied to worker output")
     parser.add_argument("--quota-retries", type=workflow_run_codex.nonnegative_int, default=2)
     parser.add_argument("--quota-retry-buffer-secs", type=nonnegative_float, default=5.0)
     parser.add_argument("--kimi-max-steps-per-turn", type=positive_int, default=9999)
