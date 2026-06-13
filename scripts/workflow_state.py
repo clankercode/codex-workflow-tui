@@ -187,8 +187,21 @@ def add_event(run_data: dict[str, Any], level: str, message: str, **extra: Any) 
         "message": message,
     }
     event.update({key: value for key, value in extra.items() if value not in (None, "", {})})
-    run_data.setdefault("events", []).append(event)
-    run_data["events"] = run_data["events"][-250:]
+    events = run_data.setdefault("events", [])
+    events.append(event)
+    if len(events) > 250:
+        # Drop any previous rollover marker so it does not consume a retention slot.
+        events[:] = [e for e in events if not (e.get("kind") == "event-log" and e.get("operation") == "rollover")]
+        events[:] = events[-249:]
+        rollover = {
+            "event_id": short_id("evt"),
+            "ts": now(),
+            "level": "warning",
+            "message": "event log rolled over; oldest events discarded",
+            "kind": "event-log",
+            "operation": "rollover",
+        }
+        events.append(rollover)
     run_data["last_activity_at"] = event_ts
     return event
 

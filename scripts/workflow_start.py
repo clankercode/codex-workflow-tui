@@ -112,12 +112,14 @@ def unique_job_name(raw: str, used: set[str], index: int) -> str:
     return name
 
 
-def parse_planner_output(text: str, *, goal: str, max_jobs: int) -> dict[str, Any]:
-    """Parse and normalize planner JSON into workflow-run jobs."""
+def parse_planner_output(text: str, *, goal: str, max_jobs: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Parse and normalize planner JSON into workflow-run jobs and truncation metadata."""
     raw = extract_json_object(text)
     jobs_raw = raw.get("jobs")
     if not isinstance(jobs_raw, list) or not jobs_raw:
         raise SystemExit("planner JSON must contain a non-empty jobs array")
+    original_count = len(jobs_raw)
+    truncated = original_count > max_jobs
     jobs: list[dict[str, str]] = []
     used: set[str] = set()
     for index, item in enumerate(jobs_raw[:max_jobs]):
@@ -135,16 +137,17 @@ def parse_planner_output(text: str, *, goal: str, max_jobs: int) -> dict[str, An
                 "prompt": prompt,
             }
         )
-    return {
+    plan = {
         "schema_version": 1,
         "title": str(raw.get("title") or title_from_goal(goal)).strip()[:120],
         "summary": str(raw.get("summary") or goal).strip(),
         "goal": goal,
         "jobs": jobs,
     }
+    return plan, {"truncated": truncated, "original_count": original_count, "max_jobs": max_jobs}
 
 
-def mock_plan(goal: str, *, title: str | None, max_jobs: int) -> dict[str, Any]:
+def mock_plan(goal: str, *, title: str | None, max_jobs: int) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return a deterministic no-model plan for tests and dry operator rehearsals."""
     templates = [
         ("research", "researcher", "Research the goal, existing constraints, and prior art."),
@@ -152,6 +155,8 @@ def mock_plan(goal: str, *, title: str | None, max_jobs: int) -> dict[str, Any]:
         ("draft", "writer", "Produce the main deliverable from the research and design context."),
         ("review", "reviewer", "Critique the deliverable for gaps, risks, and unsupported claims."),
     ]
+    original_count = len(templates)
+    truncated = original_count > max_jobs
     jobs = [
         {
             "name": name,
@@ -166,7 +171,7 @@ def mock_plan(goal: str, *, title: str | None, max_jobs: int) -> dict[str, Any]:
         "summary": goal,
         "goal": goal,
         "jobs": jobs,
-    }
+    }, {"truncated": truncated, "original_count": original_count, "max_jobs": max_jobs}
 
 
 def planner_namespace(args: argparse.Namespace, prompt: str) -> argparse.Namespace:
@@ -192,10 +197,11 @@ def planner_namespace(args: argparse.Namespace, prompt: str) -> argparse.Namespa
     )
 
 
-def run_planner(args: argparse.Namespace, goal: str) -> tuple[dict[str, Any], dict[str, str]]:
+def run_planner(args: argparse.Namespace, goal: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run or mock the planner and return normalized plan plus metadata."""
     if args.mock or args.mock_plan:
-        return mock_plan(goal, title=args.title, max_jobs=args.max_jobs), {"planner": "mock"}
+        plan, truncation = mock_plan(goal, title=args.title, max_jobs=args.max_jobs)
+        return plan, {"planner": "mock", **truncation}
 
     prompt = PLANNER_PROMPT.format(goal=goal, cwd=args.cwd, max_jobs=args.max_jobs)
     planner_args = planner_namespace(args, prompt)
@@ -220,8 +226,8 @@ def run_planner(args: argparse.Namespace, goal: str) -> tuple[dict[str, Any], di
         raw_output = extracted.result or result.stdout.decode("utf-8", errors="replace")
         if result.returncode != 0:
             raise SystemExit(f"planner failed with exit code {result.returncode}: {extracted.summary}")
-        plan = parse_planner_output(raw_output, goal=goal, max_jobs=args.max_jobs)
-        return plan, {"planner": provider.name}
+        plan, truncation = parse_planner_output(raw_output, goal=goal, max_jobs=args.max_jobs)
+        return plan, {"planner": provider.name, **truncation}
 
 
 def worker_namespace(args: argparse.Namespace, plan: dict[str, Any], goal: str) -> argparse.Namespace:
@@ -254,7 +260,7 @@ def worker_namespace(args: argparse.Namespace, plan: dict[str, Any], goal: str) 
     )
 
 
-def record_start_plan(run_id: str, plan: dict[str, Any], planner_meta: dict[str, str]) -> str:
+def record_start_plan(run_id: str, plan: dict[str, Any], planner_meta: dict[str, Any]) -> str:
     """Persist the generated plan as a first-class artifact and decision."""
     run = workflow_state.load_run(run_id)
     plan_path = Path(run["paths"]["artifacts_dir"]) / "workflow-start-plan.json"
@@ -269,6 +275,27 @@ def record_start_plan(run_id: str, plan: dict[str, Any], planner_meta: dict[str,
             "made_by": "workflow_start.py",
         }
         data.setdefault("decisions", []).append(decision)
+        if planner_meta.get("truncated"):
+            truncation_decision = {
+                "decision_id": "dec-workflow-start-truncation",
+                "ts": workflow_state.now(),
+                "title": "Planner job list truncated",
+                "rationale": (
+                    f"Planner returned {planner_meta['original_count']} jobs; "
+                    f"truncated to {planner_meta['max_jobs']} by --max-jobs."
+                ),
+                "made_by": "workflow_start.py",
+            }
+            data.setdefault("decisions", []).append(truncation_decision)
+            workflow_state.add_event(
+                data,
+                "warning",
+                f"planner truncated job list from {planner_meta['original_count']} to {planner_meta['max_jobs']}",
+                kind="planning",
+                operation="truncated",
+                source="workflow_start.record_start_plan",
+                data={"original_count": planner_meta["original_count"], "max_jobs": planner_meta["max_jobs"]},
+            )
         artifact = {
             "artifact_id": "art-workflow-start-plan",
             "ts": workflow_state.now(),
@@ -304,10 +331,7 @@ def start_workflow(args: argparse.Namespace) -> int:
     provider = workflow_run_codex.build_provider(run_args)
     run = workflow_run_codex.create_run(run_args, plan["jobs"], provider)
     plan_path = record_start_plan(run["run_id"], plan, planner_meta)
-    for index, job in enumerate(plan["jobs"]):
-        run = workflow_run_codex.add_agent(run, job, run_args, provider, index)
-    print(
-        json.dumps(
+    print(json.dumps(
             {
                 "run_id": run["run_id"],
                 "path": run["paths"]["run_json"],
@@ -318,6 +342,8 @@ def start_workflow(args: argparse.Namespace) -> int:
             indent=2,
         )
     )
+    for index, job in enumerate(plan["jobs"]):
+        run = workflow_run_codex.add_agent(run, job, run_args, provider, index)
     replay = ["workflow", "start", goal, "--runner", args.runner]
     if args.runner == "ccc" and args.ccc_runner:
         replay.extend(["--ccc-runner", args.ccc_runner])

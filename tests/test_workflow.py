@@ -1520,6 +1520,51 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agent["failure_retry_count"], 1)
             self.assertEqual(agent["result"], "recovered after timeout\n")
 
+    def test_event_log_writes_rollover_marker_at_cap(self) -> None:
+        """add_event must not silently drop old events; it should record a rollover."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_state  # pylint: disable=import-outside-toplevel
+
+        run: dict[str, Any] = {
+            "run_id": "wf-events",
+            "events": [],
+            "metrics": {},
+            "paths": {"run_json": "/dev/null"},
+        }
+        for index in range(251):
+            workflow_state.add_event(run, "info", f"event {index}")
+        self.assertEqual(len(run["events"]), 250)
+        rollover = next(event for event in run["events"] if event.get("kind") == "event-log")
+        self.assertEqual(rollover["level"], "warning")
+        self.assertIn("rolled over", rollover["message"])
+        retained_messages = [event["message"] for event in run["events"] if event.get("kind") != "event-log"]
+        self.assertEqual(retained_messages[0], "event 2")
+        self.assertEqual(retained_messages[-1], "event 250")
+
+    def test_mock_plan_records_truncation_when_max_jobs_cuts_list(self) -> None:
+        """Planner output truncated by --max-jobs is recorded as a decision and event."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            launched = self.run_script(
+                "workflow_start.py",
+                "write a phd thesis",
+                "--title",
+                "Truncated Plan",
+                "--mock-plan",
+                "--max-jobs",
+                "2",
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(len(data["agents"]), 2)
+            decision_titles = [decision["title"] for decision in data["decisions"]]
+            self.assertIn("Planner job list truncated", decision_titles)
+            self.assertTrue(any(event.get("kind") == "planning" and event.get("operation") == "truncated" for event in data["events"]))
+
     def test_generic_ccc_runner_accepts_presets_and_cli_names(self) -> None:
         """Allow --ccc-runner to target both @presets and plain ccc CLI selectors."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1693,9 +1738,10 @@ class WorkflowScriptTests(unittest.TestCase):
             ```
             """
         )
-        plan = workflow_start.parse_planner_output(text, goal="Research topic", max_jobs=4)
+        plan, truncation = workflow_start.parse_planner_output(text, goal="Research topic", max_jobs=4)
         self.assertEqual(plan["title"], "Example")
         self.assertEqual(plan["jobs"][0]["name"], "research")
+        self.assertFalse(truncation["truncated"])
 
     def test_start_rejects_empty_goal(self) -> None:
         """Reject empty natural-language goals before creating workflow state."""
