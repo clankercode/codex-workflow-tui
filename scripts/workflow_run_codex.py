@@ -752,6 +752,68 @@ def stop_requested(control: dict[str, Any]) -> bool:
     return bool(control.get("stop_requested")) or str(control.get("status", "")) == "cancelled"
 
 
+async def poll_stop(run_id: str, interval: float = 1.0) -> None:
+    """Return once a workflow stop is observed for the run."""
+    while True:
+        if stop_requested(run_control(run_id)):
+            return
+        await asyncio.sleep(interval)
+
+
+async def wait_for_process_completion(
+    run_id: str,
+    proc: asyncio.subprocess.Process,
+    stdout_task: asyncio.Task,
+    stderr_task: asyncio.Task,
+    wait_task: asyncio.Task,
+    timeout: float | None,
+) -> tuple[bool, bool, int | None]:
+    """Race process completion against stop request and timeout.
+
+    Returns (timed_out, stopped, exit_code). The process group is terminated
+    on timeout or stop. The stop-poll task is always cancelled and joined.
+    """
+    poll_task = asyncio.create_task(poll_stop(run_id))
+    worker_gather = asyncio.gather(stdout_task, stderr_task, wait_task)
+    timed_out = False
+    stopped = False
+    try:
+        if timeout is not None:
+            first_done, _pending = await asyncio.wait_for(
+                asyncio.wait({worker_gather, poll_task}, return_when=asyncio.FIRST_COMPLETED),
+                timeout=timeout,
+            )
+        else:
+            first_done, _pending = await asyncio.wait({worker_gather, poll_task}, return_when=asyncio.FIRST_COMPLETED)
+        if poll_task in first_done:
+            stopped = True
+            await terminate_process_group(proc)
+            worker_gather.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await worker_gather
+            return timed_out, stopped, None
+        # Worker finished first: cancel poll task, drain worker, and return.
+        poll_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await poll_task
+        await worker_gather
+        return timed_out, stopped, wait_task.result()
+    except asyncio.TimeoutError:
+        timed_out = True
+        await terminate_process_group(proc)
+        worker_gather.cancel()
+        poll_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker_gather
+        with contextlib.suppress(asyncio.CancelledError):
+            await poll_task
+        return timed_out, stopped, None
+    finally:
+        poll_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await poll_task
+
+
 async def wait_until_launch_allowed(run_id: str, agent_id: str) -> bool:
     """Block while paused, returning false if the run is stopped before launch."""
     marked_paused = False
@@ -896,25 +958,26 @@ async def run_worker(
                 stdout_task = asyncio.create_task(append_stream_to_file(proc.stdout, jsonl_path, update_live_telemetry))
                 stderr_task = asyncio.create_task(append_stream_to_file(proc.stderr, stderr_path, update_live_telemetry))
                 wait_task = asyncio.create_task(proc.wait())
-                timed_out = False
-                try:
-                    await asyncio.wait_for(asyncio.gather(stdout_task, stderr_task, wait_task), timeout=timeout)
-                except asyncio.TimeoutError:
-                    timed_out = True
+                timed_out, stopped, exit_code = await wait_for_process_completion(
+                    run_id, proc, stdout_task, stderr_task, wait_task, timeout
+                )
+                if stopped:
+                    update_agent(
+                        run_id,
+                        agent["agent_id"],
+                        status="cancelled",
+                        summary="cancelled by workflow stop request",
+                        exit_code=130,
+                    )
+                    return
+                if timed_out:
                     last_timed_out = True
-                    await terminate_process_group(proc)
-                    for task in (stdout_task, stderr_task, wait_task):
-                        task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await asyncio.gather(stdout_task, stderr_task, wait_task)
                 proc = None
                 stdout_text = read_text_from_offset(jsonl_path, stdout_attempt_offset)
                 stderr_text = read_text_from_offset(stderr_path, stderr_attempt_offset)
                 if timed_out:
                     exit_code = 124
                     stderr_text += f"\nworkflow timeout after {timeout}s\n"
-                else:
-                    exit_code = wait_task.result()
 
                 extracted = provider.extract_result(agent, exit_code, stdout_text=stdout_text, stderr_text=stderr_text)
                 validation_error: str | None = None

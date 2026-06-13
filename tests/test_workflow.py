@@ -1323,6 +1323,81 @@ class WorkflowScriptTests(unittest.TestCase):
 
         self.assertNotEqual(asyncio.run(run_case()), 0)
 
+    def test_stop_promptly_terminates_in_flight_worker(self) -> None:
+        """A cooperative wf stop must terminate a running worker process."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_codex = fake_bin / "codex"
+            fake_codex.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import signal
+                    import sys
+                    import time
+
+                    def on_term(signum, frame):
+                        sys.exit(0)
+
+                    signal.signal(signal.SIGTERM, on_term)
+                    time.sleep(60)
+                    sys.stdout.write("should not finish\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            command = [
+                sys.executable,
+                str(SCRIPTS / "workflow_run.py"),
+                "--title",
+                "Stop In Flight",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--timeout-secs",
+                "60",
+                "--job",
+                "alpha::Alpha prompt",
+            ]
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            run_id: str | None = None
+            try:
+                state_dir = tmp_path / "state" / "runs"
+                for _ in range(50):
+                    if proc.poll() is not None:
+                        break
+                    if run_id is None and state_dir.exists():
+                        run_dirs = [d for d in state_dir.iterdir() if d.is_dir()]
+                        if run_dirs:
+                            candidate = run_dirs[0] / "run.json"
+                            if candidate.exists():
+                                run_id = json.loads(candidate.read_text(encoding="utf-8"))["run_id"]
+                    if run_id:
+                        run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+                        if run["agents"] and run["agents"][0].get("status") == "running":
+                            break
+                    time.sleep(0.2)
+                self.assertIsNotNone(run_id)
+                self.run_script("workflow_state.py", "stop", run_id, "--no-terminate", env=env)
+                stdout, stderr = proc.communicate(timeout=10)
+                self.assertNotEqual(proc.returncode, 0, msg=f"stdout={stdout}\nstderr={stderr}")
+                run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+                self.assertEqual(run["status"], "cancelled")
+                self.assertEqual(run["agents"][0]["status"], "cancelled")
+                self.assertIn("stop request", run["agents"][0]["summary"].lower())
+            except Exception:
+                proc.kill()
+                raise
+
     def test_telemetry_fields_are_optional_when_tui_parser_cannot_load(self) -> None:
         """Do not fail workers when the optional TUI telemetry parser is unavailable."""
         sys.path.insert(0, str(SCRIPTS))
