@@ -1390,6 +1390,136 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agent["failure_retry_count"], 1)
             self.assertEqual(agent["result"], "recovered after transient failure\n")
 
+    def test_worker_timeout_marks_agent_failed(self) -> None:
+        """A worker that exceeds --timeout-secs is terminated and marked failed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import signal
+                    import sys
+                    import time
+
+                    def on_term(signum, frame):
+                        sys.exit(0)
+
+                    signal.signal(signal.SIGTERM, on_term)
+                    time.sleep(10)
+                    sys.stdout.write("should not finish\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            launched = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "workflow_run.py"),
+                    "--title",
+                    "Worker Timeout",
+                    "--cwd",
+                    str(ROOT),
+                    "--runner",
+                    "ccc-opencode",
+                    "--startup-delay",
+                    "0",
+                    "--timeout-secs",
+                    "1",
+                    "--job",
+                    "alpha::Alpha prompt",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["status"], "failed")
+            self.assertEqual(agent["status"], "failed")
+            self.assertEqual(agent["exit_code"], 124)
+            self.assertIn("timeout", agent["summary"].lower())
+
+    def test_worker_timeout_is_retried_with_failure_retries(self) -> None:
+        """A timed-out worker is retried when --failure-retries is configured."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import os
+                    import signal
+                    import sys
+                    import time
+                    from pathlib import Path
+
+                    def on_term(signum, frame):
+                        sys.exit(0)
+
+                    signal.signal(signal.SIGTERM, on_term)
+                    counter = Path(os.environ["CCC_COUNTER"])
+                    count = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
+                    count += 1
+                    counter.write_text(str(count), encoding="utf-8")
+                    if count == 1:
+                        time.sleep(10)
+                        sys.stdout.write("should not finish\\n")
+                        sys.exit(1)
+                    run_dir = Path(os.environ["CCC_RUN_DIR"])
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    (run_dir / "output.txt").write_text("recovered after timeout\\n", encoding="utf-8")
+                    (run_dir / "transcript.txt").write_text("[assistant] recovered after timeout\\n", encoding="utf-8")
+                    sys.stdout.write("[assistant] recovered after timeout\\n")
+                    sys.stderr.write(f">> ccc:output-log >> {run_dir}\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_COUNTER"] = str(tmp_path / "counter.txt")
+            env["CCC_RUN_DIR"] = str(tmp_path / "ccc-run")
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Timeout Retry",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "ccc-opencode",
+                "--startup-delay",
+                "0",
+                "--timeout-secs",
+                "1",
+                "--failure-retries",
+                "1",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual((tmp_path / "counter.txt").read_text(encoding="utf-8"), "2")
+            self.assertEqual(agent["failure_retry_count"], 1)
+            self.assertEqual(agent["result"], "recovered after timeout\n")
+
     def test_generic_ccc_runner_accepts_presets_and_cli_names(self) -> None:
         """Allow --ccc-runner to target both @presets and plain ccc CLI selectors."""
         with tempfile.TemporaryDirectory() as tmp:

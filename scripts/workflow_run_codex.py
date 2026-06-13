@@ -797,6 +797,7 @@ async def run_worker(
             quota_retry_count = 0
             failure_retry_count = 0
             attempt = 0
+            last_timed_out = False
             while True:
                 if not await wait_until_launch_allowed(run_id, agent["agent_id"]):
                     return
@@ -831,14 +832,29 @@ async def run_worker(
                         await proc.stdin.drain()
                     proc.stdin.close()
 
-                await asyncio.gather(
-                    append_stream_to_file(proc.stdout, jsonl_path, update_live_telemetry),
-                    append_stream_to_file(proc.stderr, stderr_path, update_live_telemetry),
-                )
-                exit_code = await proc.wait()
+                timeout = getattr(args, "timeout_secs", None)
+                stdout_task = asyncio.create_task(append_stream_to_file(proc.stdout, jsonl_path, update_live_telemetry))
+                stderr_task = asyncio.create_task(append_stream_to_file(proc.stderr, stderr_path, update_live_telemetry))
+                wait_task = asyncio.create_task(proc.wait())
+                timed_out = False
+                try:
+                    await asyncio.wait_for(asyncio.gather(stdout_task, stderr_task, wait_task), timeout=timeout)
+                except asyncio.TimeoutError:
+                    timed_out = True
+                    last_timed_out = True
+                    await terminate_process_group(proc)
+                    for task in (stdout_task, stderr_task, wait_task):
+                        task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.gather(stdout_task, stderr_task, wait_task)
                 proc = None
                 stdout_text = read_text_from_offset(jsonl_path, stdout_attempt_offset)
                 stderr_text = read_text_from_offset(stderr_path, stderr_attempt_offset)
+                if timed_out:
+                    exit_code = 124
+                    stderr_text += f"\nworkflow timeout after {timeout}s\n"
+                else:
+                    exit_code = wait_task.result()
                 if exit_code != 0 and quota_retry_count < quota_retries and quota_limit_detected(stdout_text, stderr_text):
                     quota_retry_count += 1
                     sleep_seconds = quota_retry_sleep_seconds(args)
@@ -870,22 +886,21 @@ async def run_worker(
 
             extracted = provider.extract_result(agent, exit_code, stdout_text=stdout_text, stderr_text=stderr_text)
             status = "completed" if exit_code == 0 else "failed"
+            summary = extracted.summary
+            result = extracted.result
+            if last_timed_out and status == "failed":
+                timeout_message = f"workflow timeout after {timeout}s"
+                summary = timeout_message
+                result = result or timeout_message
             if stop_requested(run_control(run_id)):
                 status = "cancelled"
-                extracted = WorkerResult(
-                    result=extracted.result,
-                    summary=extracted.summary or "cancelled by workflow stop request",
-                    thread_id=extracted.thread_id,
-                    jsonl_path=extracted.jsonl_path,
-                    log_path=extracted.log_path,
-                    output_path=extracted.output_path,
-                )
+                summary = summary or "cancelled by workflow stop request"
             update_agent(
                 run_id,
                 agent["agent_id"],
                 status=status,
-                result=extracted.result,
-                summary=extracted.summary,
+                result=result,
+                summary=summary,
                 exit_code=exit_code,
                 thread_id=extracted.thread_id,
                 jsonl_path=extracted.jsonl_path,

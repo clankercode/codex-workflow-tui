@@ -210,7 +210,10 @@ def run_planner(args: argparse.Namespace, goal: str) -> tuple[dict[str, Any], di
             "output_path": str(tmp_path / "planner.output.md"),
         }
         command = provider.build_command(agent, planner_args)
-        result = subprocess.run(command, input=provider.stdin_payload(agent, planner_args), text=False, capture_output=True)
+        planner_timeout = getattr(args, "planner_timeout_secs", None)
+        worker_timeout = getattr(args, "timeout_secs", None)
+        timeout = planner_timeout if planner_timeout is not None else worker_timeout
+        result = subprocess.run(command, input=provider.stdin_payload(agent, planner_args), text=False, capture_output=True, timeout=timeout)
         Path(agent["jsonl_path"]).write_bytes(result.stdout)
         Path(agent["log_path"]).write_bytes(result.stderr)
         extracted = provider.extract_result(agent, result.returncode)

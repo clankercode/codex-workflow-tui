@@ -391,7 +391,8 @@ def run_phase(
     """Run one phase for one target and archive its workflow state."""
     started = time.time()
     command = build_command(target, args, spec, phase, workdir, max_agents)
-    result = subprocess.run(command, text=True, capture_output=True, env=os.environ.copy())
+    timeout = args.timeout_secs if getattr(args, "timeout_secs", None) else None
+    result = subprocess.run(command, text=True, capture_output=True, env=os.environ.copy(), timeout=timeout)
     created = parse_created_run(result.stdout)
     run_id = str(created.get("run_id") or f"failed-{int(started)}")
     archive_dir = archive_root / target.label / phase["name"] / run_id
