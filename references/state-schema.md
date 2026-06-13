@@ -235,11 +235,11 @@ Decisions are durable choices that should remain visible after event rollover.
   "ts": "2026-06-11T04:46:00Z",
   "title": "Runner selected: ccc-opencode",
   "rationale": "Run 3 coding-CLI workers with max_agents=4, startup_delay=1.0, sandbox=read-only.",
-  "made_by": "workflow_run.py"
+  "made_by": "workflow_run_codex.py"
 }
 ```
 
-Use decisions for runner/provider choices, scope changes, risk acceptances, and architectural tradeoffs. `workflow_run.py` automatically records its runner/concurrency choice.
+Use decisions for runner/provider choices, scope changes, risk acceptances, and architectural tradeoffs. `workflow_run.py` (a thin shim to `workflow_run_codex.py`) automatically records its runner/concurrency choice.
 
 ## Artifacts
 

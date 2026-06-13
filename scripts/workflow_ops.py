@@ -37,7 +37,7 @@ def load_runs_for_args(args: argparse.Namespace) -> list[dict[str, Any]]:
 def status_line(run: dict[str, Any]) -> str:
     """Return one compact operator status line for a run."""
     metrics = run.get("metrics", {})
-    issues = workflow_health.analyze_run(run)
+    issues = structural_issues(run) + workflow_health.analyze_run(run)
     critical = sum(1 for item in issues if item.get("severity") == workflow_health.CRITICAL)
     warnings = sum(1 for item in issues if item.get("severity") == workflow_health.WARNING)
     checks = run.get("checks", [])
@@ -66,7 +66,7 @@ def cmd_status(args: argparse.Namespace) -> None:
                     "title": run.get("title", ""),
                     "status": run.get("status", ""),
                     "updated_at": run.get("updated_at", ""),
-                    "issues": workflow_health.analyze_run(run),
+                    "issues": structural_issues(run) + workflow_health.analyze_run(run),
                     "metrics": run.get("metrics", {}),
                 }
                 for run in runs
@@ -78,7 +78,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         return
     for run in runs:
         print(status_line(run))
-        issues = workflow_health.analyze_run(run)[:3]
+        issues = (structural_issues(run) + workflow_health.analyze_run(run))[:3]
         for item in issues:
             print(f"  {item['severity']}: {item['title']} - {item['message']}")
 
@@ -111,6 +111,20 @@ def command_status(name: str, *, required: bool = False) -> dict[str, Any]:
     return {"name": name, "ok": bool(path), "path": path or "", "required": required}
 
 
+def command_points_to_checkout(name: str) -> dict[str, Any]:
+    """Check whether an installed workflow wrapper resolves to this checkout."""
+    path = shutil.which(name)
+    if not path:
+        return {"name": f"{name}-in-checkout", "ok": False, "path": "not in PATH", "required": False}
+    try:
+        resolved = Path(path).resolve()
+    except OSError as exc:
+        return {"name": f"{name}-in-checkout", "ok": False, "path": str(exc), "required": False}
+    # The installed `workflow`/`wf` wrappers are typically symlinks to scripts/wf.
+    expected = Path(__file__).resolve().with_name("wf")
+    return {"name": f"{name}-in-checkout", "ok": resolved == expected, "path": str(resolved), "required": False}
+
+
 def writable_dir(path: Path) -> bool:
     """Return whether a directory can be written."""
     try:
@@ -129,6 +143,8 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     checks.append({"name": "workflow-home", "ok": writable_dir(workflow_state.workflow_root()), "path": str(workflow_state.workflow_root()), "required": True})
     for command in ("workflow", "wf", "codex", "ccc", "opencode", "tmux", "git"):
         checks.append(command_status(command, required=False))
+    for command in ("workflow", "wf"):
+        checks.append(command_points_to_checkout(command))
     try:
         import rich  # noqa: F401  # pylint: disable=import-outside-toplevel,unused-import
 
@@ -265,6 +281,8 @@ def cmd_verify(args: argparse.Namespace) -> None:
             raise SystemExit("--record-only requires --status")
         if not args.summary:
             raise SystemExit("--record-only requires --summary")
+        if not (args.evidence_path or args.external_ref):
+            raise SystemExit("--record-only requires evidence provenance via --evidence-path or --external-ref")
     elif not command:
         raise SystemExit("wf verify requires --cmd, or --record-only with --status and --summary")
     elif args.status:
@@ -278,15 +296,17 @@ def cmd_verify(args: argparse.Namespace) -> None:
         exit_code, output, duration = run_verification_command(command, cwd)
     status = args.status if args.record_only else ("passed" if exit_code == 0 else "failed")
     check_id = args.check_id or workflow_state.short_id("chk")
-    log_path = ""
-    if output:
-        logs_dir = Path(run.get("paths", {}).get("logs_dir") or Path(run.get("paths", {}).get("run_dir", ".")) / "logs")
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        log_file = logs_dir / f"{check_id}.log"
-        log_file.write_text(output, encoding="utf-8")
-        log_path = str(log_file)
+    evidence_path = args.evidence_path or ""
+    external_ref = args.external_ref or ""
 
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
+        log_path = ""
+        if output:
+            logs_dir = Path(data.get("paths", {}).get("logs_dir") or Path(data.get("paths", {}).get("run_dir", ".")) / "logs")
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_file = logs_dir / f"{check_id}.log"
+            log_file.write_text(output, encoding="utf-8")
+            log_path = str(log_file)
         check = {
             "check_id": check_id,
             "ts": workflow_state.now(),
@@ -301,16 +321,24 @@ def cmd_verify(args: argparse.Namespace) -> None:
             "summary": first_line(output) or args.summary or status,
             "log_path": log_path,
             "completed_at": workflow_state.now(),
+            "evidence_path": evidence_path,
+            "external_ref": external_ref,
         }
         data.setdefault("checks", []).append(check)
+        event_kind = "verification: external" if args.record_only else "check"
+        event_data: dict[str, Any] = {"check_id": check_id, "name": name, "status": status, "required": check["required"]}
+        if evidence_path:
+            event_data["evidence_path"] = evidence_path
+        if external_ref:
+            event_data["external_ref"] = external_ref
         workflow_state.add_event(
             data,
             "error" if status in {"failed", "error"} else "info",
             f"verification {status}: {name}",
-            kind="check",
+            kind=event_kind,
             operation="recorded",
             source="workflow_ops.verify",
-            data={"check_id": check_id, "name": name, "status": status, "required": check["required"]},
+            data=event_data,
         )
         return check
 
@@ -380,6 +408,21 @@ def cmd_block(args: argparse.Namespace) -> None:
 
     workflow_state.mutate_run(args.run, mutator)
     print_json({"run_id": args.run, "status": "blocked", "reason": args.reason})
+
+
+def cmd_pause(args: argparse.Namespace) -> None:
+    """Pause a run through the operator interface."""
+    workflow_state.cmd_pause(args)
+
+
+def cmd_resume(args: argparse.Namespace) -> None:
+    """Resume a paused run through the operator interface."""
+    workflow_state.cmd_resume(args)
+
+
+def cmd_stop(args: argparse.Namespace) -> None:
+    """Stop a run through the operator interface."""
+    workflow_state.cmd_stop(args)
 
 
 def cmd_preview(args: argparse.Namespace) -> None:
@@ -474,6 +517,8 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--check-id")
     verify.add_argument("--optional", action="store_true")
     verify.add_argument("--record-only", action="store_true")
+    verify.add_argument("--evidence-path", help="path to external evidence for record-only verification")
+    verify.add_argument("--external-ref", help="external reference URI or ticket for record-only verification")
     verify.set_defaults(func=cmd_verify)
 
     done = sub.add_parser("done", help="complete a workflow after safety checks")
@@ -491,6 +536,22 @@ def build_parser() -> argparse.ArgumentParser:
     block.add_argument("--message")
     block.add_argument("--blocked-by")
     block.set_defaults(func=cmd_block)
+
+    pause = sub.add_parser("pause", help="pause a run before launching more workers")
+    pause.add_argument("run")
+    pause.add_argument("--reason")
+    pause.set_defaults(func=cmd_pause)
+
+    resume = sub.add_parser("resume", help="resume a paused run")
+    resume.add_argument("run")
+    resume.add_argument("--reason")
+    resume.set_defaults(func=cmd_resume)
+
+    stop = sub.add_parser("stop", help="cancel a run and terminate recorded active workers")
+    stop.add_argument("run")
+    stop.add_argument("--reason")
+    stop.add_argument("--no-terminate", dest="terminate", action="store_false", help="only update state; do not signal processes")
+    stop.set_defaults(func=cmd_stop, terminate=True)
 
     preview = sub.add_parser("preview", help="preview a worker launch without writing state")
     preview.add_argument("--title", required=True)
@@ -510,9 +571,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def friendly_missing_run(exc: FileNotFoundError) -> str:
+    """Return a friendly run-not-found hint from a raw FileNotFoundError."""
+    path = Path(str(exc.filename)) if exc.filename else None
+    if path and path.name == "run.json":
+        return f"no run {path.parent.name!r} (try: wf list)"
+    return str(exc)
+
+
 def main() -> None:
     args = build_parser().parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except FileNotFoundError as exc:
+        raise SystemExit(friendly_missing_run(exc)) from None
 
 
 if __name__ == "__main__":

@@ -20,6 +20,8 @@ try:
 except ImportError:  # pragma: no cover - this workflow system is Unix-oriented today.
     fcntl = None  # type: ignore[assignment]
 
+_FCNTL_WARNING_EMITTED = False
+
 SCHEMA_VERSION = 1
 DEFAULT_ROOT = Path.home() / ".agents" / "workflow-system"
 STATUS_VALUES = {"pending", "running", "blocked", "completed", "failed", "cancelled", "paused"}
@@ -121,7 +123,16 @@ def save_run(data: dict[str, Any]) -> Path:
 
 @contextlib.contextmanager
 def exclusive_lock(lock_path: Path) -> Any:
-    """Hold an advisory lock for one workflow run directory."""
+    """Hold an advisory lock for one workflow run directory.
+
+    Lock boundary: mutations that load+save run.json should wrap the entire
+    read-modify-write in this lock. Writes outside mutate_run (init, verify log
+    files) should acquire the per-run lock before touching run state or logs.
+    """
+    global _FCNTL_WARNING_EMITTED
+    if fcntl is None and not _FCNTL_WARNING_EMITTED:
+        _FCNTL_WARNING_EMITTED = True
+        sys.stderr.write("warning: fcntl unavailable; workflow locking is disabled\n")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as handle:
         if fcntl is not None:
@@ -137,7 +148,7 @@ def mutate_run(identifier: str, mutator: Any) -> tuple[dict[str, Any], Any, Path
     """Load, mutate, and save a run under its per-run lock."""
     path = run_file(identifier)
     with exclusive_lock(path.parent / ".lock"):
-        data = load_run(str(path))
+        data = load_run(identifier)
         try:
             result = mutator(data)
         except AbortMutation as exc:
@@ -176,8 +187,21 @@ def add_event(run_data: dict[str, Any], level: str, message: str, **extra: Any) 
         "message": message,
     }
     event.update({key: value for key, value in extra.items() if value not in (None, "", {})})
-    run_data.setdefault("events", []).append(event)
-    run_data["events"] = run_data["events"][-250:]
+    events = run_data.setdefault("events", [])
+    events.append(event)
+    if len(events) > 250:
+        # Drop any previous rollover marker so it does not consume a retention slot.
+        events[:] = [e for e in events if not (e.get("kind") == "event-log" and e.get("operation") == "rollover")]
+        events[:] = events[-249:]
+        rollover = {
+            "event_id": short_id("evt"),
+            "ts": now(),
+            "level": "warning",
+            "message": "event log rolled over; oldest events discarded",
+            "kind": "event-log",
+            "operation": "rollover",
+        }
+        events.append(rollover)
     run_data["last_activity_at"] = event_ts
     return event
 
@@ -219,7 +243,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "tags": args.tag or [],
         "created_at": now(),
         "updated_at": now(),
-        "coordinator": {"tool": getattr(args, "coordinator_tool", None) or "codex", "thread_id": args.thread_id or None},
+        "coordinator": {"tool": getattr(args, "coordinator_tool", None) or "codex-direct", "thread_id": args.thread_id or None},
         "paths": {
             "run_dir": str(directory),
             "run_json": str(directory / "run.json"),
@@ -236,11 +260,14 @@ def cmd_init(args: argparse.Namespace) -> None:
         "metrics": {},
     }
     add_event(data, "info", "workflow initialized", kind="workflow", operation="initialized", source="workflow_state.init")
-    save_run(data)
+    with exclusive_lock(directory / ".lock"):
+        save_run(data)
     print(json.dumps({"run_id": rid, "path": data["paths"]["run_json"]}, indent=2))
 
 
 def cmd_add_phase(args: argparse.Namespace) -> None:
+    initial_status = validate_status(args.status)
+
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
         phase_id = args.phase_id or short_id("phase")
         phases = data.setdefault("phases", [])
@@ -250,7 +277,7 @@ def cmd_add_phase(args: argparse.Namespace) -> None:
             "phase_id": phase_id,
             "name": args.name,
             "goal": args.goal or "",
-            "status": validate_status(args.status),
+            "status": initial_status,
             "created_at": created_at,
             "started_at": created_at if args.status in {"running", "completed", "failed", "cancelled"} else None,
             "completed_at": created_at if args.status in {"completed", "failed", "cancelled"} else None,
@@ -274,10 +301,12 @@ def cmd_add_phase(args: argparse.Namespace) -> None:
 
 
 def cmd_update_phase(args: argparse.Namespace) -> None:
+    new_status: str | None = validate_status(args.status) if args.status else None
+
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
         phase = find_item(data.setdefault("phases", []), "phase_id", args.phase)
-        if args.status:
-            phase["status"] = validate_status(args.status)
+        if new_status:
+            phase["status"] = new_status
             if args.status == "running" and not phase.get("started_at"):
                 phase["started_at"] = now()
             if args.status in {"completed", "failed", "cancelled"}:
@@ -303,6 +332,8 @@ def cmd_update_phase(args: argparse.Namespace) -> None:
 
 
 def cmd_add_agent(args: argparse.Namespace) -> None:
+    initial_status = validate_status(args.status)
+
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
         agent_id = args.agent_id or short_id("agent")
         agents = data.setdefault("agents", [])
@@ -314,7 +345,7 @@ def cmd_add_agent(args: argparse.Namespace) -> None:
             "name": args.name,
             "role": args.role or "",
             "agent_type": args.agent_type or "",
-            "status": validate_status(args.status),
+            "status": initial_status,
             "prompt": read_text_arg(args.prompt, args.prompt_file),
             "cwd": str(Path(args.cwd).expanduser().resolve()) if args.cwd else data.get("cwd"),
             "model": args.model or "",
@@ -359,10 +390,12 @@ def cmd_add_agent(args: argparse.Namespace) -> None:
 
 
 def cmd_update_agent(args: argparse.Namespace) -> None:
+    new_status: str | None = validate_status(args.status) if args.status else None
+
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
         agent = find_item(data.setdefault("agents", []), "agent_id", args.agent)
-        if args.status:
-            agent["status"] = validate_status(args.status)
+        if new_status:
+            agent["status"] = new_status
             if args.status == "running" and not agent.get("started_at"):
                 agent["started_at"] = now()
             if args.status in {"completed", "failed", "cancelled"}:
@@ -475,8 +508,15 @@ def cmd_artifact(args: argparse.Namespace) -> None:
 
 
 def cmd_set_status(args: argparse.Namespace) -> None:
+    target_status = validate_status(args.status)
+    if target_status in {"completed", "failed"} and not (args.force or args.allow_recovery):
+        raise SystemExit(
+            f"setting status to {target_status!r} requires --force or --allow-recovery; "
+            "use `wf done` for guarded completion"
+        )
+
     def mutator(data: dict[str, Any]) -> None:
-        data["status"] = validate_status(args.status)
+        data["status"] = target_status
         add_event(
             data,
             "info",
@@ -670,16 +710,17 @@ def format_summary(data: dict[str, Any], detail: bool = False) -> str:
 
 
 def cmd_demo(args: argparse.Namespace) -> None:
-    class DemoArgs:
-        title = args.title
-        prompt = "Demonstration workflow state for TUI validation."
-        prompt_file = None
-        cwd = os.getcwd()
-        mode = "demo"
-        tag = ["demo"]
-        thread_id = None
-
-    cmd_init(DemoArgs)
+    demo_args = argparse.Namespace(
+        title=args.title,
+        prompt="Demonstration workflow state for TUI validation.",
+        prompt_file=None,
+        cwd=os.getcwd(),
+        mode="demo",
+        tag=["demo"],
+        thread_id=None,
+        coordinator_tool=None,
+    )
+    cmd_init(demo_args)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -691,10 +732,10 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--prompt")
     init.add_argument("--prompt-file")
     init.add_argument("--cwd", default=os.getcwd())
-    init.add_argument("--mode", default="hybrid")
+    init.add_argument("--mode", default="hybrid", choices=["hybrid", "native-subagents", "external", "lead-local"])
     init.add_argument("--tag", action="append")
     init.add_argument("--thread-id")
-    init.add_argument("--coordinator-tool", default="codex")
+    init.add_argument("--coordinator-tool", default="codex-direct")
     init.set_defaults(func=cmd_init)
 
     phase = sub.add_parser("add-phase", help="add a phase")
@@ -786,6 +827,8 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("set-status", help="set run status")
     status.add_argument("run")
     status.add_argument("status")
+    status.add_argument("--force", action="store_true", help="allow setting terminal status without gate checks")
+    status.add_argument("--allow-recovery", action="store_true", help="alias for --force when recovering a run")
     status.set_defaults(func=cmd_set_status)
 
     pause = sub.add_parser("pause", help="pause a run before launching more workers")
@@ -822,10 +865,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def friendly_missing_run(exc: FileNotFoundError) -> str:
+    """Return a friendly run-not-found hint from a raw FileNotFoundError."""
+    path = Path(str(exc.filename)) if exc.filename else None
+    if path and path.name == "run.json":
+        return f"no run {path.parent.name!r} (try: wf list)"
+    return str(exc)
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except FileNotFoundError as exc:
+        raise SystemExit(friendly_missing_run(exc)) from None
 
 
 if __name__ == "__main__":

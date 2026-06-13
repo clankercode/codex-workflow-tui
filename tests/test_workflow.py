@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -142,6 +143,50 @@ class WorkflowScriptTests(unittest.TestCase):
         )
         fake_ccc.chmod(0o755)
         return fake_ccc
+
+    def install_fake_codex(self, fake_bin: Path) -> Path:
+        """Install a fake codex binary that returns deterministic JSONL output."""
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        fake_codex = fake_bin / "codex"
+        fake_codex.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env python3
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                state_path = os.environ.get("CODEX_FAKE_STATE")
+                attempt = 0
+                if state_path:
+                    path = Path(state_path)
+                    if path.exists():
+                        attempt = int(path.read_text(encoding="utf-8").strip() or "0")
+                    path.write_text(str(attempt + 1), encoding="utf-8")
+                output = os.environ.get(f"CODEX_FAKE_OUTPUT_{attempt}") or os.environ.get("CODEX_FAKE_OUTPUT", "fake codex result")
+                exit_code = int(os.environ.get("CODEX_FAKE_EXIT_CODE", "0"))
+                event = {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": output},
+                }
+                sys.stdout.write(json.dumps(event) + "\\n")
+                sys.exit(exit_code)
+                """
+            ),
+            encoding="utf-8",
+        )
+        fake_codex.chmod(0o755)
+        return fake_codex
+
+    def codex_fake_env(self, tmp_path: Path) -> dict[str, str]:
+        """Return an environment wired to the deterministic fake codex binary."""
+        fake_bin = tmp_path / "bin"
+        self.install_fake_codex(fake_bin)
+        env = os.environ.copy()
+        env["PATH"] = f"{fake_bin}:{env['PATH']}"
+        env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+        return env
 
     def ccc_fake_env(self, tmp_path: Path) -> dict[str, str]:
         """Return an environment wired to the timed fake ccc binary."""
@@ -317,6 +362,33 @@ class WorkflowScriptTests(unittest.TestCase):
             data = json.loads(created.stdout)
             run = json.loads(Path(data["path"]).read_text(encoding="utf-8"))
             self.assertTrue(str(run["paths"]["run_dir"]).startswith(str(tmp_path / ".agents" / "workflow-system")))
+
+    def test_init_rejects_invalid_mode(self) -> None:
+        """--mode must be one of the documented vocabulary values."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            denied = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "workflow_state.py"),
+                    "init",
+                    "--title",
+                    "Bad Mode",
+                    "--prompt",
+                    "mode test",
+                    "--cwd",
+                    str(ROOT),
+                    "--mode",
+                    "bogus",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("invalid choice", denied.stderr)
 
     def test_add_agent_with_terminal_status_records_completion_time(self) -> None:
         """Backfilled/local completed agents should have lifecycle timestamps immediately."""
@@ -510,6 +582,42 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(json.loads(self.run_wf("show", run_id, "--json", env=env).stdout)["status"], "running")
             self.run_wf("stop", run_id, "--no-terminate", env=env)
             self.assertEqual(json.loads(self.run_wf("show", run_id, "--json", env=env).stdout)["status"], "cancelled")
+
+    def test_missing_run_emits_friendly_message(self) -> None:
+        """A missing run id should suggest wf list instead of a raw traceback."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            for cmd in ("show", "check", "done"):
+                with self.subTest(cmd=cmd):
+                    result = self.run_wf(cmd, "wf-missing-run-id", env=env, check=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("no run 'wf-missing-run-id'", result.stderr)
+                    self.assertIn("try: wf list", result.stderr)
+
+    def test_workflow_ops_pause_resume_stop_json(self) -> None:
+        """Lifecycle controls are available directly through workflow_ops.py."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_script(
+                "workflow_state.py",
+                "init",
+                "--title",
+                "Ops Control",
+                "--prompt",
+                "exercise ops controls",
+                "--cwd",
+                str(ROOT),
+                env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            pause = json.loads(self.run_script("workflow_ops.py", "pause", run_id, "--reason", "ops pause", env=env).stdout)
+            self.assertEqual(pause["status"], "paused")
+            resume = json.loads(self.run_script("workflow_ops.py", "resume", run_id, env=env).stdout)
+            self.assertEqual(resume["status"], "running")
+            stop = json.loads(self.run_script("workflow_ops.py", "stop", run_id, "--no-terminate", env=env).stdout)
+            self.assertEqual(stop["status"], "cancelled")
 
     def test_mock_worker_waits_while_run_is_paused(self) -> None:
         """Paused cooperative runs should not launch pending workers until resumed."""
@@ -1215,6 +1323,81 @@ class WorkflowScriptTests(unittest.TestCase):
 
         self.assertNotEqual(asyncio.run(run_case()), 0)
 
+    def test_stop_promptly_terminates_in_flight_worker(self) -> None:
+        """A cooperative wf stop must terminate a running worker process."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_codex = fake_bin / "codex"
+            fake_codex.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import signal
+                    import sys
+                    import time
+
+                    def on_term(signum, frame):
+                        sys.exit(0)
+
+                    signal.signal(signal.SIGTERM, on_term)
+                    time.sleep(60)
+                    sys.stdout.write("should not finish\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            command = [
+                sys.executable,
+                str(SCRIPTS / "workflow_run.py"),
+                "--title",
+                "Stop In Flight",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--timeout-secs",
+                "60",
+                "--job",
+                "alpha::Alpha prompt",
+            ]
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            run_id: str | None = None
+            try:
+                state_dir = tmp_path / "state" / "runs"
+                for _ in range(50):
+                    if proc.poll() is not None:
+                        break
+                    if run_id is None and state_dir.exists():
+                        run_dirs = [d for d in state_dir.iterdir() if d.is_dir()]
+                        if run_dirs:
+                            candidate = run_dirs[0] / "run.json"
+                            if candidate.exists():
+                                run_id = json.loads(candidate.read_text(encoding="utf-8"))["run_id"]
+                    if run_id:
+                        run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+                        if run["agents"] and run["agents"][0].get("status") == "running":
+                            break
+                    time.sleep(0.2)
+                self.assertIsNotNone(run_id)
+                self.run_script("workflow_state.py", "stop", run_id, "--no-terminate", env=env)
+                stdout, stderr = proc.communicate(timeout=10)
+                self.assertNotEqual(proc.returncode, 0, msg=f"stdout={stdout}\nstderr={stderr}")
+                run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+                self.assertEqual(run["status"], "cancelled")
+                self.assertEqual(run["agents"][0]["status"], "cancelled")
+                self.assertIn("stop request", run["agents"][0]["summary"].lower())
+            except Exception:
+                proc.kill()
+                raise
+
     def test_telemetry_fields_are_optional_when_tui_parser_cannot_load(self) -> None:
         """Do not fail workers when the optional TUI telemetry parser is unavailable."""
         sys.path.insert(0, str(SCRIPTS))
@@ -1390,6 +1573,459 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agent["failure_retry_count"], 1)
             self.assertEqual(agent["result"], "recovered after transient failure\n")
 
+    def test_worker_timeout_marks_agent_failed(self) -> None:
+        """A worker that exceeds --timeout-secs is terminated and marked failed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import signal
+                    import sys
+                    import time
+
+                    def on_term(signum, frame):
+                        sys.exit(0)
+
+                    signal.signal(signal.SIGTERM, on_term)
+                    time.sleep(10)
+                    sys.stdout.write("should not finish\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            launched = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "workflow_run.py"),
+                    "--title",
+                    "Worker Timeout",
+                    "--cwd",
+                    str(ROOT),
+                    "--runner",
+                    "ccc-opencode",
+                    "--startup-delay",
+                    "0",
+                    "--timeout-secs",
+                    "1",
+                    "--job",
+                    "alpha::Alpha prompt",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["status"], "failed")
+            self.assertEqual(agent["status"], "failed")
+            self.assertEqual(agent["exit_code"], 124)
+            self.assertIn("timeout", agent["summary"].lower())
+
+    def test_worker_timeout_is_retried_with_failure_retries(self) -> None:
+        """A timed-out worker is retried when --failure-retries is configured."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import os
+                    import signal
+                    import sys
+                    import time
+                    from pathlib import Path
+
+                    def on_term(signum, frame):
+                        sys.exit(0)
+
+                    signal.signal(signal.SIGTERM, on_term)
+                    counter = Path(os.environ["CCC_COUNTER"])
+                    count = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
+                    count += 1
+                    counter.write_text(str(count), encoding="utf-8")
+                    if count == 1:
+                        time.sleep(10)
+                        sys.stdout.write("should not finish\\n")
+                        sys.exit(1)
+                    run_dir = Path(os.environ["CCC_RUN_DIR"])
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    (run_dir / "output.txt").write_text("recovered after timeout\\n", encoding="utf-8")
+                    (run_dir / "transcript.txt").write_text("[assistant] recovered after timeout\\n", encoding="utf-8")
+                    sys.stdout.write("[assistant] recovered after timeout\\n")
+                    sys.stderr.write(f">> ccc:output-log >> {run_dir}\\n")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_COUNTER"] = str(tmp_path / "counter.txt")
+            env["CCC_RUN_DIR"] = str(tmp_path / "ccc-run")
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Timeout Retry",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "ccc-opencode",
+                "--startup-delay",
+                "0",
+                "--timeout-secs",
+                "1",
+                "--failure-retries",
+                "1",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual((tmp_path / "counter.txt").read_text(encoding="utf-8"), "2")
+            self.assertEqual(agent["failure_retry_count"], 1)
+            self.assertEqual(agent["result"], "recovered after timeout\n")
+
+    def test_event_log_writes_rollover_marker_at_cap(self) -> None:
+        """add_event must not silently drop old events; it should record a rollover."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_state  # pylint: disable=import-outside-toplevel
+
+        run: dict[str, Any] = {
+            "run_id": "wf-events",
+            "events": [],
+            "metrics": {},
+            "paths": {"run_json": "/dev/null"},
+        }
+        for index in range(251):
+            workflow_state.add_event(run, "info", f"event {index}")
+        self.assertEqual(len(run["events"]), 250)
+        rollover = next(event for event in run["events"] if event.get("kind") == "event-log")
+        self.assertEqual(rollover["level"], "warning")
+        self.assertIn("rolled over", rollover["message"])
+        retained_messages = [event["message"] for event in run["events"] if event.get("kind") != "event-log"]
+        self.assertEqual(retained_messages[0], "event 2")
+        self.assertEqual(retained_messages[-1], "event 250")
+
+    def test_mock_plan_records_truncation_when_max_jobs_cuts_list(self) -> None:
+        """Planner output truncated by --max-jobs is recorded as a decision and event."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            launched = self.run_script(
+                "workflow_start.py",
+                "write a phd thesis",
+                "--title",
+                "Truncated Plan",
+                "--mock-plan",
+                "--max-jobs",
+                "2",
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(len(data["agents"]), 2)
+            decision_titles = [decision["title"] for decision in data["decisions"]]
+            self.assertIn("Planner job list truncated", decision_titles)
+            self.assertTrue(any(event.get("kind") == "planning" and event.get("operation") == "truncated" for event in data["events"]))
+
+    def test_bare_prompt_job_name_is_stable_sha1(self) -> None:
+        """parse_job without '::' must use a stable, collision-resistant id."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_run_codex  # pylint: disable=import-outside-toplevel
+
+        prompt = "find bugs in the auth module"
+        job = workflow_run_codex.parse_job(prompt)
+        expected = f"job-{hashlib.sha1(prompt.encode('utf-8')).hexdigest()[:8]}"
+        self.assertEqual(job["name"], expected)
+        self.assertEqual(job["prompt"], prompt)
+        # Same prompt yields same name across calls.
+        self.assertEqual(workflow_run_codex.parse_job(prompt)["name"], expected)
+
+    def test_parse_job_json_object_carries_stage_and_depends_on(self) -> None:
+        """JSON --job values should preserve stage/depends_on metadata."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_run_codex  # pylint: disable=import-outside-toplevel
+
+        raw = json.dumps(
+            {
+                "name": "reviewer",
+                "role": "review",
+                "prompt": "Review the plan.",
+                "stage": "stage-2",
+                "depends_on": "planner",
+            }
+        )
+        job = workflow_run_codex.parse_job(raw)
+        self.assertEqual(job["name"], "reviewer")
+        self.assertEqual(job["stage"], "stage-2")
+        self.assertEqual(job["depends_on"], "planner")
+
+    def test_pipeline_respects_dependencies_across_stages(self) -> None:
+        """A multi-stage pipeline completes with dependent jobs advancing independently."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = self.codex_fake_env(tmp_path)
+            env["CODEX_FAKE_OUTPUT"] = "done"
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Pipeline",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--job",
+                json.dumps({"name": "a", "prompt": "A", "stage": "1"}),
+                "--job",
+                json.dumps({"name": "b", "prompt": "B", "stage": "2", "depends_on": "a"}),
+                "--job",
+                json.dumps({"name": "c", "prompt": "C", "stage": "3", "depends_on": "b"}),
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            by_name = {agent["name"]: agent for agent in data["agents"]}
+            self.assertEqual(len(by_name), 3)
+            for name in ("a", "b", "c"):
+                self.assertEqual(by_name[name]["status"], "completed")
+            # Dependencies enforced order: a before b before c.
+            self.assertLessEqual(
+                datetime.fromisoformat(by_name["a"]["completed_at"]),
+                datetime.fromisoformat(by_name["b"]["started_at"]),
+            )
+            self.assertLessEqual(
+                datetime.fromisoformat(by_name["b"]["completed_at"]),
+                datetime.fromisoformat(by_name["c"]["started_at"]),
+            )
+
+    def test_expansion_envelope_enqueues_and_runs_new_jobs(self) -> None:
+        """A worker returning a workflow-expansion envelope adds new jobs mid-run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = self.codex_fake_env(tmp_path)
+            envelope = json.dumps(
+                {
+                    "kind": "workflow-expansion",
+                    "schema_version": 1,
+                    "jobs": [
+                        {"name": "child-1", "prompt": "Child one"},
+                        {"name": "child-2", "prompt": "Child two"},
+                    ],
+                }
+            )
+            env["CODEX_FAKE_OUTPUT"] = envelope
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Expansion",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--max-round",
+                "2",
+                "--job",
+                json.dumps({"name": "parent", "prompt": "Expand"}),
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            names = {agent["name"] for agent in data["agents"]}
+            self.assertEqual(names, {"parent", "child-1", "child-2"})
+            self.assertTrue(
+                any(
+                    event.get("kind") == "expansion" and event.get("operation") == "added" and event.get("data", {}).get("added") == 2
+                    for event in data["events"]
+                )
+            )
+
+    def test_expansion_caps_hold_and_are_logged(self) -> None:
+        """max-job and max-round caps truncate expansion and log a warning."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = self.codex_fake_env(tmp_path)
+            envelope = json.dumps(
+                {
+                    "kind": "workflow-expansion",
+                    "schema_version": 1,
+                    "jobs": [{"name": f"child-{index}", "prompt": f"Child {index}"} for index in range(5)],
+                }
+            )
+            env["CODEX_FAKE_OUTPUT"] = envelope
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Expansion Caps",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--max-job",
+                "3",
+                "--max-round",
+                "2",
+                "--job",
+                json.dumps({"name": "parent", "prompt": "Expand"}),
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual(len(data["agents"]), 3)
+            truncation_events = [
+                event
+                for event in data["events"]
+                if event.get("kind") == "expansion" and event.get("operation") == "truncated"
+            ]
+            self.assertTrue(truncation_events)
+            self.assertTrue(
+                any(event["data"]["cap"] == "max-job" and event["data"]["dropped"] == 3 for event in truncation_events),
+                msg=f"expected max-job truncation with 3 dropped, got {truncation_events}",
+            )
+
+    def test_schema_validation_passes_and_stores_result_json(self) -> None:
+        """A worker output matching --result-schema stores the parsed object."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            schema_path = tmp_path / "schema.json"
+            schema_path.write_text(
+                json.dumps({"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}),
+                encoding="utf-8",
+            )
+            env = self.codex_fake_env(tmp_path)
+            env["CODEX_FAKE_OUTPUT"] = json.dumps({"answer": "yes"})
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Schema Valid",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--result-schema",
+                str(schema_path),
+                "--job",
+                "ask::Return JSON.",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            agent = data["agents"][0]
+            self.assertEqual(agent["status"], "completed")
+            self.assertEqual(agent["result_json"], {"answer": "yes"})
+
+    def test_schema_validation_failure_marks_agent_failed(self) -> None:
+        """A worker output that violates the schema is marked failed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            schema_path = tmp_path / "schema.json"
+            schema_path.write_text(
+                json.dumps({"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}),
+                encoding="utf-8",
+            )
+            env = self.codex_fake_env(tmp_path)
+            env["CODEX_FAKE_OUTPUT"] = "not valid json"
+            launched = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "workflow_run.py"),
+                    "--title",
+                    "Schema Invalid",
+                    "--cwd",
+                    str(ROOT),
+                    "--runner",
+                    "codex-direct",
+                    "--startup-delay",
+                    "0",
+                    "--result-schema",
+                    str(schema_path),
+                    "--job",
+                    "ask::Return JSON.",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "failed")
+            agent = data["agents"][0]
+            self.assertEqual(agent["status"], "failed")
+            self.assertIn("schema validation failed", agent["result"])
+
+    def test_schema_validation_failure_is_retried_with_error_in_prompt(self) -> None:
+        """Schema failures consume failure retries and include the error in the retry prompt."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            schema_path = tmp_path / "schema.json"
+            schema_path.write_text(
+                json.dumps({"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}),
+                encoding="utf-8",
+            )
+            state_path = tmp_path / "codex-state.txt"
+            state_path.write_text("0", encoding="utf-8")
+            env = self.codex_fake_env(tmp_path)
+            env["CODEX_FAKE_STATE"] = str(state_path)
+            env["CODEX_FAKE_OUTPUT_0"] = json.dumps({"answer": 123})
+            env["CODEX_FAKE_OUTPUT_1"] = json.dumps({"answer": "yes"})
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Schema Retry",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--failure-retries",
+                "1",
+                "--result-schema",
+                str(schema_path),
+                "--job",
+                "ask::Return JSON.",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            agent = data["agents"][0]
+            self.assertEqual(agent["status"], "completed")
+            self.assertEqual(agent["result_json"], {"answer": "yes"})
+            self.assertEqual(agent["failure_retry_count"], 1)
+
     def test_generic_ccc_runner_accepts_presets_and_cli_names(self) -> None:
         """Allow --ccc-runner to target both @presets and plain ccc CLI selectors."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1427,6 +2063,35 @@ class WorkflowScriptTests(unittest.TestCase):
             start_args = [event["args"] for event in self.read_ccc_events(tmp_path) if event["event"] == "start"]
             for expected_arg in ("@mm", "kimi"):
                 self.assertTrue(any(expected_arg in args for args in start_args), msg=f"missing {expected_arg} in {start_args}")
+
+    def test_ccc_claude_selector_forwards_cwd(self) -> None:
+        """The 'claude' ccc selector should receive explicit cwd forwarding."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = self.ccc_fake_env(tmp_path)
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Fake Ccc Claude",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "ccc",
+                "--ccc-runner",
+                "claude",
+                "--startup-delay",
+                "0",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            agent = data["agents"][0]
+            self.assertEqual(data["mode"], "ccc-claude")
+            self.assertIn("--cd", agent["command_preview"])
+            start_args = [event["args"] for event in self.read_ccc_events(tmp_path) if event["event"] == "start"]
+            self.assertTrue(any("--runner-arg" in args and "--cd" in args for args in start_args))
 
     def test_ccc_kimi_runner_passes_large_kimi_step_limit(self) -> None:
         """Raise Kimi's per-turn step/tool-call limit for ccc-backed Kimi workers."""
@@ -1563,9 +2228,10 @@ class WorkflowScriptTests(unittest.TestCase):
             ```
             """
         )
-        plan = workflow_start.parse_planner_output(text, goal="Research topic", max_jobs=4)
+        plan, truncation = workflow_start.parse_planner_output(text, goal="Research topic", max_jobs=4)
         self.assertEqual(plan["title"], "Example")
         self.assertEqual(plan["jobs"][0]["name"], "research")
+        self.assertFalse(truncation["truncated"])
 
     def test_start_rejects_empty_goal(self) -> None:
         """Reject empty natural-language goals before creating workflow state."""
@@ -1823,6 +2489,32 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertNotEqual(denied.returncode, 0)
             self.assertIn("invalid-status", denied.stdout)
 
+    def test_status_line_includes_structural_issues(self) -> None:
+        """wf status must surface orphan links and invalid statuses that wf check enforces."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Structural Status", "--prompt", "struct", "--cwd", str(ROOT), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            data = json.loads(run_path.read_text(encoding="utf-8"))
+            data["phases"].append({
+                "phase_id": "phase-orphan",
+                "name": "Orphan",
+                "status": "completed",
+                "agent_ids": ["missing-agent"],
+                "created_at": data["created_at"],
+                "started_at": None,
+                "completed_at": data["created_at"],
+            })
+            run_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            status = self.run_wf("status", "--all", env=env)
+            self.assertIn("Phase references missing agent", status.stdout)
+            check = self.run_wf("check", run_id, env=env, check=False)
+            self.assertIn("Phase references missing agent", check.stdout)
+
     def test_operator_done_evaluates_blockers_inside_mutation_lock(self) -> None:
         """Recheck completion blockers against the locked state just before writing done."""
         sys.path.insert(0, str(SCRIPTS))
@@ -1871,7 +2563,7 @@ class WorkflowScriptTests(unittest.TestCase):
             created = self.run_wf("init", "--title", "Skipped Optional", "--prompt", "skip", "--cwd", str(ROOT), env=env)
             run_id = json.loads(created.stdout)["run_id"]
 
-            result = self.run_wf("verify", run_id, "--record-only", "--status", "skipped", "--optional", "--summary", "not applicable", env=env)
+            result = self.run_wf("verify", run_id, "--record-only", "--status", "skipped", "--optional", "--summary", "not applicable", "--external-ref", "https://example.invalid/skip", env=env)
 
             self.assertEqual(json.loads(result.stdout)["status"], "skipped")
 
@@ -1899,7 +2591,7 @@ class WorkflowScriptTests(unittest.TestCase):
             created = self.run_wf("init", "--title", "Blocked Done", "--prompt", "blocked", "--cwd", str(ROOT), env=env)
             run_id = json.loads(created.stdout)["run_id"]
             self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
-            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env)
+            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", "--external-ref", "https://example.invalid/review", env=env)
             self.run_wf("block", run_id, "waiting for reviewer", env=env)
 
             denied = self.run_wf("done", run_id, env=env, check=False)
@@ -1917,7 +2609,7 @@ class WorkflowScriptTests(unittest.TestCase):
             run_id = created_data["run_id"]
             run_path = Path(created_data["path"])
             self.run_wf("add-phase", run_id, "--phase-id", "phase-active", "--name", "Active", "--status", "running", env=env)
-            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env)
+            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", "--external-ref", "https://example.invalid/manual", env=env)
             before = run_path.read_text(encoding="utf-8")
 
             denied = self.run_wf("done", run_id, env=env, check=False)
@@ -2211,6 +2903,8 @@ class WorkflowScriptTests(unittest.TestCase):
                 "--optional",
                 "--summary",
                 "non-blocking manual note",
+                "--external-ref",
+                "https://example.invalid/optional",
                 env=env,
             )
 
@@ -2227,13 +2921,166 @@ class WorkflowScriptTests(unittest.TestCase):
             created = self.run_wf("init", "--title", "Cancelled Done", "--prompt", "cancelled", "--cwd", str(ROOT), env=env)
             run_id = json.loads(created.stdout)["run_id"]
             self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
-            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env)
+            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", "--external-ref", "https://example.invalid/manual", env=env)
             self.run_wf("set-status", run_id, "cancelled", env=env)
 
             denied = self.run_wf("done", run_id, env=env, check=False)
 
             self.assertNotEqual(denied.returncode, 0)
             self.assertIn("run-cancelled", denied.stdout)
+
+    def test_set_status_completed_requires_force(self) -> None:
+        """Block accidental direct completion via set-status without recovery flag."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Force Status", "--prompt", "status", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+
+            denied = self.run_wf("set-status", run_id, "completed", env=env, check=False)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("requires --force", denied.stderr)
+
+            self.run_wf("set-status", run_id, "completed", "--force", env=env)
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+
+    def test_record_only_pass_requires_provenance(self) -> None:
+        """Reject record-only passes that do not carry evidence provenance."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Provenance Gate", "--prompt", "gate", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+
+            denied = self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env, check=False)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("requires evidence provenance", denied.stderr)
+
+            self.run_wf(
+                "verify",
+                run_id,
+                "--record-only",
+                "--status",
+                "passed",
+                "--summary",
+                "manual pass",
+                "--external-ref",
+                "https://example.invalid/evidence",
+                env=env,
+            )
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["checks"][0]["external_ref"], "https://example.invalid/evidence")
+            self.assertTrue(any(event.get("kind") == "verification: external" for event in data["events"]))
+
+    def test_invalid_status_rejected_before_mutation(self) -> None:
+        """Invalid status arguments must not touch the run file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Validate First", "--prompt", "validate", "--cwd", str(ROOT), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            before = run_path.read_text(encoding="utf-8")
+
+            denied = self.run_wf("set-status", run_id, "bogus", env=env, check=False)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("invalid status", denied.stderr)
+            self.assertEqual(run_path.read_text(encoding="utf-8"), before)
+
+    def test_record_only_pass_without_provenance_cannot_satisfy_gate(self) -> None:
+        """Legacy record-only passes without provenance no longer satisfy wf done."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Legacy Bypass", "--prompt", "bypass", "--cwd", str(ROOT), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+            data = json.loads(run_path.read_text(encoding="utf-8"))
+            data["checks"].append(
+                {
+                    "check_id": "chk-legacy",
+                    "ts": data["created_at"],
+                    "name": "legacy manual pass",
+                    "kind": "verification",
+                    "status": "passed",
+                    "required": True,
+                    "command": "",
+                    "cwd": str(ROOT),
+                    "exit_code": 0,
+                    "duration_seconds": 0.0,
+                    "summary": "manual pass",
+                    "log_path": "",
+                    "completed_at": data["created_at"],
+                }
+            )
+            run_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            denied = self.run_wf("done", run_id, env=env, check=False)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("verification-missing", denied.stdout)
+
+    def test_fcntl_unavailable_emits_one_time_warning(self) -> None:
+        """Warn the operator once when advisory locking is not available."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_state  # pylint: disable=import-outside-toplevel
+
+        original_fcntl = workflow_state.fcntl
+        original_flag = workflow_state._FCNTL_WARNING_EMITTED
+        try:
+            workflow_state.fcntl = None
+            workflow_state._FCNTL_WARNING_EMITTED = False
+            run = {
+                "run_id": "wf-lock-warning",
+                "status": "running",
+                "phases": [],
+                "agents": [],
+                "events": [],
+                "decisions": [],
+                "artifacts": [],
+                "checks": [],
+                "control": {},
+                "metrics": {},
+                "paths": {"run_json": "/dev/null"},
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+            stderr_capture = io.StringIO()
+            with contextlib.redirect_stderr(stderr_capture):
+
+                def mutator(data: dict[str, object]) -> None:
+                    data["updated_at"] = "2026-01-01T00:00:01Z"
+
+                with workflow_state.exclusive_lock(Path("/tmp/wf-lock-warning.lock")):
+                    mutator(run)
+                with workflow_state.exclusive_lock(Path("/tmp/wf-lock-warning.lock")):
+                    mutator(run)
+            self.assertIn("fcntl unavailable", stderr_capture.getvalue())
+            self.assertEqual(stderr_capture.getvalue().count("fcntl unavailable"), 1)
+        finally:
+            workflow_state.fcntl = original_fcntl
+            workflow_state._FCNTL_WARNING_EMITTED = original_flag
+
+    def test_doctor_reports_wf_symlink_resolves_to_checkout(self) -> None:
+        """doctor reports whether the installed wf/workflow wrappers point here."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            fake_bin = Path(tmp) / "bin"
+            fake_bin.mkdir()
+            local_wf = ROOT / "scripts" / "wf"
+            (fake_bin / "wf").symlink_to(local_wf)
+            (fake_bin / "workflow").symlink_to(local_wf)
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            result = self.run_wf("doctor", "--json", env=env)
+            data = json.loads(result.stdout)
+            by_name = {check["name"]: check for check in data["checks"]}
+            self.assertTrue(by_name["wf-in-checkout"]["ok"])
+            self.assertTrue(by_name["workflow-in-checkout"]["ok"])
+            self.assertIn(str(local_wf), by_name["wf-in-checkout"]["path"])
 
     def test_operator_doctor_distinguishes_required_and_optional_checks(self) -> None:
         """Keep optional provider commands from making doctor report a broken install."""
