@@ -12,33 +12,26 @@ between "works" and "enforces good multi-agent practice by construction."
 
 ## Architectural (methodology outruns the engine)
 
-### A1 — No pipelining / mid-phase expansion (barrier-only fan-out)  · HIGH
-`run_all` freezes the agent set at run creation and `asyncio.gather`s it as one
-flat batch (`scripts/workflow_run_codex.py` ~L923-930); the multi-phase outer
-drivers barrier hard between phases (`workflow_runner_matrix.py` ~L433-437;
-`workflow_start.py` planner→barrier→workers ~L304-323). Wall-clock is therefore
-`Σ max(phase_p)`, not `max_chain(Σ)` — the exact cost the `pipeline()` primitive
-avoids. The `{"kind":"workflow-expansion"}` envelope hinted in
-`coding-cli-runners.md` is unimplemented.
-**Roadmap:** replace the static `gather` in `run_all` with a dynamic task pool
-(`asyncio.Queue` + worker pool) that accepts new agents mid-run; add a `stage`/
-`depends_on` field to `parse_job` so an item can advance independently; gate
-expansion with `max-round`/`max-job` guards. Substantial, not a patch. Until then,
-**pipeline at the lead level** (see `workflow-patterns.md` §1): launch each
-item's next-phase lane as its prior lane returns instead of barriering the batch.
+### A1 — No pipelining / mid-phase expansion (barrier-only fan-out)  · HIGH · **Implemented**
+`run_all` was a static `asyncio.gather` over the initial agent set. It is now a
+dynamic `asyncio.Queue` + worker pool (`scripts/workflow_run_codex.py` ~L1003+).
+Completed workers can emit a `{"kind":"workflow-expansion","schema_version":1,
+"jobs":[...]}` envelope; new jobs are enqueued mid-run and gated by
+`--max-round`/`--max-job` caps with logged truncation. `parse_job` now carries
+`stage`/`depends_on` metadata so items advance independently across a pipeline.
+**Tests:** `test_pipeline_respects_dependencies_across_stages`,
+`test_expansion_envelope_enqueues_and_runs_new_jobs`,
+`test_expansion_caps_hold_and_are_logged`.
 
-### A2 — No schema-validated structured worker output  · HIGH
-Every provider's `extract_result` returns raw text; the only validation in the
-tree is the agent *lifecycle* status enum (`workflow_state.py:185`), never result
-*content*. Even the bundled `structured` smoke job asks for JSON that nothing
-parses (`workflow_runner_matrix.py` ~L42). Claude's tool forces schema-validated
-returns (bad shape → auto-retry); this skill cannot guarantee a machine-readable
-contract.
-**Roadmap:** add `--result-schema <jsonschema>` (+ per-job `schema`); in
-`run_worker`, `json.loads`+validate after extraction, route failures into the
-existing retry loop with the validation error in the retry prompt, store the
-parsed object as `result_json`. Until then, approximate via
-`workflow-patterns.md` §10 (prompt the shape, lead validates, re-dispatch).
+### A2 — No schema-validated structured worker output  · HIGH · **Implemented**
+Added `--result-schema <jsonschema-file>` and per-job `schema` metadata. After
+`extract_result`, `run_worker` parses the result as JSON and validates it with
+`jsonschema`; failures are routed into the failure-retry loop with the
+validation error injected into the retry prompt, and successful parses are
+stored as `result_json` on the agent.
+**Tests:** `test_schema_validation_passes_and_stores_result_json`,
+`test_schema_validation_failure_marks_agent_failed`,
+`test_schema_validation_failure_is_retried_with_error_in_prompt`.
 
 ## Correctness / robustness
 
@@ -62,12 +55,12 @@ on any non-empty summary (`workflow_health.py:149-156`, `:368`).
 require `--record-only` to carry evidence provenance and emit a
 `verification: external` event so the bypass is at least auditable.
 
-### A5 — Stop does not promptly kill in-flight workers  · MED
-`terminate_process_group` (SIGTERM-group → 3s → SIGKILL-group) is solid but only
-called from the exception path (~L904); a cooperative `wf stop` mid-run is
-detected only *between* awaits, so a live subprocess keeps running until it exits
-on its own.
-**Fix:** race `proc.wait()` against a stop-poll task; terminate on stop observed.
+### A5 — Stop does not promptly kill in-flight workers  · MED · **Implemented**
+`wait_for_process_completion` now races `proc.wait()` against a stop-poll task.
+When a cooperative `wf stop` is observed first, the worker process group is
+terminated and the agent is marked cancelled. The stop-poll task is cancelled
+and drained on every exit path so the wait cannot hang.
+**Test:** `test_stop_promptly_terminates_in_flight_worker`.
 
 ### A6 — `validate_status` raises `SystemExit` inside a held mutator  · MED
 Accidentally safe (the `with exclusive_lock` finally releases and `save_run` is
