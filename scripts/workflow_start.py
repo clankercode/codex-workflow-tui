@@ -254,6 +254,8 @@ def worker_namespace(args: argparse.Namespace, plan: dict[str, Any], goal: str) 
         sandbox=args.sandbox,
         approval=args.approval,
         max_agents=args.max_agents,
+        max_round=args.max_round,
+        max_job=args.max_job,
         startup_delay=args.startup_delay,
         dry_run=args.dry_run,
         mock=args.mock,
@@ -390,6 +392,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sandbox", default="read-only", choices=["read-only", "workspace-write", "danger-full-access"])
     parser.add_argument("--approval", default="never", choices=["never", "on-request", "untrusted", "on-failure"])
     parser.add_argument("--max-agents", "--concurrency", dest="max_agents", type=positive_int, default=4)
+    parser.add_argument("--max-round", type=positive_int, default=3, help="maximum worker expansion round depth; default: 3")
+    parser.add_argument("--max-job", type=positive_int, default=None, help="maximum total workers including expansions; default: unlimited")
     parser.add_argument("--startup-delay", type=nonnegative_float, default=1.0)
     parser.add_argument("--dry-run", action="store_true", help="record workers but do not launch worker CLIs")
     parser.add_argument("--mock", action="store_true", help="mock planner and workers without model calls")

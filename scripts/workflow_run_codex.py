@@ -363,12 +363,38 @@ def build_provider(args: argparse.Namespace) -> RunnerProvider:
 
 
 def parse_job(value: str) -> dict[str, str]:
+    """Parse a job from a CLI value.
+
+    Supports the legacy ``name::prompt`` and bare-prompt forms, plus a JSON
+    object form that carries ``stage``/``depends_on``/``schema`` metadata:
+    ``'{"name":"x","prompt":"y","stage":"s","depends_on":"a"}'``.
+    """
+    value = value.strip()
+    if value.startswith("{"):
+        try:
+            item = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"invalid JSON job: {exc}")
+        if not isinstance(item, dict) or "prompt" not in item:
+            raise SystemExit("JSON job must be an object with a prompt")
+        prompt = str(item["prompt"]).strip()
+        if not prompt:
+            raise SystemExit("job prompt must be non-empty")
+        raw_name = str(item.get("name") or item.get("role") or "job")
+        name = workflow_state.slugify(raw_name, fallback="job")
+        return {
+            "name": name,
+            "role": str(item.get("role") or raw_name).strip() or name,
+            "prompt": prompt,
+            "stage": str(item.get("stage") or "").strip(),
+            "depends_on": item.get("depends_on") or "",
+        }
     if "::" in value:
         name, prompt = value.split("::", 1)
     else:
         digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
         name, prompt = f"job-{digest}", value
-    return {"name": name.strip(), "role": name.strip(), "prompt": prompt.strip()}
+    return {"name": name.strip(), "role": name.strip(), "prompt": prompt.strip(), "stage": "", "depends_on": ""}
 
 
 def load_jobs(args: argparse.Namespace) -> list[dict[str, str]]:
@@ -382,7 +408,15 @@ def load_jobs(args: argparse.Namespace) -> list[dict[str, str]]:
             if not isinstance(item, dict) or "prompt" not in item:
                 raise SystemExit("each job object must contain at least a prompt")
             name = str(item.get("name") or item.get("role") or f"job-{len(jobs) + 1}")
-            jobs.append({"name": name, "role": str(item.get("role") or name), "prompt": str(item["prompt"])})
+            jobs.append(
+                {
+                    "name": name,
+                    "role": str(item.get("role") or name),
+                    "prompt": str(item["prompt"]),
+                    "stage": str(item.get("stage") or ""),
+                    "depends_on": item.get("depends_on") or "",
+                }
+            )
     if not jobs:
         raise SystemExit("provide at least one --job or --jobs-file entry")
     return jobs
@@ -447,7 +481,15 @@ def record_runner_decision(run_id: str, args: argparse.Namespace, provider: Runn
     workflow_state.mutate_run(run_id, mutator)
 
 
-def add_agent(run: dict[str, Any], job: dict[str, str], args: argparse.Namespace, provider: RunnerProvider, index: int) -> dict[str, Any]:
+def add_agent(
+    run: dict[str, Any],
+    job: dict[str, str],
+    args: argparse.Namespace,
+    provider: RunnerProvider,
+    index: int,
+    stage: str = "",
+    depends_on: str = "",
+) -> dict[str, Any]:
     prefix = workflow_state.slugify(provider.name, fallback="worker")
     agent_id = f"{prefix}-{index + 1:02d}-{workflow_state.slugify(job['name'])}"
     artifacts = Path(run["paths"]["artifacts_dir"])
@@ -479,6 +521,8 @@ def add_agent(run: dict[str, Any], job: dict[str, str], args: argparse.Namespace
     )
     with open(os.devnull, "w", encoding="utf-8") as sink, contextlib.redirect_stdout(sink):
         workflow_state.cmd_add_agent(agent_args)
+    if stage or depends_on:
+        update_agent(run["run_id"], agent_id, stage=stage, depends_on=depends_on)
     return workflow_state.load_run(run["run_id"])
 
 
@@ -937,38 +981,279 @@ def first_line(text: str) -> str:
     return ""
 
 
+def _depends_on_names(agent: dict[str, Any]) -> set[str]:
+    """Return the set of dependency names an agent is waiting for."""
+    raw = agent.get("depends_on") or ""
+    if isinstance(raw, list):
+        return {str(value).strip() for value in raw if str(value).strip()}
+    return {piece.strip() for piece in str(raw).split(",") if piece.strip()}
+
+
+def _normalize_expansion_job(item: Any, index: int) -> dict[str, str] | None:
+    """Validate and normalize one job from a workflow-expansion envelope."""
+    if not isinstance(item, dict):
+        return None
+    prompt = str(item.get("prompt") or "").strip()
+    if not prompt:
+        return None
+    raw_name = str(item.get("name") or item.get("role") or f"job-{index + 1}")
+    name = workflow_state.slugify(raw_name, fallback=f"job-{index + 1}")
+    return {
+        "name": name,
+        "role": str(item.get("role") or raw_name).strip() or name,
+        "prompt": prompt,
+        "stage": str(item.get("stage") or "").strip(),
+        "depends_on": item.get("depends_on") or "",
+    }
+
+
+def _parse_expansion_jobs(text: str) -> list[dict[str, str]]:
+    """Extract jobs from a ``workflow-expansion`` envelope in worker output."""
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    if data.get("kind") != "workflow-expansion" or data.get("schema_version") != 1:
+        return []
+    jobs = data.get("jobs", [])
+    if not isinstance(jobs, list):
+        return []
+    return [job for job in (_normalize_expansion_job(item, index) for index, item in enumerate(jobs)) if job is not None]
+
+
+def _add_expansion_agent(
+    run_id: str,
+    job: dict[str, str],
+    args: argparse.Namespace,
+    provider: RunnerProvider,
+    index: int,
+) -> tuple[dict[str, Any], str]:
+    """Create a new agent from an expansion job and persist it to state."""
+    prefix = workflow_state.slugify(provider.name, fallback="worker")
+    agent_id = f"{prefix}-{index + 1:02d}-{workflow_state.slugify(job['name'])}"
+    run = workflow_state.load_run(run_id)
+    artifacts = Path(run["paths"]["artifacts_dir"])
+    logs = Path(run["paths"]["logs_dir"])
+    prompt_path = artifacts / f"{agent_id}.prompt.md"
+    jsonl_path = logs / f"{agent_id}.jsonl"
+    stderr_path = logs / f"{agent_id}.stderr.log"
+    output_path = artifacts / f"{agent_id}.final.md"
+    prompt_path.write_text(job["prompt"] + "\n", encoding="utf-8")
+
+    agent_args = argparse.Namespace(
+        run=run_id,
+        phase=PHASE_ID,
+        name=job["name"],
+        role=job["role"],
+        agent_type=provider.agent_type,
+        agent_id=agent_id,
+        status="pending",
+        prompt=None,
+        prompt_file=str(prompt_path),
+        cwd=args.cwd,
+        model=args.model or "",
+        thread_id=None,
+        process_id=None,
+        write_scope=[],
+        jsonl_path=str(jsonl_path),
+        log_path=str(stderr_path),
+        output_path=str(output_path),
+    )
+    with open(os.devnull, "w", encoding="utf-8") as sink, contextlib.redirect_stdout(sink):
+        workflow_state.cmd_add_agent(agent_args)
+    stage = job.get("stage", "")
+    depends_on = job.get("depends_on", "")
+    if stage or depends_on:
+        update_agent(run_id, agent_id, stage=stage, depends_on=depends_on)
+    return workflow_state.load_run(run_id), agent_id
+
+
+def _record_expansion(run_id: str, parent_agent: dict[str, Any], added: int, round_num: int) -> None:
+    def mutator(data: dict[str, Any]) -> None:
+        decision_id = f"dec-expansion-{parent_agent['agent_id']}-r{round_num}"
+        decision = {
+            "decision_id": decision_id,
+            "ts": workflow_state.now(),
+            "title": f"Workflow expansion from {parent_agent['name']}",
+            "rationale": f"Worker output contained a workflow-expansion envelope; added {added} job(s) at round {round_num}.",
+            "made_by": "workflow_run.run_all",
+        }
+        data.setdefault("decisions", []).append(decision)
+        workflow_state.add_event(
+            data,
+            "info",
+            f"workflow expansion: {parent_agent['name']} added {added} job(s) at round {round_num}",
+            kind="expansion",
+            operation="added",
+            source="workflow_run.run_all",
+            agent_id=parent_agent["agent_id"],
+            phase_id=parent_agent.get("phase_id"),
+            data={"added": added, "round": round_num, "parent_name": parent_agent.get("name", "")},
+        )
+
+    workflow_state.mutate_run(run_id, mutator)
+
+
+def _record_expansion_truncation(run_id: str, parent_agent: dict[str, Any], cap: str, dropped: int, round_num: int) -> None:
+    def mutator(data: dict[str, Any]) -> None:
+        workflow_state.add_event(
+            data,
+            "warning",
+            f"workflow expansion truncated by {cap}: {dropped} job(s) from {parent_agent['name']} at round {round_num}",
+            kind="expansion",
+            operation="truncated",
+            source="workflow_run.run_all",
+            agent_id=parent_agent["agent_id"],
+            phase_id=parent_agent.get("phase_id"),
+            data={"cap": cap, "dropped": dropped, "round": round_num, "parent_name": parent_agent.get("name", "")},
+        )
+
+    workflow_state.mutate_run(run_id, mutator)
+
+
+def _record_unmet_dependencies(run_id: str, pending: dict[str, tuple[dict[str, Any], int]]) -> None:
+    if not pending:
+        return
+
+    def mutator(data: dict[str, Any]) -> None:
+        for agent, _round in pending.values():
+            state_agent = workflow_state.find_item(data.setdefault("agents", []), "agent_id", agent["agent_id"])
+            deps = ", ".join(sorted(_depends_on_names(state_agent)))
+            message = f"dependency never satisfied: {deps}"
+            state_agent["status"] = "failed"
+            state_agent["summary"] = message
+            state_agent["result"] = message
+            state_agent["exit_code"] = 1
+            state_agent["completed_at"] = workflow_state.now()
+            state_agent["updated_at"] = workflow_state.now()
+            workflow_state.add_event(
+                data,
+                "warning",
+                f"worker {state_agent['name']} failed: {message}",
+                kind="agent",
+                operation="updated",
+                source="workflow_run.run_all",
+                agent_id=state_agent["agent_id"],
+                phase_id=state_agent.get("phase_id"),
+                data={"name": state_agent.get("name", ""), "status": "failed", "unmet_dependencies": deps},
+            )
+
+    workflow_state.mutate_run(run_id, mutator)
+
+
 async def run_all(run: dict[str, Any], args: argparse.Namespace, provider: RunnerProvider) -> str:
+    """Run a dynamic worker pool that accepts new agents mid-flight."""
+    run_id = run["run_id"]
     semaphore = asyncio.Semaphore(args.max_agents)
     startup_limiter = StartupRateLimiter(args.startup_delay)
-    agents = list(run.get("agents", []))
-    results = await asyncio.gather(
-        *(run_worker(run["run_id"], agent, args, provider, semaphore, startup_limiter) for agent in agents),
-        return_exceptions=True,
-    )
+    max_round = getattr(args, "max_round", 3)
+    max_job = getattr(args, "max_job", None)
+
+    queue: asyncio.Queue[tuple[dict[str, Any], int] | None] = asyncio.Queue()
+    pending_by_id: dict[str, tuple[dict[str, Any], int]] = {}
+    completed_names: set[str] = set()
+    active_workers = 0
+    next_index = len(run.get("agents", []))
+    total_jobs = 0
+    state_lock = asyncio.Lock()
+    shutdown_sent = False
+
+    def enqueue_agent(agent: dict[str, Any], round_num: int) -> None:
+        deps = _depends_on_names(agent) - completed_names
+        if deps:
+            pending_by_id[agent["agent_id"]] = (agent, round_num)
+        else:
+            queue.put_nowait((agent, round_num))
+
+    def release_pending() -> None:
+        ready = []
+        for agent_id, (pending_agent, pending_round) in list(pending_by_id.items()):
+            if not (_depends_on_names(pending_agent) - completed_names):
+                ready.append(agent_id)
+        for agent_id in ready:
+            pending_agent, pending_round = pending_by_id.pop(agent_id)
+            queue.put_nowait((pending_agent, pending_round))
+
+    async def worker() -> None:
+        nonlocal active_workers, next_index, total_jobs, shutdown_sent
+        while True:
+            item = await queue.get()
+            if item is None:
+                queue.task_done()
+                return
+            agent, round_num = item
+            async with state_lock:
+                active_workers += 1
+            try:
+                await run_worker(run_id, agent, args, provider, semaphore, startup_limiter)
+                run_snapshot = workflow_state.load_run(run_id)
+                updated_agent = workflow_state.find_item(run_snapshot["agents"], "agent_id", agent["agent_id"])
+                async with state_lock:
+                    completed_names.add(updated_agent["name"])
+                    status = updated_agent.get("status")
+                    if status == "completed":
+                        expansion_jobs = _parse_expansion_jobs(updated_agent.get("result") or "")
+                        added = 0
+                        dropped = 0
+                        for job in expansion_jobs:
+                            if max_job is not None and total_jobs >= max_job:
+                                dropped = len(expansion_jobs) - added
+                                _record_expansion_truncation(run_id, updated_agent, "max-job", dropped, round_num + 1)
+                                break
+                            if round_num + 1 > max_round:
+                                dropped = len(expansion_jobs) - added
+                                _record_expansion_truncation(run_id, updated_agent, "max-round", dropped, round_num + 1)
+                                break
+                            total_jobs += 1
+                            _run, new_agent_id = _add_expansion_agent(run_id, job, args, provider, next_index)
+                            next_index += 1
+                            new_agent = workflow_state.find_item(_run["agents"], "agent_id", new_agent_id)
+                            enqueue_agent(new_agent, round_num + 1)
+                            added += 1
+                        if added:
+                            _record_expansion(run_id, updated_agent, added, round_num + 1)
+                    release_pending()
+            except Exception as exc:
+                run_snapshot = workflow_state.load_run(run_id)
+                updated_agent = workflow_state.find_item(run_snapshot["agents"], "agent_id", agent["agent_id"])
+                async with state_lock:
+                    if updated_agent.get("status") in {"pending", "running"}:
+                        message = f"{type(exc).__name__}: {exc}"
+                        update_agent(
+                            run_id,
+                            agent["agent_id"],
+                            status="failed",
+                            result=message,
+                            summary=message,
+                            exit_code=1,
+                        )
+                    completed_names.add(updated_agent["name"])
+                    release_pending()
+            finally:
+                async with state_lock:
+                    active_workers -= 1
+                    should_shutdown = active_workers == 0 and queue.empty() and not pending_by_id and not shutdown_sent
+                    if should_shutdown:
+                        shutdown_sent = True
+                        for _ in range(args.max_agents):
+                            queue.put_nowait(None)
+                queue.task_done()
+
+    for agent in run.get("agents", []):
+        total_jobs += 1
+        enqueue_agent(agent, 0)
+    release_pending()
+
+    workers = [asyncio.create_task(worker()) for _ in range(args.max_agents)]
+    await asyncio.gather(*workers, return_exceptions=True)
+
+    _record_unmet_dependencies(run_id, pending_by_id)
 
     def mutator(final: dict[str, Any]) -> str:
-        for agent, result in zip(agents, results, strict=True):
-            if isinstance(result, Exception):
-                state_agent = workflow_state.find_item(final.setdefault("agents", []), "agent_id", agent["agent_id"])
-                if state_agent.get("status") in {"pending", "running"}:
-                    message = f"{type(result).__name__}: {result}"
-                    state_agent["status"] = "failed"
-                    state_agent["summary"] = message
-                    state_agent["result"] = message
-                    state_agent["exit_code"] = 1
-                    state_agent["completed_at"] = workflow_state.now()
-                    state_agent["updated_at"] = workflow_state.now()
-                    workflow_state.add_event(
-                        final,
-                        "info",
-                        f"worker {state_agent['name']} failed",
-                        kind="agent",
-                        operation="updated",
-                        source="workflow_run.run_all",
-                        agent_id=state_agent["agent_id"],
-                        phase_id=state_agent.get("phase_id"),
-                        data={"name": state_agent.get("name", ""), "status": "failed"},
-                    )
         failed = [agent for agent in final.get("agents", []) if agent.get("status") == "failed"]
         cancelled = [agent for agent in final.get("agents", []) if agent.get("status") == "cancelled"]
         pending = [agent for agent in final.get("agents", []) if agent.get("status") in {"pending", "running", "paused"}]
@@ -1083,6 +1368,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sandbox", default="read-only", choices=["read-only", "workspace-write", "danger-full-access"])
     parser.add_argument("--approval", default="never", choices=["never", "on-request", "untrusted", "on-failure"])
     parser.add_argument("--max-agents", "--concurrency", dest="max_agents", type=positive_int, default=4, help="maximum worker processes running at once; default: 4")
+    parser.add_argument("--max-round", type=positive_int, default=3, help="maximum expansion round depth; default: 3")
+    parser.add_argument("--max-job", type=positive_int, default=None, help="maximum total jobs including expansions; default: unlimited")
     parser.add_argument("--startup-delay", type=nonnegative_float, default=1.0, help="minimum seconds between worker starts; default: 1.0")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--mock", action="store_true")
@@ -1096,7 +1383,7 @@ def main() -> None:
     provider = build_provider(args)
     run = create_run(args, jobs, provider)
     for index, job in enumerate(jobs):
-        run = add_agent(run, job, args, provider, index)
+        run = add_agent(run, job, args, provider, index, stage=job.get("stage", ""), depends_on=job.get("depends_on", ""))
     print(json.dumps({"run_id": run["run_id"], "path": run["paths"]["run_json"], "jobs": len(jobs)}, indent=2))
     if args.dry_run:
         print("dry run: workers were recorded but not launched")

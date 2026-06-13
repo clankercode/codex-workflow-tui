@@ -144,6 +144,42 @@ class WorkflowScriptTests(unittest.TestCase):
         fake_ccc.chmod(0o755)
         return fake_ccc
 
+    def install_fake_codex(self, fake_bin: Path) -> Path:
+        """Install a fake codex binary that returns deterministic JSONL output."""
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        fake_codex = fake_bin / "codex"
+        fake_codex.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env python3
+                import json
+                import os
+                import sys
+
+                output = os.environ.get("CODEX_FAKE_OUTPUT", "fake codex result")
+                exit_code = int(os.environ.get("CODEX_FAKE_EXIT_CODE", "0"))
+                event = {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": output},
+                }
+                sys.stdout.write(json.dumps(event) + "\\n")
+                sys.exit(exit_code)
+                """
+            ),
+            encoding="utf-8",
+        )
+        fake_codex.chmod(0o755)
+        return fake_codex
+
+    def codex_fake_env(self, tmp_path: Path) -> dict[str, str]:
+        """Return an environment wired to the deterministic fake codex binary."""
+        fake_bin = tmp_path / "bin"
+        self.install_fake_codex(fake_bin)
+        env = os.environ.copy()
+        env["PATH"] = f"{fake_bin}:{env['PATH']}"
+        env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+        return env
+
     def ccc_fake_env(self, tmp_path: Path) -> dict[str, str]:
         """Return an environment wired to the timed fake ccc binary."""
         fake_bin = tmp_path / "bin"
@@ -1641,6 +1677,156 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(job["prompt"], prompt)
         # Same prompt yields same name across calls.
         self.assertEqual(workflow_run_codex.parse_job(prompt)["name"], expected)
+
+    def test_parse_job_json_object_carries_stage_and_depends_on(self) -> None:
+        """JSON --job values should preserve stage/depends_on metadata."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_run_codex  # pylint: disable=import-outside-toplevel
+
+        raw = json.dumps(
+            {
+                "name": "reviewer",
+                "role": "review",
+                "prompt": "Review the plan.",
+                "stage": "stage-2",
+                "depends_on": "planner",
+            }
+        )
+        job = workflow_run_codex.parse_job(raw)
+        self.assertEqual(job["name"], "reviewer")
+        self.assertEqual(job["stage"], "stage-2")
+        self.assertEqual(job["depends_on"], "planner")
+
+    def test_pipeline_respects_dependencies_across_stages(self) -> None:
+        """A multi-stage pipeline completes with dependent jobs advancing independently."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = self.codex_fake_env(tmp_path)
+            env["CODEX_FAKE_OUTPUT"] = "done"
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Pipeline",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--job",
+                json.dumps({"name": "a", "prompt": "A", "stage": "1"}),
+                "--job",
+                json.dumps({"name": "b", "prompt": "B", "stage": "2", "depends_on": "a"}),
+                "--job",
+                json.dumps({"name": "c", "prompt": "C", "stage": "3", "depends_on": "b"}),
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            by_name = {agent["name"]: agent for agent in data["agents"]}
+            self.assertEqual(len(by_name), 3)
+            for name in ("a", "b", "c"):
+                self.assertEqual(by_name[name]["status"], "completed")
+            # Dependencies enforced order: a before b before c.
+            self.assertLessEqual(
+                datetime.fromisoformat(by_name["a"]["completed_at"]),
+                datetime.fromisoformat(by_name["b"]["started_at"]),
+            )
+            self.assertLessEqual(
+                datetime.fromisoformat(by_name["b"]["completed_at"]),
+                datetime.fromisoformat(by_name["c"]["started_at"]),
+            )
+
+    def test_expansion_envelope_enqueues_and_runs_new_jobs(self) -> None:
+        """A worker returning a workflow-expansion envelope adds new jobs mid-run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = self.codex_fake_env(tmp_path)
+            envelope = json.dumps(
+                {
+                    "kind": "workflow-expansion",
+                    "schema_version": 1,
+                    "jobs": [
+                        {"name": "child-1", "prompt": "Child one"},
+                        {"name": "child-2", "prompt": "Child two"},
+                    ],
+                }
+            )
+            env["CODEX_FAKE_OUTPUT"] = envelope
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Expansion",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--max-round",
+                "2",
+                "--job",
+                json.dumps({"name": "parent", "prompt": "Expand"}),
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            names = {agent["name"] for agent in data["agents"]}
+            self.assertEqual(names, {"parent", "child-1", "child-2"})
+            self.assertTrue(
+                any(
+                    event.get("kind") == "expansion" and event.get("operation") == "added" and event.get("data", {}).get("added") == 2
+                    for event in data["events"]
+                )
+            )
+
+    def test_expansion_caps_hold_and_are_logged(self) -> None:
+        """max-job and max-round caps truncate expansion and log a warning."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = self.codex_fake_env(tmp_path)
+            envelope = json.dumps(
+                {
+                    "kind": "workflow-expansion",
+                    "schema_version": 1,
+                    "jobs": [{"name": f"child-{index}", "prompt": f"Child {index}"} for index in range(5)],
+                }
+            )
+            env["CODEX_FAKE_OUTPUT"] = envelope
+            launched = self.run_script(
+                "workflow_run.py",
+                "--title",
+                "Expansion Caps",
+                "--cwd",
+                str(ROOT),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--max-job",
+                "3",
+                "--max-round",
+                "2",
+                "--job",
+                json.dumps({"name": "parent", "prompt": "Expand"}),
+                env=env,
+            )
+            run_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual(len(data["agents"]), 3)
+            truncation_events = [
+                event
+                for event in data["events"]
+                if event.get("kind") == "expansion" and event.get("operation") == "truncated"
+            ]
+            self.assertTrue(truncation_events)
+            self.assertTrue(
+                any(event["data"]["cap"] == "max-job" and event["data"]["dropped"] == 3 for event in truncation_events),
+                msg=f"expected max-job truncation with 3 dropped, got {truncation_events}",
+            )
 
     def test_generic_ccc_runner_accepts_presets_and_cli_names(self) -> None:
         """Allow --ccc-runner to target both @presets and plain ccc CLI selectors."""
