@@ -241,6 +241,8 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def cmd_add_phase(args: argparse.Namespace) -> None:
+    initial_status = validate_status(args.status)
+
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
         phase_id = args.phase_id or short_id("phase")
         phases = data.setdefault("phases", [])
@@ -250,7 +252,7 @@ def cmd_add_phase(args: argparse.Namespace) -> None:
             "phase_id": phase_id,
             "name": args.name,
             "goal": args.goal or "",
-            "status": validate_status(args.status),
+            "status": initial_status,
             "created_at": created_at,
             "started_at": created_at if args.status in {"running", "completed", "failed", "cancelled"} else None,
             "completed_at": created_at if args.status in {"completed", "failed", "cancelled"} else None,
@@ -274,10 +276,12 @@ def cmd_add_phase(args: argparse.Namespace) -> None:
 
 
 def cmd_update_phase(args: argparse.Namespace) -> None:
+    new_status: str | None = validate_status(args.status) if args.status else None
+
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
         phase = find_item(data.setdefault("phases", []), "phase_id", args.phase)
-        if args.status:
-            phase["status"] = validate_status(args.status)
+        if new_status:
+            phase["status"] = new_status
             if args.status == "running" and not phase.get("started_at"):
                 phase["started_at"] = now()
             if args.status in {"completed", "failed", "cancelled"}:
@@ -303,6 +307,8 @@ def cmd_update_phase(args: argparse.Namespace) -> None:
 
 
 def cmd_add_agent(args: argparse.Namespace) -> None:
+    initial_status = validate_status(args.status)
+
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
         agent_id = args.agent_id or short_id("agent")
         agents = data.setdefault("agents", [])
@@ -314,7 +320,7 @@ def cmd_add_agent(args: argparse.Namespace) -> None:
             "name": args.name,
             "role": args.role or "",
             "agent_type": args.agent_type or "",
-            "status": validate_status(args.status),
+            "status": initial_status,
             "prompt": read_text_arg(args.prompt, args.prompt_file),
             "cwd": str(Path(args.cwd).expanduser().resolve()) if args.cwd else data.get("cwd"),
             "model": args.model or "",
@@ -359,10 +365,12 @@ def cmd_add_agent(args: argparse.Namespace) -> None:
 
 
 def cmd_update_agent(args: argparse.Namespace) -> None:
+    new_status: str | None = validate_status(args.status) if args.status else None
+
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
         agent = find_item(data.setdefault("agents", []), "agent_id", args.agent)
-        if args.status:
-            agent["status"] = validate_status(args.status)
+        if new_status:
+            agent["status"] = new_status
             if args.status == "running" and not agent.get("started_at"):
                 agent["started_at"] = now()
             if args.status in {"completed", "failed", "cancelled"}:

@@ -2412,6 +2412,22 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(data["checks"][0]["external_ref"], "https://example.invalid/evidence")
             self.assertTrue(any(event.get("kind") == "verification: external" for event in data["events"]))
 
+    def test_invalid_status_rejected_before_mutation(self) -> None:
+        """Invalid status arguments must not touch the run file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Validate First", "--prompt", "validate", "--cwd", str(ROOT), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            before = run_path.read_text(encoding="utf-8")
+
+            denied = self.run_wf("set-status", run_id, "bogus", env=env, check=False)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("invalid status", denied.stderr)
+            self.assertEqual(run_path.read_text(encoding="utf-8"), before)
+
     def test_record_only_pass_without_provenance_cannot_satisfy_gate(self) -> None:
         """Legacy record-only passes without provenance no longer satisfy wf done."""
         with tempfile.TemporaryDirectory() as tmp:
