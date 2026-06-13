@@ -20,6 +20,8 @@ try:
 except ImportError:  # pragma: no cover - this workflow system is Unix-oriented today.
     fcntl = None  # type: ignore[assignment]
 
+_FCNTL_WARNING_EMITTED = False
+
 SCHEMA_VERSION = 1
 DEFAULT_ROOT = Path.home() / ".agents" / "workflow-system"
 STATUS_VALUES = {"pending", "running", "blocked", "completed", "failed", "cancelled", "paused"}
@@ -121,7 +123,16 @@ def save_run(data: dict[str, Any]) -> Path:
 
 @contextlib.contextmanager
 def exclusive_lock(lock_path: Path) -> Any:
-    """Hold an advisory lock for one workflow run directory."""
+    """Hold an advisory lock for one workflow run directory.
+
+    Lock boundary: mutations that load+save run.json should wrap the entire
+    read-modify-write in this lock. Writes outside mutate_run (init, verify log
+    files) should acquire the per-run lock before touching run state or logs.
+    """
+    global _FCNTL_WARNING_EMITTED
+    if fcntl is None and not _FCNTL_WARNING_EMITTED:
+        _FCNTL_WARNING_EMITTED = True
+        sys.stderr.write("warning: fcntl unavailable; workflow locking is disabled\n")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as handle:
         if fcntl is not None:
@@ -236,7 +247,8 @@ def cmd_init(args: argparse.Namespace) -> None:
         "metrics": {},
     }
     add_event(data, "info", "workflow initialized", kind="workflow", operation="initialized", source="workflow_state.init")
-    save_run(data)
+    with exclusive_lock(directory / ".lock"):
+        save_run(data)
     print(json.dumps({"run_id": rid, "path": data["paths"]["run_json"]}, indent=2))
 
 

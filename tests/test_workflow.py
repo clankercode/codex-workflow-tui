@@ -2462,6 +2462,46 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertNotEqual(denied.returncode, 0)
             self.assertIn("verification-missing", denied.stdout)
 
+    def test_fcntl_unavailable_emits_one_time_warning(self) -> None:
+        """Warn the operator once when advisory locking is not available."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_state  # pylint: disable=import-outside-toplevel
+
+        original_fcntl = workflow_state.fcntl
+        original_flag = workflow_state._FCNTL_WARNING_EMITTED
+        try:
+            workflow_state.fcntl = None
+            workflow_state._FCNTL_WARNING_EMITTED = False
+            run = {
+                "run_id": "wf-lock-warning",
+                "status": "running",
+                "phases": [],
+                "agents": [],
+                "events": [],
+                "decisions": [],
+                "artifacts": [],
+                "checks": [],
+                "control": {},
+                "metrics": {},
+                "paths": {"run_json": "/dev/null"},
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+            stderr_capture = io.StringIO()
+            with contextlib.redirect_stderr(stderr_capture):
+
+                def mutator(data: dict[str, object]) -> None:
+                    data["updated_at"] = "2026-01-01T00:00:01Z"
+
+                with workflow_state.exclusive_lock(Path("/tmp/wf-lock-warning.lock")):
+                    mutator(run)
+                with workflow_state.exclusive_lock(Path("/tmp/wf-lock-warning.lock")):
+                    mutator(run)
+            self.assertIn("fcntl unavailable", stderr_capture.getvalue())
+            self.assertEqual(stderr_capture.getvalue().count("fcntl unavailable"), 1)
+        finally:
+            workflow_state.fcntl = original_fcntl
+            workflow_state._FCNTL_WARNING_EMITTED = original_flag
+
     def test_operator_doctor_distinguishes_required_and_optional_checks(self) -> None:
         """Keep optional provider commands from making doctor report a broken install."""
         with tempfile.TemporaryDirectory() as tmp:

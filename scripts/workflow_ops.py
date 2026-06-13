@@ -280,18 +280,17 @@ def cmd_verify(args: argparse.Namespace) -> None:
         exit_code, output, duration = run_verification_command(command, cwd)
     status = args.status if args.record_only else ("passed" if exit_code == 0 else "failed")
     check_id = args.check_id or workflow_state.short_id("chk")
-    log_path = ""
-    if output:
-        logs_dir = Path(run.get("paths", {}).get("logs_dir") or Path(run.get("paths", {}).get("run_dir", ".")) / "logs")
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        log_file = logs_dir / f"{check_id}.log"
-        log_file.write_text(output, encoding="utf-8")
-        log_path = str(log_file)
-
     evidence_path = args.evidence_path or ""
     external_ref = args.external_ref or ""
 
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
+        log_path = ""
+        if output:
+            logs_dir = Path(data.get("paths", {}).get("logs_dir") or Path(data.get("paths", {}).get("run_dir", ".")) / "logs")
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_file = logs_dir / f"{check_id}.log"
+            log_file.write_text(output, encoding="utf-8")
+            log_path = str(log_file)
         check = {
             "check_id": check_id,
             "ts": workflow_state.now(),
