@@ -37,7 +37,7 @@ def load_runs_for_args(args: argparse.Namespace) -> list[dict[str, Any]]:
 def status_line(run: dict[str, Any]) -> str:
     """Return one compact operator status line for a run."""
     metrics = run.get("metrics", {})
-    issues = workflow_health.analyze_run(run)
+    issues = structural_issues(run) + workflow_health.analyze_run(run)
     critical = sum(1 for item in issues if item.get("severity") == workflow_health.CRITICAL)
     warnings = sum(1 for item in issues if item.get("severity") == workflow_health.WARNING)
     checks = run.get("checks", [])
@@ -66,7 +66,7 @@ def cmd_status(args: argparse.Namespace) -> None:
                     "title": run.get("title", ""),
                     "status": run.get("status", ""),
                     "updated_at": run.get("updated_at", ""),
-                    "issues": workflow_health.analyze_run(run),
+                    "issues": structural_issues(run) + workflow_health.analyze_run(run),
                     "metrics": run.get("metrics", {}),
                 }
                 for run in runs
@@ -78,7 +78,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         return
     for run in runs:
         print(status_line(run))
-        issues = workflow_health.analyze_run(run)[:3]
+        issues = (structural_issues(run) + workflow_health.analyze_run(run))[:3]
         for item in issues:
             print(f"  {item['severity']}: {item['title']} - {item['message']}")
 

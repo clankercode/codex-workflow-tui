@@ -1999,6 +1999,32 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertNotEqual(denied.returncode, 0)
             self.assertIn("invalid-status", denied.stdout)
 
+    def test_status_line_includes_structural_issues(self) -> None:
+        """wf status must surface orphan links and invalid statuses that wf check enforces."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Structural Status", "--prompt", "struct", "--cwd", str(ROOT), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            data = json.loads(run_path.read_text(encoding="utf-8"))
+            data["phases"].append({
+                "phase_id": "phase-orphan",
+                "name": "Orphan",
+                "status": "completed",
+                "agent_ids": ["missing-agent"],
+                "created_at": data["created_at"],
+                "started_at": None,
+                "completed_at": data["created_at"],
+            })
+            run_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            status = self.run_wf("status", "--all", env=env)
+            self.assertIn("Phase references missing agent", status.stdout)
+            check = self.run_wf("check", run_id, env=env, check=False)
+            self.assertIn("Phase references missing agent", check.stdout)
+
     def test_operator_done_evaluates_blockers_inside_mutation_lock(self) -> None:
         """Recheck completion blockers against the locked state just before writing done."""
         sys.path.insert(0, str(SCRIPTS))
