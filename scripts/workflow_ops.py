@@ -265,6 +265,8 @@ def cmd_verify(args: argparse.Namespace) -> None:
             raise SystemExit("--record-only requires --status")
         if not args.summary:
             raise SystemExit("--record-only requires --summary")
+        if not (args.evidence_path or args.external_ref):
+            raise SystemExit("--record-only requires evidence provenance via --evidence-path or --external-ref")
     elif not command:
         raise SystemExit("wf verify requires --cmd, or --record-only with --status and --summary")
     elif args.status:
@@ -286,6 +288,9 @@ def cmd_verify(args: argparse.Namespace) -> None:
         log_file.write_text(output, encoding="utf-8")
         log_path = str(log_file)
 
+    evidence_path = args.evidence_path or ""
+    external_ref = args.external_ref or ""
+
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
         check = {
             "check_id": check_id,
@@ -301,16 +306,24 @@ def cmd_verify(args: argparse.Namespace) -> None:
             "summary": first_line(output) or args.summary or status,
             "log_path": log_path,
             "completed_at": workflow_state.now(),
+            "evidence_path": evidence_path,
+            "external_ref": external_ref,
         }
         data.setdefault("checks", []).append(check)
+        event_kind = "verification: external" if args.record_only else "check"
+        event_data: dict[str, Any] = {"check_id": check_id, "name": name, "status": status, "required": check["required"]}
+        if evidence_path:
+            event_data["evidence_path"] = evidence_path
+        if external_ref:
+            event_data["external_ref"] = external_ref
         workflow_state.add_event(
             data,
             "error" if status in {"failed", "error"} else "info",
             f"verification {status}: {name}",
-            kind="check",
+            kind=event_kind,
             operation="recorded",
             source="workflow_ops.verify",
-            data={"check_id": check_id, "name": name, "status": status, "required": check["required"]},
+            data=event_data,
         )
         return check
 
@@ -474,6 +487,8 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--check-id")
     verify.add_argument("--optional", action="store_true")
     verify.add_argument("--record-only", action="store_true")
+    verify.add_argument("--evidence-path", help="path to external evidence for record-only verification")
+    verify.add_argument("--external-ref", help="external reference URI or ticket for record-only verification")
     verify.set_defaults(func=cmd_verify)
 
     done = sub.add_parser("done", help="complete a workflow after safety checks")

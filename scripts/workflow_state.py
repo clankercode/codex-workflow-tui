@@ -475,8 +475,15 @@ def cmd_artifact(args: argparse.Namespace) -> None:
 
 
 def cmd_set_status(args: argparse.Namespace) -> None:
+    target_status = validate_status(args.status)
+    if target_status in {"completed", "failed"} and not (args.force or args.allow_recovery):
+        raise SystemExit(
+            f"setting status to {target_status!r} requires --force or --allow-recovery; "
+            "use `wf done` for guarded completion"
+        )
+
     def mutator(data: dict[str, Any]) -> None:
-        data["status"] = validate_status(args.status)
+        data["status"] = target_status
         add_event(
             data,
             "info",
@@ -786,6 +793,8 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("set-status", help="set run status")
     status.add_argument("run")
     status.add_argument("status")
+    status.add_argument("--force", action="store_true", help="allow setting terminal status without gate checks")
+    status.add_argument("--allow-recovery", action="store_true", help="alias for --force when recovering a run")
     status.set_defaults(func=cmd_set_status)
 
     pause = sub.add_parser("pause", help="pause a run before launching more workers")

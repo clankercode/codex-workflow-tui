@@ -2001,7 +2001,7 @@ class WorkflowScriptTests(unittest.TestCase):
             created = self.run_wf("init", "--title", "Skipped Optional", "--prompt", "skip", "--cwd", str(ROOT), env=env)
             run_id = json.loads(created.stdout)["run_id"]
 
-            result = self.run_wf("verify", run_id, "--record-only", "--status", "skipped", "--optional", "--summary", "not applicable", env=env)
+            result = self.run_wf("verify", run_id, "--record-only", "--status", "skipped", "--optional", "--summary", "not applicable", "--external-ref", "https://example.invalid/skip", env=env)
 
             self.assertEqual(json.loads(result.stdout)["status"], "skipped")
 
@@ -2029,7 +2029,7 @@ class WorkflowScriptTests(unittest.TestCase):
             created = self.run_wf("init", "--title", "Blocked Done", "--prompt", "blocked", "--cwd", str(ROOT), env=env)
             run_id = json.loads(created.stdout)["run_id"]
             self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
-            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env)
+            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", "--external-ref", "https://example.invalid/review", env=env)
             self.run_wf("block", run_id, "waiting for reviewer", env=env)
 
             denied = self.run_wf("done", run_id, env=env, check=False)
@@ -2047,7 +2047,7 @@ class WorkflowScriptTests(unittest.TestCase):
             run_id = created_data["run_id"]
             run_path = Path(created_data["path"])
             self.run_wf("add-phase", run_id, "--phase-id", "phase-active", "--name", "Active", "--status", "running", env=env)
-            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env)
+            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", "--external-ref", "https://example.invalid/manual", env=env)
             before = run_path.read_text(encoding="utf-8")
 
             denied = self.run_wf("done", run_id, env=env, check=False)
@@ -2341,6 +2341,8 @@ class WorkflowScriptTests(unittest.TestCase):
                 "--optional",
                 "--summary",
                 "non-blocking manual note",
+                "--external-ref",
+                "https://example.invalid/optional",
                 env=env,
             )
 
@@ -2357,13 +2359,92 @@ class WorkflowScriptTests(unittest.TestCase):
             created = self.run_wf("init", "--title", "Cancelled Done", "--prompt", "cancelled", "--cwd", str(ROOT), env=env)
             run_id = json.loads(created.stdout)["run_id"]
             self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
-            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env)
+            self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", "--external-ref", "https://example.invalid/manual", env=env)
             self.run_wf("set-status", run_id, "cancelled", env=env)
 
             denied = self.run_wf("done", run_id, env=env, check=False)
 
             self.assertNotEqual(denied.returncode, 0)
             self.assertIn("run-cancelled", denied.stdout)
+
+    def test_set_status_completed_requires_force(self) -> None:
+        """Block accidental direct completion via set-status without recovery flag."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Force Status", "--prompt", "status", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+
+            denied = self.run_wf("set-status", run_id, "completed", env=env, check=False)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("requires --force", denied.stderr)
+
+            self.run_wf("set-status", run_id, "completed", "--force", env=env)
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+
+    def test_record_only_pass_requires_provenance(self) -> None:
+        """Reject record-only passes that do not carry evidence provenance."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Provenance Gate", "--prompt", "gate", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+
+            denied = self.run_wf("verify", run_id, "--record-only", "--status", "passed", "--summary", "manual pass", env=env, check=False)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("requires evidence provenance", denied.stderr)
+
+            self.run_wf(
+                "verify",
+                run_id,
+                "--record-only",
+                "--status",
+                "passed",
+                "--summary",
+                "manual pass",
+                "--external-ref",
+                "https://example.invalid/evidence",
+                env=env,
+            )
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["checks"][0]["external_ref"], "https://example.invalid/evidence")
+            self.assertTrue(any(event.get("kind") == "verification: external" for event in data["events"]))
+
+    def test_record_only_pass_without_provenance_cannot_satisfy_gate(self) -> None:
+        """Legacy record-only passes without provenance no longer satisfy wf done."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Legacy Bypass", "--prompt", "bypass", "--cwd", str(ROOT), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-done", "--name", "Done", "--status", "completed", env=env)
+            data = json.loads(run_path.read_text(encoding="utf-8"))
+            data["checks"].append(
+                {
+                    "check_id": "chk-legacy",
+                    "ts": data["created_at"],
+                    "name": "legacy manual pass",
+                    "kind": "verification",
+                    "status": "passed",
+                    "required": True,
+                    "command": "",
+                    "cwd": str(ROOT),
+                    "exit_code": 0,
+                    "duration_seconds": 0.0,
+                    "summary": "manual pass",
+                    "log_path": "",
+                    "completed_at": data["created_at"],
+                }
+            )
+            run_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            denied = self.run_wf("done", run_id, env=env, check=False)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("verification-missing", denied.stdout)
 
     def test_operator_doctor_distinguishes_required_and_optional_checks(self) -> None:
         """Keep optional provider commands from making doctor report a broken install."""

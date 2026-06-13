@@ -153,7 +153,10 @@ def check_is_valid_evidence(check: dict[str, Any]) -> bool:
     command = str(check.get("command") or "")
     if command:
         return check.get("exit_code") in (0, "0")
-    return bool(str(check.get("summary") or "").strip())
+    if not bool(str(check.get("summary") or "").strip()):
+        return False
+    # Commandless record-only passes must carry evidence provenance.
+    return bool(check.get("evidence_path") or check.get("external_ref"))
 
 
 def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SECONDS, now: datetime | None = None) -> list[dict[str, Any]]:
