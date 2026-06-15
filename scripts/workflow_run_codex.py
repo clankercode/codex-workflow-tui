@@ -581,6 +581,7 @@ def add_agent(
     output_path = artifacts / f"{agent_id}.final.md"
     prompt_path.write_text(job["prompt"] + "\n", encoding="utf-8")
     effective_model = model_override or args.model or ""
+    effective_cwd = getattr(job_args, "cwd", None) if job_args is not None else None
 
     agent_args = argparse.Namespace(
         run=run["run_id"],
@@ -592,7 +593,7 @@ def add_agent(
         status="pending",
         prompt=None,
         prompt_file=str(prompt_path),
-        cwd=str(job.get("cwd") or args.cwd),
+        cwd=str(effective_cwd or job.get("cwd") or args.cwd),
         model=effective_model,
         thread_id=None,
         process_id=None,
@@ -640,6 +641,9 @@ def _serialize_job_execution_args(
         if field in ("timeout_secs", "kimi_max_steps_per_turn"):
             if value is not None and value != baseline:
                 overrides[field] = int(value)
+        elif field in ("dry_run", "mock"):
+            if value is not None and value != baseline:
+                overrides[field] = bool(value)
         elif value and value != baseline:
             overrides[field] = value
     return overrides
@@ -977,6 +981,8 @@ def _resolve_agent_provider(
     job_args = argparse.Namespace(**vars(args))
     for key, value in overrides.items():
         setattr(job_args, key, value)
+    if "result_schema" in overrides:
+        job_args.result_schema_obj = _resolve_schema(job_args.result_schema)
     return job_args, build_provider(job_args)
 
 
@@ -1012,7 +1018,7 @@ async def run_worker(
         try:
             if not await wait_until_launch_allowed(run_id, agent["agent_id"]):
                 return
-            if args.mock:
+            if job_args.mock:
                 await startup_limiter.mark_virtual_start()
                 started_epoch = time.time()
                 update_agent(
@@ -1034,7 +1040,7 @@ async def run_worker(
                     **timing_fields(started_epoch),
                 )
                 return
-            if args.dry_run:
+            if job_args.dry_run:
                 await startup_limiter.mark_virtual_start()
                 started_epoch = time.time()
                 message = f"Dry run only; {job_provider.name} was not launched."
@@ -1125,7 +1131,7 @@ async def run_worker(
                 extracted = job_provider.extract_result(agent, exit_code, stdout_text=stdout_text, stderr_text=stderr_text)
                 validation_error: str | None = None
                 if exit_code == 0:
-                    schema = agent.get("schema") or getattr(args, "result_schema_obj", None)
+                    schema = agent.get("schema") or getattr(job_args, "result_schema_obj", None)
                     if schema is not None and jsonschema is not None:
                         try:
                             parsed = json.loads(extracted.result)

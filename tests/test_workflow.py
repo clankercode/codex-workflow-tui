@@ -6207,6 +6207,35 @@ class WorkflowScriptTests(unittest.TestCase):
 
         self.assertEqual(plan["ccc_control"], ["@reviewer"])
 
+    def test_workflow_plan_normalizes_phase_and_job_ccc_control_to_list(self) -> None:
+        """Phase/job ccc_control should not become character-by-character argv."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_plan  # pylint: disable=import-outside-toplevel
+
+        plan = workflow_plan.normalize_workflow(
+            {
+                "title": "Ccc Control",
+                "phases": [
+                    {
+                        "name": "review",
+                        "ccc_control": "@phase-reviewer",
+                        "jobs": [
+                            {
+                                "name": "a",
+                                "prompt": "A",
+                                "ccc_control": "@job-reviewer",
+                            }
+                        ],
+                    }
+                ],
+            },
+            fallback_title="fallback",
+        )
+
+        phase = plan["phases"][0]
+        self.assertEqual(phase["ccc_control"], ["@phase-reviewer"])
+        self.assertEqual(phase["jobs"][0]["ccc_control"], ["@job-reviewer"])
+
     def test_wf_apply_honors_job_runner_overrides(self) -> None:
         """Per-job execution fields must override phase/root defaults and be visible in agent state."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -6356,6 +6385,252 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agent["model"], "cli-model")
             # CLI runner overrides job runner
             self.assertEqual(agent["agent_type"], "ccc-opencode")
+
+    def test_wf_apply_cli_overrides_plan_ccc_control_and_output_mode(self) -> None:
+        """Explicit CLI ccc control/output flags should override phase and job values."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_timed_fake_ccc(fake_bin)
+            plan_path = tmp_path / "ccc-cli-override.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "CCC CLI Override",
+                        "runner": "ccc",
+                        "ccc_runner": "@mm",
+                        "ccc_output_mode": "text",
+                        "ccc_control": ["@root-control"],
+                        "phases": [
+                            {
+                                "name": "review",
+                                "ccc_output_mode": "json",
+                                "ccc_control": ["@phase-control"],
+                                "jobs": [
+                                    {
+                                        "name": "check",
+                                        "prompt": "Check.",
+                                        "ccc_control": ["@job-control"],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_EVENTS"] = str(tmp_path / "ccc-events.jsonl")
+            env["CCC_FAKE_ACTIVE"] = str(tmp_path / "ccc-active.txt")
+            env["CCC_FAKE_MAX"] = str(tmp_path / "ccc-max.txt")
+            env["CCC_FAKE_LOCK"] = str(tmp_path / "ccc.lock")
+            env["CCC_FAKE_RUN_ROOT"] = str(tmp_path / "ccc-runs")
+            result = self.run_wf(
+                "apply",
+                str(plan_path),
+                "--ccc-control",
+                "@cli-control",
+                "--ccc-output-mode",
+                "stream-json",
+                "--startup-delay",
+                "0",
+                env=env,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            ccc_starts = [
+                ev["args"]
+                for ev in self.read_ccc_events(tmp_path)
+                if ev["event"] == "start"
+            ]
+            self.assertEqual(len(ccc_starts), 1, msg=ccc_starts)
+            args = ccc_starts[0]
+            self.assertEqual(args[args.index("--output-mode") + 1], "stream-json")
+            self.assertIn("@cli-control", args)
+            self.assertNotIn("@root-control", args)
+            self.assertNotIn("@phase-control", args)
+            self.assertNotIn("@job-control", args)
+
+    def test_wf_apply_honors_phase_result_schema_override(self) -> None:
+        """Phase result_schema should validate output for jobs in that phase."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            schema_path = tmp_path / "schema.json"
+            schema_path.write_text(
+                json.dumps({"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}),
+                encoding="utf-8",
+            )
+            plan_path = tmp_path / "phase-schema.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Phase Schema",
+                        "runner": "codex-direct",
+                        "phases": [
+                            {
+                                "name": "validated",
+                                "result_schema": str(schema_path),
+                                "jobs": [{"name": "ask", "prompt": "Return JSON."}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = self.codex_fake_env(tmp_path)
+            env["CODEX_FAKE_OUTPUT"] = json.dumps({"answer": "yes"})
+            result = self.run_wf("apply", str(plan_path), "--startup-delay", "0", env=env, check=False)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(run["status"], "completed")
+            agent = run["agents"][0]
+            self.assertEqual(agent["status"], "completed")
+            self.assertEqual(agent["result_json"], {"answer": "yes"})
+
+    def test_wf_apply_phase_cwd_reaches_actual_worker_command(self) -> None:
+        """Phase cwd should affect the real launched worker command."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root_cwd = tmp_path / "root-cwd"
+            phase_cwd = tmp_path / "phase-cwd"
+            root_cwd.mkdir()
+            phase_cwd.mkdir()
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            args_log = tmp_path / "codex-args.json"
+            plan_path = tmp_path / "phase-cwd.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Phase Cwd",
+                        "cwd": str(root_cwd),
+                        "runner": "codex-direct",
+                        "phases": [
+                            {
+                                "name": "phase",
+                                "cwd": str(phase_cwd),
+                                "jobs": [{"name": "ask", "prompt": "Return text."}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CODEX_FAKE_ARGS"] = str(args_log)
+            result = self.run_wf("apply", str(plan_path), "--startup-delay", "0", env=env, check=False)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            codex_args = json.loads(args_log.read_text(encoding="utf-8"))
+            self.assertEqual(codex_args[codex_args.index("--cd") + 1], str(phase_cwd.resolve()))
+
+    def test_wf_apply_relative_cli_cwd_overrides_phase_cwd_at_launch(self) -> None:
+        """Relative CLI cwd should stay resolved when applied as a per-job override."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            plan_dir = tmp_path / "plans"
+            plan_dir.mkdir()
+            cli_cwd = plan_dir / "cli-rel"
+            phase_cwd = plan_dir / "phase-rel"
+            cli_cwd.mkdir()
+            phase_cwd.mkdir()
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            args_log = tmp_path / "codex-args.json"
+            plan_path = plan_dir / "relative-cli-cwd.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Relative CLI Cwd",
+                        "runner": "codex-direct",
+                        "phases": [
+                            {
+                                "name": "phase",
+                                "cwd": "phase-rel",
+                                "jobs": [{"name": "ask", "prompt": "Return text."}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CODEX_FAKE_ARGS"] = str(args_log)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "workflow_apply.py"),
+                    str(plan_path),
+                    "--cwd",
+                    "cli-rel",
+                    "--startup-delay",
+                    "0",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env=env,
+                cwd=plan_dir,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            codex_args = json.loads(args_log.read_text(encoding="utf-8"))
+            self.assertEqual(codex_args[codex_args.index("--cd") + 1], str(cli_cwd.resolve()))
+
+    def test_wf_apply_phase_mock_and_dry_run_do_not_launch_workers(self) -> None:
+        """Phase mock/dry_run should avoid real worker process launches."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            args_log = tmp_path / "codex-args.json"
+            plan_path = tmp_path / "virtual-workers.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Virtual Workers",
+                        "runner": "codex-direct",
+                        "phases": [
+                            {
+                                "name": "mocked",
+                                "mock": True,
+                                "jobs": [{"name": "mock-job", "prompt": "Should not launch."}],
+                            },
+                            {
+                                "name": "dry",
+                                "dry_run": True,
+                                "jobs": [{"name": "dry-job", "prompt": "Should not launch."}],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CODEX_FAKE_ARGS"] = str(args_log)
+            result = self.run_wf("apply", str(plan_path), "--startup-delay", "0", env=env, check=False)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            agents_by_name = {agent["name"]: agent for agent in run["agents"]}
+            self.assertFalse(args_log.exists(), msg="fake codex should not have launched")
+            self.assertEqual(agents_by_name["mock-job"]["status"], "completed")
+            self.assertEqual(agents_by_name["mock-job"]["summary"], "mock worker completed")
+            self.assertEqual(agents_by_name["dry-job"]["status"], "completed")
+            self.assertEqual(agents_by_name["dry-job"]["summary"], "dry run; worker not launched")
+            self.assertIn("Dry run only", agents_by_name["dry-job"]["result"])
 
     def test_wf_apply_runs_per_job_with_plan_runner(self) -> None:
         """Per-job providers must actually launch the configured runner, not just stamp agent_type."""

@@ -66,6 +66,8 @@ def normalize_workflow(raw: dict[str, Any], *, fallback_title: str) -> dict[str,
         for field in EXECUTION_FIELDS:
             if field in phase_raw:
                 phase[field] = phase_raw[field]
+        if "ccc_control" in phase:
+            phase["ccc_control"] = normalize_string_list(phase["ccc_control"], "phase ccc_control")
         phases.append(phase)
     plan = {
         "schema_version": int(raw.get("schema_version") or 1),
@@ -107,6 +109,8 @@ def normalize_job(item: Any, index: int) -> dict[str, Any]:
     for field in EXECUTION_FIELDS:
         if field in item:
             job[field] = item[field]
+    if "ccc_control" in job:
+        job["ccc_control"] = normalize_string_list(job["ccc_control"], "job ccc_control")
     return job
 
 

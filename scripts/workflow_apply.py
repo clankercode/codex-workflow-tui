@@ -60,7 +60,21 @@ def resolve_cwd(value: Any, *, source_dir: Path) -> str:
 def merge_plan_options(args: argparse.Namespace, plan: dict[str, Any], source_dir: Path) -> None:
     """Apply plan execution metadata, with explicit CLI args taking precedence."""
     _cli_explicit: dict[str, Any] = {}
-    for field in ("runner", "model", "sandbox", "approval", "ccc_runner", "permission_mode", "cli_agent"):
+    for field in (
+        "runner",
+        "model",
+        "sandbox",
+        "approval",
+        "ccc_runner",
+        "ccc_control",
+        "ccc_output_mode",
+        "permission_mode",
+        "cli_agent",
+        "result_schema",
+        "cwd",
+        "dry_run",
+        "mock",
+    ):
         value = getattr(args, field, None)
         if value is not None:
             _cli_explicit[field] = value
@@ -349,7 +363,7 @@ def apply_workflow(args: argparse.Namespace) -> int:
     for index, job in enumerate(jobs):
         job_fields = resolve_job_execution_fields(plan, job)
         cli_explicit = getattr(args, "_cli_explicit", {})
-        job_args = _build_job_args(args, job_fields)
+        job_args = _build_job_args(args, job_fields, source.parent)
         job_provider = _build_job_provider(args, job_args, default_provider)
         effective_model = cli_explicit.get("model", job_fields.get("model"))
         run = workflow_run_codex.add_agent(
@@ -377,6 +391,7 @@ def apply_workflow(args: argparse.Namespace) -> int:
 
 
 JOB_EXECUTION_OVERRIDE_FIELDS = (
+    "cwd",
     "runner",
     "model",
     "sandbox",
@@ -387,27 +402,42 @@ JOB_EXECUTION_OVERRIDE_FIELDS = (
     "permission_mode",
     "cli_agent",
     "timeout_secs",
+    "result_schema",
     "kimi_max_steps_per_turn",
+    "dry_run",
+    "mock",
 )
 
 
 def _build_job_args(
     args: argparse.Namespace,
     job_fields: dict[str, Any],
+    source_dir: Path,
 ) -> argparse.Namespace:
-    """Return a per-job args namespace with CLI > root > phase > job precedence."""
+    """Return per-job args using plan root < phase < job, with explicit CLI winning."""
     cli_explicit = getattr(args, "_cli_explicit", {})
     job_args = argparse.Namespace(**vars(args))
     for field in JOB_EXECUTION_OVERRIDE_FIELDS:
         if field in cli_explicit and cli_explicit[field] is not None:
-            setattr(job_args, field, cli_explicit[field])
+            if field == "cwd":
+                setattr(job_args, field, args.cwd)
+            else:
+                setattr(job_args, field, cli_explicit[field])
         elif field in job_fields:
             value = job_fields[field]
-            if field in ("timeout_secs", "kimi_max_steps_per_turn"):
+            if field == "cwd":
+                if value not in (None, ""):
+                    setattr(job_args, field, resolve_cwd(value, source_dir=source_dir))
+            elif field in ("timeout_secs", "kimi_max_steps_per_turn"):
                 if value is not None:
                     setattr(job_args, field, value)
+            elif field in ("dry_run", "mock"):
+                if value is not None:
+                    setattr(job_args, field, bool(value))
             elif value:
                 setattr(job_args, field, value)
+    if "result_schema" in job_fields or "result_schema" in cli_explicit:
+        job_args.result_schema_obj = workflow_run_codex._resolve_schema(getattr(job_args, "result_schema", None))
     return job_args
 
 
@@ -417,6 +447,9 @@ def _job_execution_differs(args: argparse.Namespace, job_args: argparse.Namespac
         jv = getattr(job_args, field, None)
         av = getattr(args, field, None)
         if field in ("timeout_secs", "kimi_max_steps_per_turn"):
+            if jv is not None and jv != av:
+                return True
+        elif field in ("dry_run", "mock"):
             if jv is not None and jv != av:
                 return True
         elif (jv or av) and jv != av:
