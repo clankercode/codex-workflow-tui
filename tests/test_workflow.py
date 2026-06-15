@@ -6357,6 +6357,245 @@ class WorkflowScriptTests(unittest.TestCase):
             # CLI runner overrides job runner
             self.assertEqual(agent["agent_type"], "ccc-opencode")
 
+    def test_wf_apply_runs_per_job_with_plan_runner(self) -> None:
+        """Per-job providers must actually launch the configured runner, not just stamp agent_type."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            self.install_timed_fake_ccc(fake_bin)
+            plan_path = tmp_path / "mixed.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Mixed Runners",
+                        "runner": "codex-direct",
+                        "model": "root-model",
+                        "sandbox": "read-only",
+                        "phases": [
+                            {
+                                "name": "research",
+                                "runner": "ccc",
+                                "ccc_runner": "@mm",
+                                "model": "phase-model",
+                                "jobs": [
+                                    {"name": "deep-research", "prompt": "Research deeply.", "model": "job-model"},
+                                    {"name": "quick-scan", "prompt": "Quick scan."},
+                                ],
+                            },
+                            {
+                                "name": "implement",
+                                "jobs": [
+                                    {"name": "impl-a", "prompt": "Implement A.", "runner": "ccc", "ccc_runner": "@kimi"},
+                                    {"name": "impl-b", "prompt": "Implement B."},
+                                ],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_EVENTS"] = str(tmp_path / "ccc-events.jsonl")
+            env["CCC_FAKE_ACTIVE"] = str(tmp_path / "ccc-active.txt")
+            env["CCC_FAKE_MAX"] = str(tmp_path / "ccc-max.txt")
+            env["CCC_FAKE_LOCK"] = str(tmp_path / "ccc.lock")
+            env["CCC_FAKE_RUN_ROOT"] = str(tmp_path / "ccc-runs")
+            result = self.run_wf(
+                "apply",
+                str(plan_path),
+                "--startup-delay",
+                "0",
+                env=env,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(run["status"], "completed")
+
+            ccc_starts = [
+                " ".join(ev["args"])
+                for ev in self.read_ccc_events(tmp_path)
+                if ev["event"] == "start"
+            ]
+            self.assertEqual(len(ccc_starts), 3, msg=f"expected 3 ccc starts, got {ccc_starts}")
+            self.assertTrue(
+                any("@mm" in args and "Research deeply." in args for args in ccc_starts),
+                msg=f"deep-research must run via ccc @mm: {ccc_starts}",
+            )
+            self.assertTrue(
+                any("@mm" in args and "Quick scan." in args for args in ccc_starts),
+                msg=f"quick-scan must run via ccc @mm: {ccc_starts}",
+            )
+            self.assertTrue(
+                any("@kimi" in args and "Implement A." in args for args in ccc_starts),
+                msg=f"impl-a must run via ccc @kimi: {ccc_starts}",
+            )
+
+            for agent in run["agents"]:
+                if agent["name"] == "impl-b":
+                    self.assertEqual(agent["agent_type"], "codex-exec")
+                    # impl-b inherits every field from the run defaults, so no
+                    # per-agent execution_args override is recorded.
+                    self.assertNotIn("execution_args", agent, msg=agent)
+                else:
+                    self.assertIn("ccc", agent["agent_type"])
+                    self.assertIn("execution_args", agent, msg=agent)
+
+    def test_wf_apply_same_runner_different_ccc_runner_per_phase(self) -> None:
+        """A phase that keeps the same runner but overrides ccc_runner must still apply ccc_runner."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            self.install_timed_fake_ccc(fake_bin)
+            plan_path = tmp_path / "same-runner.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Same Runner, Different Ccc",
+                        "runner": "ccc",
+                        "ccc_runner": "@mm",
+                        "phases": [
+                            {
+                                "name": "default",
+                                "jobs": [{"name": "job-mm", "prompt": "MM phase job."}],
+                            },
+                            {
+                                "name": "kimi",
+                                "ccc_runner": "@kimi",
+                                "jobs": [{"name": "job-kimi", "prompt": "Kimi phase job."}],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_EVENTS"] = str(tmp_path / "ccc-events.jsonl")
+            env["CCC_FAKE_ACTIVE"] = str(tmp_path / "ccc-active.txt")
+            env["CCC_FAKE_MAX"] = str(tmp_path / "ccc-max.txt")
+            env["CCC_FAKE_LOCK"] = str(tmp_path / "ccc.lock")
+            env["CCC_FAKE_RUN_ROOT"] = str(tmp_path / "ccc-runs")
+            result = self.run_wf("apply", str(plan_path), "--startup-delay", "0", env=env, check=False)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(run["status"], "completed")
+
+            ccc_starts = [
+                " ".join(ev["args"])
+                for ev in self.read_ccc_events(tmp_path)
+                if ev["event"] == "start"
+            ]
+            self.assertEqual(len(ccc_starts), 2, msg=ccc_starts)
+            self.assertTrue(
+                any("@mm" in args and "MM phase job" in args for args in ccc_starts),
+                msg=f"default phase must use @mm: {ccc_starts}",
+            )
+            self.assertTrue(
+                any("@kimi" in args and "Kimi phase job" in args for args in ccc_starts),
+                msg=f"kimi phase must use @kimi: {ccc_starts}",
+            )
+
+    def test_wf_apply_same_runner_different_model_per_phase(self) -> None:
+        """A phase that keeps the same runner but overrides model/sandbox must be honored at launch."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            self.install_timed_fake_ccc(fake_bin)
+            plan_path = tmp_path / "same-runner-model.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Same Runner, Different Model",
+                        "runner": "codex-direct",
+                        "model": "root-model",
+                        "sandbox": "read-only",
+                        "phases": [
+                            {
+                                "name": "default",
+                                "jobs": [{"name": "job-root", "prompt": "Root phase job."}],
+                            },
+                            {
+                                "name": "phase-two",
+                                "model": "phase-model",
+                                "sandbox": "workspace-write",
+                                "jobs": [{"name": "job-phase2", "prompt": "Phase two job."}],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            codex_args_log = tmp_path / "codex-args.json"
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_EVENTS"] = str(tmp_path / "ccc-events.jsonl")
+            env["CCC_FAKE_ACTIVE"] = str(tmp_path / "ccc-active.txt")
+            env["CCC_FAKE_MAX"] = str(tmp_path / "ccc-max.txt")
+            env["CCC_FAKE_LOCK"] = str(tmp_path / "ccc.lock")
+            env["CCC_FAKE_RUN_ROOT"] = str(tmp_path / "ccc-runs")
+            # The default fake codex overwrites CODEX_FAKE_ARGS on every call; install a
+            # custom binary that appends so we can assert on every per-job invocation.
+            fake_codex = fake_bin / "codex"
+            fake_codex.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import os
+                    import sys
+                    from pathlib import Path
+                    args_log = Path(os.environ.get("CODEX_FAKE_ARGS", "/tmp/_codex_args.json"))
+                    log = json.loads(args_log.read_text(encoding="utf-8")) if args_log.exists() else []
+                    log.append(sys.argv[1:])
+                    args_log.write_text(json.dumps(log), encoding="utf-8")
+                    event = {"type": "item.completed", "item": {"type": "agent_message", "text": "fake codex result"}}
+                    sys.stdout.write(json.dumps(event) + "\\n")
+                    sys.exit(0)
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            env["CODEX_FAKE_ARGS"] = str(codex_args_log)
+            result = self.run_wf("apply", str(plan_path), "--startup-delay", "0", env=env, check=False)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(run["status"], "completed")
+
+            calls = json.loads(codex_args_log.read_text())
+            self.assertEqual(len(calls), 2, msg=calls)
+            root_call = next(
+                (c for c in calls if any("Root phase job" in str(x) for x in c)),
+                None,
+            )
+            phase2_call = next(
+                (c for c in calls if any("Phase two job" in str(x) for x in c)),
+                None,
+            )
+            self.assertIsNotNone(root_call, msg=calls)
+            self.assertIsNotNone(phase2_call, msg=calls)
+            self.assertIn("root-model", root_call, msg=root_call)
+            self.assertIn("read-only", root_call, msg=root_call)
+            self.assertIn("phase-model", phase2_call, msg=phase2_call)
+            self.assertIn("workspace-write", phase2_call, msg=phase2_call)
+            self.assertNotIn("phase-model", root_call, msg=root_call)
+            self.assertNotIn("root-model", phase2_call, msg=phase2_call)
+
+
     @slow_test
     def test_wf_runner_matrix_dispatches_to_script(self) -> None:
         """Expose the reusable runner matrix through the installed shell entrypoint."""

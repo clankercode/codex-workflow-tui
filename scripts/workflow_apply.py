@@ -349,7 +349,8 @@ def apply_workflow(args: argparse.Namespace) -> int:
     for index, job in enumerate(jobs):
         job_fields = resolve_job_execution_fields(plan, job)
         cli_explicit = getattr(args, "_cli_explicit", {})
-        job_provider = _build_job_provider(args, job_fields, default_provider)
+        job_args = _build_job_args(args, job_fields)
+        job_provider = _build_job_provider(args, job_args, default_provider)
         effective_model = cli_explicit.get("model", job_fields.get("model"))
         run = workflow_run_codex.add_agent(
             run,
@@ -361,6 +362,7 @@ def apply_workflow(args: argparse.Namespace) -> int:
             depends_on=job.get("depends_on", ""),
             phase_id=job.get("phase_id"),
             model_override=effective_model,
+            job_args=job_args,
         )
     print(json.dumps({"run_id": run["run_id"], "path": run["paths"]["run_json"], "jobs": len(jobs)}, indent=2))
     if args.dry_run:
@@ -374,31 +376,62 @@ def apply_workflow(args: argparse.Namespace) -> int:
     return 0 if status == "completed" else 1
 
 
-def _build_job_provider(
+JOB_EXECUTION_OVERRIDE_FIELDS = (
+    "runner",
+    "model",
+    "sandbox",
+    "approval",
+    "ccc_runner",
+    "ccc_control",
+    "ccc_output_mode",
+    "permission_mode",
+    "cli_agent",
+    "timeout_secs",
+    "kimi_max_steps_per_turn",
+)
+
+
+def _build_job_args(
     args: argparse.Namespace,
     job_fields: dict[str, Any],
+) -> argparse.Namespace:
+    """Return a per-job args namespace with CLI > root > phase > job precedence."""
+    cli_explicit = getattr(args, "_cli_explicit", {})
+    job_args = argparse.Namespace(**vars(args))
+    for field in JOB_EXECUTION_OVERRIDE_FIELDS:
+        if field in cli_explicit and cli_explicit[field] is not None:
+            setattr(job_args, field, cli_explicit[field])
+        elif field in job_fields:
+            value = job_fields[field]
+            if field in ("timeout_secs", "kimi_max_steps_per_turn"):
+                if value is not None:
+                    setattr(job_args, field, value)
+            elif value:
+                setattr(job_args, field, value)
+    return job_args
+
+
+def _job_execution_differs(args: argparse.Namespace, job_args: argparse.Namespace) -> bool:
+    """Return True when job_args overrides any per-job execution field relative to args."""
+    for field in JOB_EXECUTION_OVERRIDE_FIELDS:
+        jv = getattr(job_args, field, None)
+        av = getattr(args, field, None)
+        if field in ("timeout_secs", "kimi_max_steps_per_turn"):
+            if jv is not None and jv != av:
+                return True
+        elif (jv or av) and jv != av:
+            return True
+    return False
+
+
+def _build_job_provider(
+    args: argparse.Namespace,
+    job_args: argparse.Namespace,
     default_provider: workflow_run_codex.RunnerProvider,
 ) -> workflow_run_codex.RunnerProvider:
-    """Build a provider for one job if its runner differs from the run default."""
-    cli_explicit = getattr(args, "_cli_explicit", {})
-    job_runner = job_fields.get("runner")
-    if not job_runner or (job_runner == args.runner and "runner" not in cli_explicit):
+    """Return a per-job provider when the job's execution fields diverge from the run default."""
+    if not _job_execution_differs(args, job_args):
         return default_provider
-    effective_runner = cli_explicit.get("runner", job_runner)
-    if effective_runner == args.runner:
-        return default_provider
-    job_args = argparse.Namespace(**vars(args))
-    job_args.runner = effective_runner
-    job_args.ccc_runner = cli_explicit.get("ccc_runner", job_fields.get("ccc_runner") or args.ccc_runner)
-    job_args.ccc_control = job_fields.get("ccc_control") if job_fields.get("ccc_control") is not None else args.ccc_control
-    job_args.ccc_output_mode = job_fields.get("ccc_output_mode") or args.ccc_output_mode
-    job_args.permission_mode = cli_explicit.get("permission_mode", job_fields.get("permission_mode") or args.permission_mode)
-    job_args.cli_agent = cli_explicit.get("cli_agent", job_fields.get("cli_agent") or args.cli_agent)
-    job_args.timeout_secs = cli_explicit.get("timeout_secs", job_fields.get("timeout_secs") if job_fields.get("timeout_secs") is not None else args.timeout_secs)
-    job_args.kimi_max_steps_per_turn = cli_explicit.get("kimi_max_steps_per_turn", job_fields.get("kimi_max_steps_per_turn") if job_fields.get("kimi_max_steps_per_turn") is not None else args.kimi_max_steps_per_turn)
-    job_args.model = cli_explicit.get("model", job_fields.get("model") or args.model)
-    job_args.sandbox = cli_explicit.get("sandbox", job_fields.get("sandbox") or args.sandbox)
-    job_args.approval = cli_explicit.get("approval", job_fields.get("approval") or args.approval)
     return workflow_run_codex.build_provider(job_args)
 
 

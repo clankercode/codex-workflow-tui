@@ -569,6 +569,7 @@ def add_agent(
     depends_on: str = "",
     phase_id: str | None = None,
     model_override: str | None = None,
+    job_args: argparse.Namespace | None = None,
 ) -> dict[str, Any]:
     prefix = workflow_state.slugify(provider.name, fallback="worker")
     agent_id = f"{prefix}-{index + 1:02d}-{workflow_state.slugify(job['name'])}"
@@ -611,9 +612,37 @@ def add_agent(
         extra["schema"] = _resolve_schema(job["schema"])
     if job.get("worktree"):
         extra["worktree"] = job["worktree"]
+    execution_args = _serialize_job_execution_args(args, job_args)
+    if execution_args:
+        extra["execution_args"] = execution_args
     if extra:
         update_agent(run["run_id"], agent_id, **extra)
     return workflow_state.load_run(run["run_id"])
+
+
+def _serialize_job_execution_args(
+    args: argparse.Namespace,
+    job_args: argparse.Namespace | None,
+) -> dict[str, Any]:
+    """Return a JSON-serializable dict of per-job execution overrides, or {} if none.
+
+    Only fields that differ from the run-level args are recorded. Stored on the
+    agent so ``run_worker`` can rebuild the per-job provider/args at launch.
+    """
+    if job_args is None or job_args is args:
+        return {}
+    from workflow_apply import JOB_EXECUTION_OVERRIDE_FIELDS  # local import to avoid cycles
+
+    overrides: dict[str, Any] = {}
+    for field in JOB_EXECUTION_OVERRIDE_FIELDS:
+        value = getattr(job_args, field, None)
+        baseline = getattr(args, field, None)
+        if field in ("timeout_secs", "kimi_max_steps_per_turn"):
+            if value is not None and value != baseline:
+                overrides[field] = int(value)
+        elif value and value != baseline:
+            overrides[field] = value
+    return overrides
 
 
 def update_agent(run_id: str, agent_id: str, *, emit_event: bool | None = None, **values: Any) -> None:
@@ -930,6 +959,27 @@ def command_preview(command: list[str]) -> str:
     return shlex.join(preview)
 
 
+def _resolve_agent_provider(
+    agent: dict[str, Any],
+    args: argparse.Namespace,
+    default_provider: RunnerProvider,
+) -> tuple[argparse.Namespace, RunnerProvider]:
+    """Return the (per-job args, per-job provider) for one agent.
+
+    Falls back to the run-level ``args`` and ``provider`` when the agent has
+    no recorded ``execution_args`` overrides. The per-job provider is rebuilt
+    from the merged args so a job that overrides ``runner``/``ccc_runner``/etc.
+    is actually executed with that runner.
+    """
+    overrides = agent.get("execution_args")
+    if not overrides:
+        return args, default_provider
+    job_args = argparse.Namespace(**vars(args))
+    for key, value in overrides.items():
+        setattr(job_args, key, value)
+    return job_args, build_provider(job_args)
+
+
 async def run_worker(
     run_id: str,
     agent: dict[str, Any],
@@ -938,6 +988,7 @@ async def run_worker(
     semaphore: asyncio.Semaphore,
     startup_limiter: StartupRateLimiter,
 ) -> None:
+    job_args, job_provider = _resolve_agent_provider(agent, args, provider)
     started_epoch: float | None = None
     proc: asyncio.subprocess.Process | None = None
     last_telemetry_update = 0.0
@@ -986,7 +1037,7 @@ async def run_worker(
             if args.dry_run:
                 await startup_limiter.mark_virtual_start()
                 started_epoch = time.time()
-                message = f"Dry run only; {provider.name} was not launched."
+                message = f"Dry run only; {job_provider.name} was not launched."
                 Path(agent["output_path"]).write_text(message + "\n", encoding="utf-8")
                 update_agent(
                     run_id,
@@ -1014,8 +1065,8 @@ async def run_worker(
                 if not await wait_until_launch_allowed(run_id, agent["agent_id"]):
                     return
                 attempt += 1
-                command = provider.build_command(agent, args)
-                proc = await startup_limiter.create_process(command, cwd=agent_cwd(agent, args))
+                command = job_provider.build_command(agent, job_args)
+                proc = await startup_limiter.create_process(command, cwd=agent_cwd(agent, job_args))
                 if started_epoch is None:
                     started_epoch = time.time()
                 if attempt > 1:
@@ -1029,7 +1080,7 @@ async def run_worker(
                     status="running",
                     summary="process started" if attempt == 1 else f"retry attempt {attempt} started",
                     started_epoch=round(started_epoch, 3),
-                    command_preview=provider.preview_command(command, agent, args),
+                    command_preview=job_provider.preview_command(command, agent, job_args),
                     quota_retry_count=quota_retry_count,
                     failure_retry_count=failure_retry_count,
                     process_id=proc.pid,
@@ -1040,13 +1091,13 @@ async def run_worker(
                 assert proc.stdout is not None
                 assert proc.stderr is not None
                 if proc.stdin is not None:
-                    payload = provider.stdin_payload(agent, args)
+                    payload = job_provider.stdin_payload(agent, job_args)
                     if payload is not None:
                         proc.stdin.write(payload)
                         await proc.stdin.drain()
                     proc.stdin.close()
 
-                timeout = getattr(args, "timeout_secs", None)
+                timeout = getattr(job_args, "timeout_secs", None)
                 stdout_task = asyncio.create_task(append_stream_to_file(proc.stdout, jsonl_path, update_live_telemetry))
                 stderr_task = asyncio.create_task(append_stream_to_file(proc.stderr, stderr_path, update_live_telemetry))
                 wait_task = asyncio.create_task(proc.wait())
@@ -1071,7 +1122,7 @@ async def run_worker(
                     exit_code = 124
                     stderr_text += f"\nworkflow timeout after {timeout}s\n"
 
-                extracted = provider.extract_result(agent, exit_code, stdout_text=stdout_text, stderr_text=stderr_text)
+                extracted = job_provider.extract_result(agent, exit_code, stdout_text=stdout_text, stderr_text=stderr_text)
                 validation_error: str | None = None
                 if exit_code == 0:
                     schema = agent.get("schema") or getattr(args, "result_schema_obj", None)
