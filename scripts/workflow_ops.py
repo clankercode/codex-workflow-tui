@@ -554,29 +554,45 @@ def cmd_merge_lanes(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
-def find_conflict_context(run: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Find the first agent with merge_status=conflicted and its failed merge check.
+def find_conflict_context(run: dict[str, Any], agent_id: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
+    """Find a conflicted agent and its failed merge check.
 
     Returns (agent, check) or raises SystemExit if no conflict is found.
+    If ``agent_id`` is given, the matching conflicted agent must be found;
+    otherwise the first conflicted agent is returned.
     """
-    for agent in run.get("agents", []):
-        worktree = agent.get("worktree", {})
-        if worktree.get("merge_status") != "conflicted":
-            continue
-        check_id = worktree.get("merge_check_id") or ""
-        check = {}
-        if check_id:
-            for c in run.get("checks", []):
-                if c.get("check_id") == check_id:
-                    check = c
-                    break
-        if not check:
-            for c in reversed(run.get("checks", [])):
-                if c.get("kind") == "merge" and c.get("status") == "failed":
-                    check = c
-                    break
-        return agent, check
-    raise SystemExit("no conflicted merge found in run; run merge-lanes first and expect a conflict")
+    agents = run.get("agents", [])
+    selected: dict[str, Any] | None = None
+    if agent_id:
+        for agent in agents:
+            if agent.get("agent_id") != agent_id:
+                continue
+            if agent.get("worktree", {}).get("merge_status") != "conflicted":
+                raise SystemExit(f"agent {agent_id!r} is not in conflicted state")
+            selected = agent
+            break
+        if selected is None:
+            raise SystemExit(f"agent {agent_id!r} not found in run")
+    else:
+        for agent in agents:
+            if agent.get("worktree", {}).get("merge_status") == "conflicted":
+                selected = agent
+                break
+    if selected is None:
+        raise SystemExit("no conflicted merge found in run; run merge-lanes first and expect a conflict")
+    check_id = selected.get("worktree", {}).get("merge_check_id") or ""
+    if not check_id:
+        raise SystemExit(
+            f"conflicted agent {selected.get('agent_id')!r} has no merge_check_id; "
+            "the recorded conflict is malformed and cannot be safely resolved"
+        )
+    for c in run.get("checks", []):
+        if c.get("check_id") == check_id:
+            return selected, c
+    raise SystemExit(
+        f"conflicted agent {selected.get('agent_id')!r} references missing check {check_id!r}; "
+        "the recorded conflict is malformed and cannot be safely resolved"
+    )
 
 
 def build_merger_prompt(
@@ -658,21 +674,24 @@ def cmd_merge_conflicts(args: argparse.Namespace) -> None:
     if not cwd:
         raise SystemExit("run has no cwd; cannot prepare merge conflict context")
 
-    agent, check = find_conflict_context(run)
+    target_agent_id = str(getattr(args, "agent", "") or "")
+    agent, check = find_conflict_context(run, agent_id=target_agent_id)
     agent_id = str(agent.get("agent_id") or "")
     worktree = agent.get("worktree", {})
     branch = str(worktree.get("branch") or "")
 
     conflict_files: list[str] = []
     git_status = git_checked(cwd, "status", "--porcelain")
-    if git_status.returncode == 0 and git_status.stdout.strip():
-        for line in git_status.stdout.strip().splitlines():
+    cwd_status = git_status.stdout if git_status.returncode == 0 else ""
+    if cwd_status.strip():
+        for line in cwd_status.strip().splitlines():
             line = line.strip()
             if line and line[:2] in {"UU", "AA", "DD", "AU", "UA", "DU", "UD"}:
                 conflict_files.append(line[3:])
 
-    is_dirty = bool(git_status.stdout.strip()) if git_status.returncode == 0 else False
-    merge_aborted = not is_dirty
+    cwd_has_conflict_markers = bool(conflict_files)
+    cwd_has_unrelated_changes = bool(cwd_status.strip()) and not cwd_has_conflict_markers
+    merge_in_progress = cwd_has_conflict_markers
 
     prompt = build_merger_prompt(run, agent, check, conflict_files, cwd)
 
@@ -689,7 +708,9 @@ def cmd_merge_conflicts(args: argparse.Namespace) -> None:
         "branch": branch,
         "target": worktree.get("merge_target", ""),
         "conflict_files": conflict_files,
-        "merge_aborted": merge_aborted,
+        "cwd_has_conflict_markers": cwd_has_conflict_markers,
+        "cwd_has_unrelated_changes": cwd_has_unrelated_changes,
+        "merge_in_progress": merge_in_progress,
         "merge_check_id": check.get("check_id", ""),
         "prompt_path": str(prompt_path),
     }
@@ -721,14 +742,14 @@ def cmd_merge_conflicts(args: argparse.Namespace) -> None:
             "name": f"merge-conflict context: {agent_id}",
             "kind": "merge-conflict-assist",
             "status": "pending",
-            "required": True,
+            "required": False,
             "command": "",
             "cwd": cwd,
-            "exit_code": 0,
+            "exit_code": None,
             "duration_seconds": 0.0,
-            "summary": f"conflict context prepared for {agent_id}; merger prompt at {prompt_path.name}",
+            "summary": f"conflict context prepared for {agent_id}; merger prompt at {prompt_path.name}; requires verification (run `wf verify --check-id {check_id} --record-only --status passed ...`)",
             "log_path": "",
-            "completed_at": workflow_state.now(),
+            "completed_at": "",
             "evidence_path": str(context_path),
             "external_ref": "",
         })
@@ -743,7 +764,9 @@ def cmd_merge_conflicts(args: argparse.Namespace) -> None:
             data={
                 "branch": branch,
                 "conflict_files": conflict_files,
-                "merge_aborted": merge_aborted,
+                "cwd_has_conflict_markers": cwd_has_conflict_markers,
+                "cwd_has_unrelated_changes": cwd_has_unrelated_changes,
+                "merge_in_progress": merge_in_progress,
                 "prompt_path": str(prompt_path),
                 "context_path": str(context_path),
             },
@@ -755,16 +778,26 @@ def cmd_merge_conflicts(args: argparse.Namespace) -> None:
         "agent_id": agent_id,
         "branch": branch,
         "conflict_files": conflict_files,
-        "merge_aborted": merge_aborted,
+        "cwd_has_conflict_markers": cwd_has_conflict_markers,
+        "cwd_has_unrelated_changes": cwd_has_unrelated_changes,
+        "merge_in_progress": merge_in_progress,
         "prompt_path": str(prompt_path),
         "context_path": str(context_path),
     }
-    if merge_aborted:
-        result["hint"] = (
-            "The previous merge was aborted and the tree is clean. "
-            "To let a merger agent work on conflicts, re-run merge-lanes with --leave-conflicts, "
-            "then re-run merge-conflicts."
-        )
+    if not cwd_has_conflict_markers:
+        if cwd_has_unrelated_changes:
+            result["hint"] = (
+                "No unmerged conflict markers found in the run cwd, but it has other uncommitted changes. "
+                "To let a merger agent work on conflicts, run `git merge --no-edit <branch>` (or re-run "
+                "`merge-lanes --leave-conflicts`) so the conflict markers are present, then re-run "
+                "`merge-conflicts`."
+            )
+        else:
+            result["hint"] = (
+                "The run cwd is clean: the previous merge appears to have been aborted. "
+                "Re-run `merge-lanes --leave-conflicts` (or `git merge --no-edit <branch>`) so the "
+                "conflict markers are present, then re-run `merge-conflicts`."
+            )
     print_json(result)
 
 
@@ -951,6 +984,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     merge_conflicts = sub.add_parser("merge-conflicts", help="prepare conflict context and merger-agent prompt for a failed merge")
     merge_conflicts.add_argument("run")
+    merge_conflicts.add_argument("--agent", help="specific conflicted agent id to target (defaults to the first conflicted agent)")
     merge_conflicts.set_defaults(func=cmd_merge_conflicts)
 
     done = sub.add_parser("done", help="complete a workflow after safety checks")
