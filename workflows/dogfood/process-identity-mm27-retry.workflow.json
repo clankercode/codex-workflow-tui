@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Dogfood process identity display retry",
+  "goal": "Show useful process identity for running workflow agents in operator-visible surfaces.",
+  "cwd": "../..",
+  "runner": "ccc",
+  "ccc_runner": "@mm27",
+  "ccc_output_mode": "stream-json",
+  "permission_mode": "yolo",
+  "startup_delay": 0,
+  "max_agents": 1,
+  "failure_retries": 1,
+  "tags": ["dogfood", "process-identity", "mm27", "worktree-lane", "retry"],
+  "phases": [
+    {
+      "name": "implementation",
+      "title": "Implementation",
+      "goal": "Implement process identity display for running agents.",
+      "checks": [
+        {
+          "name": "targeted process identity tests",
+          "cmd": "python3 -m unittest tests.test_workflow.WorkflowScriptTests.test_running_agent_process_identity_is_visible"
+        },
+        {
+          "name": "fast workflow tests",
+          "cmd": "WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py"
+        }
+      ],
+      "jobs": [
+        {
+          "name": "process-identity",
+          "role": "workflow implementer",
+          "prompt": "You are already running as the ccc @mm27 implementation worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @mm27. Edit files directly in this declared worktree lane. Load the pirfl skill from ~/.claude/skills/pirfl if no local copy is available. Task: implement the backlog item 'Process identity for running agents'. Scope it narrowly: expose PID/process group for external workers and a clear non-PID native id for native subagents in the existing operator-visible workflow status/detail/TUI surfaces. Preserve existing style. Add focused tests, preferably a test named test_running_agent_process_identity_is_visible or equivalent. Run the targeted test and fast workflow tests if practical. Return files changed and test results. Other agents or the lead may be working elsewhere; do not revert unrelated changes.",
+          "write_scope": [
+            "scripts/workflow_tui.py",
+            "scripts/workflow_ops.py",
+            "references/state-schema.md",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md",
+            "tests/test_workflow.py"
+          ],
+          "worktree": {
+            "branch": "workflow/process-identity-display-retry",
+            "base": "HEAD",
+            "merge_target": "main",
+            "owner": "ccc-@mm27"
+          }
+        }
+      ]
+    }
+  ]
+}

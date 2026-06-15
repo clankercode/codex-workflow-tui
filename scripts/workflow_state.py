@@ -351,6 +351,8 @@ def cmd_add_agent(args: argparse.Namespace) -> None:
             "model": args.model or "",
             "thread_id": args.thread_id or "",
             "process_id": args.process_id,
+            "process_group_id": getattr(args, "process_group_id", None),
+            "native_id": getattr(args, "native_id", "") or "",
             "write_scope": args.write_scope or [],
             "jsonl_path": args.jsonl_path or "",
             "log_path": args.log_path or "",
@@ -402,11 +404,16 @@ def cmd_update_agent(args: argparse.Namespace) -> None:
                 agent["completed_at"] = now()
             else:
                 agent["completed_at"] = None
-        for attr in ("summary", "result", "thread_id", "jsonl_path", "log_path", "output_path", "model"):
+        for attr in ("summary", "result", "thread_id", "jsonl_path", "log_path", "output_path", "model", "native_id"):
+            if not hasattr(args, attr):
+                continue
             value = getattr(args, attr)
             file_value = getattr(args, f"{attr}_file", None)
             if value is not None or file_value is not None:
                 agent[attr] = read_text_arg(value, file_value)
+        process_group_id = getattr(args, "process_group_id", None)
+        if process_group_id is not None:
+            agent["process_group_id"] = process_group_id
         if args.exit_code is not None:
             agent["exit_code"] = args.exit_code
         agent["updated_at"] = now()
@@ -767,6 +774,8 @@ def build_parser() -> argparse.ArgumentParser:
     agent.add_argument("--model")
     agent.add_argument("--thread-id")
     agent.add_argument("--process-id", type=int)
+    agent.add_argument("--process-group-id", type=int)
+    agent.add_argument("--native-id")
     agent.add_argument("--write-scope", action="append")
     agent.add_argument("--jsonl-path")
     agent.add_argument("--log-path")
@@ -791,6 +800,9 @@ def build_parser() -> argparse.ArgumentParser:
     uagent.add_argument("--output-path-file")
     uagent.add_argument("--model")
     uagent.add_argument("--model-file")
+    uagent.add_argument("--native-id")
+    uagent.add_argument("--native-id-file")
+    uagent.add_argument("--process-group-id", type=int)
     uagent.add_argument("--exit-code", type=int)
     uagent.set_defaults(func=cmd_update_agent)
 

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Dogfood process identity mm3 review",
+  "goal": "Review the @mm27 process identity implementation before merge-back.",
+  "cwd": "/home/xertrov/.agents/workflow-system/state/runs/wf-20260615T130616Z-dogfood-process-identity-display-retry-80f42e/worktrees/process-identity",
+  "runner": "ccc",
+  "ccc_runner": "@mm3",
+  "ccc_output_mode": "stream-json",
+  "permission_mode": "safe",
+  "startup_delay": 0,
+  "max_agents": 1,
+  "tags": ["dogfood", "process-identity", "mm3", "review"],
+  "phases": [
+    {
+      "name": "review",
+      "title": "Review",
+      "goal": "Review the implementation for correctness, scope, and tests.",
+      "jobs": [
+        {
+          "name": "process-identity-review",
+          "role": "reviewer",
+          "prompt": "You are already running as the ccc @mm3 reviewer. Do not run ccc and do not delegate. Review the current uncommitted diff in this worktree for the backlog item: show process identity for running agents. Check whether PID/process group for external workers and non-PID native IDs are visible in the expected operator surfaces, whether tests actually assert visibility rather than just storage, and whether edits stayed within the intended scope. Return findings first, each with severity and file/function references. If no issues, say PASS. Do not modify files."
+        }
+      ]
+    }
+  ]
+}

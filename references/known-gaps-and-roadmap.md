@@ -117,11 +117,14 @@ pause, resume, and stop.
   provide `process_id`, `jsonl_path`, native `thread_id`, or `unmanaged: true`.
 - `ccc --ccc-runner claude` isn't in the selector cwd-forwarding sets, so the
   runner's `--cd`/`--work-dir` plumbing is skipped (works only via ccc's default).
+- Process identity display for running agents is implemented for selected-agent
+  detail surfaces: external workers show `pgid`/`pid`, and native workers can
+  show `native_id`.
 - `load_run` on a missing id throws a raw `FileNotFoundError`; wrap callers to
   emit `no run '<id>' (try: wf list)`.
 
 ## Prioritization
 1. **A7** (remaining lock boundary documentation / init locking story).
 2. Conflict-solving merger agents for worktree lanes.
-3. Process identity display for running agents.
+3. Native-subagent status/output integration.
 4. Everything else as polish.

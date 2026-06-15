@@ -11,6 +11,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                            ││ ╭──────────────────────────── Live Stats ────────────────────────────╮ │
 │                                            ││ │ tokens      1234       tail tools 1          parse errs 0          │ │
 │                                            ││ │ elapsed     0s         status     running    thread     thread-li… │ │
+│                                            ││ │ pid         5151                                                   │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────── Latest Tool Calls ─────────────────────────╮ │
 │                                            ││ │ command_execution · completed · /usr/bin/python3 -c "a,b=0,1\nfor  │ │
@@ -22,7 +23,6 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                            ││ │ Worker is still streaming context, but the current artifact        │ │
 │                                            ││ │ already contains the answer.                                       │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││                                                                        │
 │                                            ││                                                                        │
 │                                            ││                                                                        │
 │                                            ││                                                                        │

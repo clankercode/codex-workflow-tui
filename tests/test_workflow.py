@@ -322,6 +322,79 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(data["metrics"]["agents_by_status"]["completed"], 1)
             self.assertEqual(data["phases"][0]["agent_ids"], ["agent-test"])
 
+    def test_running_agent_process_identity_is_visible(self) -> None:
+        """Ensure process identity fields are stored and retrievable for running agents."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_script(
+                "workflow_state.py",
+                "init",
+                "--title",
+                "Process Identity Test",
+                "--prompt",
+                "exercise process identity",
+                "--cwd",
+                str(ROOT),
+                env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_script(
+                "workflow_state.py",
+                "add-phase",
+                run_id,
+                "--phase-id",
+                "phase-pid",
+                "--name",
+                "Process Identity Phase",
+                "--status",
+                "running",
+                env=env,
+            )
+            self.run_script(
+                "workflow_state.py",
+                "add-agent",
+                run_id,
+                "--phase",
+                "phase-pid",
+                "--agent-id",
+                "agent-pid",
+                "--name",
+                "PID Agent",
+                "--status",
+                "running",
+                "--process-id",
+                "12345",
+                "--process-group-id",
+                "12345",
+                env=env,
+            )
+            shown = self.run_script("workflow_state.py", "show", run_id, "--json", env=env)
+            data = json.loads(shown.stdout)
+            agent = data["agents"][0]
+            self.assertEqual(agent["process_id"], 12345)
+            self.assertEqual(agent["process_group_id"], 12345)
+
+            self.run_script(
+                "workflow_state.py",
+                "update-agent",
+                run_id,
+                "agent-pid",
+                "--status",
+                "completed",
+                "--summary",
+                "done",
+                "--native-id",
+                "native-abc",
+                env=env,
+            )
+            completed = self.run_script("workflow_state.py", "show", run_id, "--json", env=env)
+            completed_data = json.loads(completed.stdout)
+            completed_agent = completed_data["agents"][0]
+            self.assertEqual(completed_agent["process_id"], 12345)
+            self.assertEqual(completed_agent["process_group_id"], 12345)
+            self.assertEqual(completed_agent["native_id"], "native-abc")
+
     def test_wf_wrapper_defaults_state_to_user_agents_root(self) -> None:
         """Installed command wrappers should share the documented user state root."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -4149,6 +4222,33 @@ class WorkflowScriptTests(unittest.TestCase):
         rendered = sink.getvalue()
         self.assertIn("elapsed", rendered)
         self.assertIn("5m 00s", rendered)
+
+    def test_agent_detail_shows_process_identity_for_running_worker(self) -> None:
+        """Selected-agent detail should expose process and native identity values."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        sink = io.StringIO()
+        console = Console(file=sink, width=100, force_terminal=False, color_system=None)
+        console.print(
+            workflow_tui.make_agent_activity_detail(
+                {
+                    "agent_id": "a",
+                    "name": "Alpha",
+                    "status": "running",
+                    "process_id": 12345,
+                    "process_group_id": 23456,
+                    "native_id": "native-abc",
+                },
+                {"agents": []},
+            )
+        )
+        rendered = sink.getvalue()
+
+        self.assertIn("pgid", rendered)
+        self.assertIn("23456", rendered)
+        self.assertIn("native_id", rendered)
+        self.assertIn("native-abc", rendered)
 
     def test_event_type_cells_are_colorized(self) -> None:
         """Use styled event type cells instead of plain event text only."""

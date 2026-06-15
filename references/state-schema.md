@@ -148,6 +148,7 @@ For work performed directly by the coordinator session, set `agent_type` to `lea
 For external workers, `jsonl_path` is the durable transcript path. Direct Codex and OpenCode providers usually store JSONL there; `ccc-*` providers may store `transcript.txt` or `transcript.jsonl` there. The final answer is mirrored into `result` and `output_path`.
 
 External cooperative workers should record both `process_id` and `process_group_id` when available. `workflow stop` prefers `process_group_id` so child CLI processes are terminated together.
+Operator displays prefer `process_group_id` and label it `pgid`; when only `process_id` is available they label it `pid`.
 
 ## Token Telemetry
 

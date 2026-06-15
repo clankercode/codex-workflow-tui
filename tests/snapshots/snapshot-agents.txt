@@ -11,11 +11,11 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                          ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
 │                                          ││ │ tokens      unknown  tail tools 0       parse errs 0       │ │
 │                                          ││ │ duration    1m 38s   status     comple… thread     thread… │ │
+│                                          ││ │ pid         4242                                           │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
 │                                          ││ │ Found one missing negative case                            │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
-│                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │

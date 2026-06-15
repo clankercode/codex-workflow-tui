@@ -1428,7 +1428,12 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
     activity = agent_activity(agent, run)
     duration_label = "duration" if str(agent.get("status", "")) in workflow_state.TERMINAL_STATUS_VALUES else "elapsed"
     duration_text = agent_duration_text(agent)
-    stats_rows = [
+    process_id = agent.get("process_id")
+    process_group_id = agent.get("process_group_id")
+    native_id = agent.get("native_id")
+    process_label = "pgid" if process_group_id else "pid"
+    process_display = str(process_group_id or process_id or "") if process_id or process_group_id else ""
+    stats_rows: list[tuple[str, Any]] = [
         ("tokens", format_token_total(activity.get("tokens", {}))),
         ("tail tools", activity.get("tool_call_count", 0)),
         ("parse errs", activity.get("parse_errors", 0)),
@@ -1436,6 +1441,10 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
         ("status", agent.get("status", "")),
         ("thread", agent.get("thread_id", "")),
     ]
+    if process_display:
+        stats_rows.append((process_label, process_display))
+    if native_id:
+        stats_rows.append(("native_id", native_id))
     stats = make_facts_grid(stats_rows)
     tool_text = "\n".join(activity.get("tool_calls", [])[-6:]) or "No tool calls recorded yet."
     output_text = activity.get("latest_output") or agent.get("summary") or "No live output yet."
