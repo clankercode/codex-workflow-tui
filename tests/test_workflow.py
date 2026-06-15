@@ -20,6 +20,7 @@ import asyncio
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
@@ -29,6 +30,11 @@ FIXTURE = ROOT / "tests" / "fixtures" / "rich-workflow.json"
 MANY_FIXTURE = ROOT / "tests" / "fixtures" / "many-rows.json"
 E2E_FIXTURE = ROOT / "tests" / "fixtures" / "e2e-workflow" / "run.json"
 SNAPSHOTS = ROOT / "tests" / "snapshots"
+
+
+def slow_test(func: Any) -> Any:
+    """Skip integration/timing-heavy tests when WORKFLOW_TEST_MODE=fast."""
+    return unittest.skipIf(os.environ.get("WORKFLOW_TEST_MODE") == "fast", "slow workflow integration test")(func)
 
 
 class WorkflowScriptTests(unittest.TestCase):
@@ -82,6 +88,13 @@ class WorkflowScriptTests(unittest.TestCase):
         env = os.environ.copy()
         env["TZ"] = "Australia/Sydney"
         env["WORKFLOW_TUI_SNAPSHOT_NOW"] = "2026-06-11T00:06:00Z"
+        return env
+
+    def fast_timing_env(self, env: dict[str, str]) -> dict[str, str]:
+        """Use shorter test-only sleeps while preserving production defaults."""
+        env.setdefault("WORKFLOW_PAUSE_POLL_SECS", "0.02")
+        env.setdefault("WORKFLOW_FAILURE_RETRY_SLEEP_SECS", "0")
+        env.setdefault("WORKFLOW_QUOTA_RETRY_POLL_SECS", "0.02")
         return env
 
     def install_timed_fake_ccc(self, fake_bin: Path) -> Path:
@@ -186,7 +199,7 @@ class WorkflowScriptTests(unittest.TestCase):
         env = os.environ.copy()
         env["PATH"] = f"{fake_bin}:{env['PATH']}"
         env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
-        return env
+        return self.fast_timing_env(env)
 
     def ccc_fake_env(self, tmp_path: Path) -> dict[str, str]:
         """Return an environment wired to the timed fake ccc binary."""
@@ -200,7 +213,7 @@ class WorkflowScriptTests(unittest.TestCase):
         env["CCC_FAKE_MAX"] = str(tmp_path / "ccc-max.txt")
         env["CCC_FAKE_LOCK"] = str(tmp_path / "ccc.lock")
         env["CCC_FAKE_RUN_ROOT"] = str(tmp_path / "ccc-runs")
-        return env
+        return self.fast_timing_env(env)
 
     def read_ccc_events(self, tmp_path: Path) -> list[dict[str, object]]:
         """Read fake ccc event records created by install_timed_fake_ccc."""
@@ -441,6 +454,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertTrue(agent["completed_at"])
             self.assertEqual(data["phases"][0]["agent_ids"], ["agent-local-impl"])
 
+    @slow_test
     def test_state_cli_clears_terminal_timestamps_when_reopened(self) -> None:
         """Ensure reopened phases and agents do not retain stale completed_at values."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -619,11 +633,12 @@ class WorkflowScriptTests(unittest.TestCase):
             stop = json.loads(self.run_script("workflow_ops.py", "stop", run_id, "--no-terminate", env=env).stdout)
             self.assertEqual(stop["status"], "cancelled")
 
+    @slow_test
     def test_mock_worker_waits_while_run_is_paused(self) -> None:
         """Paused cooperative runs should not launch pending workers until resumed."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            env = os.environ.copy()
+            env = self.fast_timing_env(os.environ.copy())
             env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
             old_env = os.environ.get("WORKFLOW_STATE_DIR")
             os.environ["WORKFLOW_STATE_DIR"] = env["WORKFLOW_STATE_DIR"]
@@ -685,7 +700,7 @@ class WorkflowScriptTests(unittest.TestCase):
                 async def exercise() -> str:
                     run = workflow_state.load_run(run_id)
                     task = asyncio.create_task(workflow_run_codex.run_all(run, args, workflow_run_codex.CodexDirectProvider()))
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.05)
                     paused_run = workflow_state.load_run(run_id)
                     self.assertEqual(paused_run["agents"][0]["status"], "paused")
                     self.assertFalse(output_path.exists())
@@ -968,6 +983,7 @@ class WorkflowScriptTests(unittest.TestCase):
                 else:
                     os.environ["WORKFLOW_STATE_DIR"] = old_env
 
+    @slow_test
     def test_parent_run_links_new_child_run_metadata_and_event(self) -> None:
         """--parent-run should link a newly created run back to its parent."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1247,6 +1263,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertIn("read", "\n".join(agent["latest_tool_calls"]))
             self.assertIn("final telemetry answer", agent["latest_output"])
 
+    @slow_test
     def test_ccc_runner_persists_live_telemetry_while_worker_is_running(self) -> None:
         """Write tool/token telemetry into run.json before a long worker exits."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1277,7 +1294,7 @@ class WorkflowScriptTests(unittest.TestCase):
                     sys.stdout.write(json.dumps(event) + "\\n")
                     sys.stdout.write(json.dumps({"type": "step_finish", "part": {"tokens": {"total": 42, "input": 40, "output": 2}}}) + "\\n")
                     sys.stdout.flush()
-                    time.sleep(5)
+                    time.sleep(float(os.environ.get("CCC_FAKE_LIVE_SLEEP", "0.5")))
                     run_dir = Path(os.environ["CCC_FAKE_RUN_DIR"])
                     run_dir.mkdir(parents=True, exist_ok=True)
                     (run_dir / "output.txt").write_text("live telemetry done\\n", encoding="utf-8")
@@ -1292,6 +1309,7 @@ class WorkflowScriptTests(unittest.TestCase):
             env["PATH"] = f"{fake_bin}:{env['PATH']}"
             env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
             env["CCC_FAKE_RUN_DIR"] = str(fake_run_dir)
+            env["CCC_FAKE_LIVE_SLEEP"] = "0.5"
             proc = subprocess.Popen(
                 [
                     sys.executable,
@@ -1320,7 +1338,7 @@ class WorkflowScriptTests(unittest.TestCase):
                     if candidates:
                         run_file = candidates[0]
                         break
-                    time.sleep(0.1)
+                    time.sleep(0.05)
                 self.assertIsNotNone(run_file)
                 observed_live = False
                 while time.time() < deadline:
@@ -1330,7 +1348,7 @@ class WorkflowScriptTests(unittest.TestCase):
                         observed_live = True
                         self.assertEqual(agent["tokens"]["total"], 42)
                         break
-                    time.sleep(0.2)
+                    time.sleep(0.05)
                 self.assertTrue(observed_live, msg=run_file.read_text(encoding="utf-8"))  # type: ignore[union-attr]
                 stdout, stderr = proc.communicate(timeout=10)
             finally:
@@ -1462,6 +1480,7 @@ class WorkflowScriptTests(unittest.TestCase):
 
         self.assertNotEqual(asyncio.run(run_case()), 0)
 
+    @slow_test
     def test_stop_promptly_terminates_in_flight_worker(self) -> None:
         """A cooperative wf stop must terminate a running worker process."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1524,7 +1543,7 @@ class WorkflowScriptTests(unittest.TestCase):
                         run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
                         if run["agents"] and run["agents"][0].get("status") == "running":
                             break
-                    time.sleep(0.2)
+                    time.sleep(0.05)
                 self.assertIsNotNone(run_id)
                 self.run_script("workflow_state.py", "stop", run_id, "--no-terminate", env=env)
                 stdout, stderr = proc.communicate(timeout=10)
@@ -1650,6 +1669,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(Path(agent["output_path"]).read_text(encoding="utf-8"), "recovered after quota\n")
             self.assertIn("429 usage limit", Path(agent["log_path"]).read_text(encoding="utf-8"))
 
+    @slow_test
     def test_ccc_runner_retries_once_after_non_quota_failure(self) -> None:
         """Recover from one transient provider failure without quota backoff."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1683,7 +1703,7 @@ class WorkflowScriptTests(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_ccc.chmod(0o755)
-            env = os.environ.copy()
+            env = self.fast_timing_env(os.environ.copy())
             env["PATH"] = f"{fake_bin}:{env['PATH']}"
             env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
             env["CCC_COUNTER"] = str(tmp_path / "counter.txt")
@@ -1712,6 +1732,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agent["failure_retry_count"], 1)
             self.assertEqual(agent["result"], "recovered after transient failure\n")
 
+    @slow_test
     def test_worker_timeout_marks_agent_failed(self) -> None:
         """A worker that exceeds --timeout-secs is terminated and marked failed."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1771,6 +1792,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agent["exit_code"], 124)
             self.assertIn("timeout", agent["summary"].lower())
 
+    @slow_test
     def test_worker_timeout_is_retried_with_failure_retries(self) -> None:
         """A timed-out worker is retried when --failure-retries is configured."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1811,7 +1833,7 @@ class WorkflowScriptTests(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_ccc.chmod(0o755)
-            env = os.environ.copy()
+            env = self.fast_timing_env(os.environ.copy())
             env["PATH"] = f"{fake_bin}:{env['PATH']}"
             env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
             env["CCC_COUNTER"] = str(tmp_path / "counter.txt")
@@ -2125,6 +2147,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agent["status"], "failed")
             self.assertIn("schema validation failed", agent["result"])
 
+    @slow_test
     def test_schema_validation_failure_is_retried_with_error_in_prompt(self) -> None:
         """Schema failures consume failure retries and include the error in the retry prompt."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -2166,6 +2189,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agent["result_json"], {"answer": "yes"})
             self.assertEqual(agent["failure_retry_count"], 1)
 
+    @slow_test
     def test_generic_ccc_runner_accepts_presets_and_cli_names(self) -> None:
         """Allow --ccc-runner to target both @presets and plain ccc CLI selectors."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -2233,6 +2257,7 @@ class WorkflowScriptTests(unittest.TestCase):
             start_args = [event["args"] for event in self.read_ccc_events(tmp_path) if event["event"] == "start"]
             self.assertTrue(any("--runner-arg" in args and "--cd" in args for args in start_args))
 
+    @slow_test
     def test_ccc_kimi_runner_passes_large_kimi_step_limit(self) -> None:
         """Raise Kimi's per-turn step/tool-call limit for ccc-backed Kimi workers."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -2383,6 +2408,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertIn("goal must not be empty", result.stderr)
             self.assertFalse((Path(tmp) / "state").exists())
 
+    @slow_test
     def test_runner_respects_max_agents_limit(self) -> None:
         """Ensure the launcher never runs more than --max-agents workers concurrently."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -2408,6 +2434,7 @@ class WorkflowScriptTests(unittest.TestCase):
             observed_max = int((tmp_path / "ccc-max.txt").read_text(encoding="utf-8"))
             self.assertEqual(observed_max, 2)
 
+    @slow_test
     def test_runner_respects_startup_delay(self) -> None:
         """Ensure observable worker starts are paced rather than launched in a burst."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -2585,6 +2612,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(preview["jobs"][0]["name"], "alpha")
             self.assertFalse((Path(tmp) / "state").exists())
 
+    @slow_test
     def test_operator_verify_and_done_gate_completion(self) -> None:
         """Require passing verification before safe workflow completion."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -3256,6 +3284,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("positive integer", result.stderr)
 
+    @slow_test
     def test_snapshot_fixtures_match_checked_in_screens(self) -> None:
         """Render every TUI tab from fixtures and compare to text snapshots."""
         cases = [
@@ -3287,6 +3316,7 @@ class WorkflowScriptTests(unittest.TestCase):
                 expected = (SNAPSHOTS / snapshot_name).read_text(encoding="utf-8")
                 self.assertEqual(rendered, expected)
 
+    @slow_test
     def test_snapshot_filter_and_focus_modes(self) -> None:
         """Expose deterministic filter and focus views for visual review."""
         filtered = self.run_script(
@@ -3379,6 +3409,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertNotIn("Agents: Review", focused)
         self.assertIn("Live Stats", focused)
 
+    @slow_test
     def test_snapshot_dimensions_are_stable(self) -> None:
         """Ensure snapshot output has deterministic dimensions for visual review."""
         rendered = self.run_script(
@@ -3404,6 +3435,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("│", rendered)
         self.assertNotIn("+ runs", rendered)
 
+    @slow_test
     def test_snapshot_panels_are_not_cropped_mid_box(self) -> None:
         """Supported visual-review sizes should render complete panels, not clipped boxes."""
         cases = [
@@ -3430,6 +3462,7 @@ class WorkflowScriptTests(unittest.TestCase):
                 self.assertEqual(rendered.count("╭"), rendered.count("╰"), rendered)
                 self.assertNotIn("Metrics", rendered.splitlines()[-5:])
 
+    @slow_test
     def test_snapshot_header_shows_agent_actions_only_on_agents_tab(self) -> None:
         """Keep agent-specific header shortcuts scoped to the agents tab."""
         runs = self.run_script(
@@ -3747,6 +3780,7 @@ class WorkflowScriptTests(unittest.TestCase):
                 ],
             )
 
+    @slow_test
     def test_snapshot_phase_sidebar_matches_selected_run(self) -> None:
         """Show phases in the left column while the phases section is active."""
         rendered = self.run_script(
@@ -3853,6 +3887,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("Synthesis", all_agents)
         self.assertIn("MiniMa", all_agents)
 
+    @slow_test
     def test_snapshot_events_are_newest_first(self) -> None:
         """Render newest workflow events first so active runs stay visible."""
         rendered = self.run_script(
@@ -4088,6 +4123,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertTrue(all(isinstance(cell, workflow_tui.Text) for cell in type_cells))
         self.assertIn("bright_blue", type_cells[0].style)
 
+    @slow_test
     def test_snapshot_status_labels_cover_all_workflow_states(self) -> None:
         """Keep compact status labels visible for every persisted state."""
         rendered = self.run_script(
@@ -4106,6 +4142,7 @@ class WorkflowScriptTests(unittest.TestCase):
         for label in ("RUN", "DONE", "FAIL", "BLCK", "PAUS", "CNCL", "PEND"):
             self.assertIn(label, rendered)
 
+    @slow_test
     def test_snapshot_timestamps_render_as_local_pretty_labels(self) -> None:
         """Show TUI timestamps in local time without mutating persisted state fields."""
         env = self.snapshot_env()
@@ -4573,6 +4610,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("Beta", rendered)
         self.assertIn("1m 30s", rendered)
 
+    @slow_test
     def test_skill_update_check_reports_remote_git_update(self) -> None:
         """Detect a newer upstream commit without mutating the local checkout."""
         sys.path.insert(0, str(SCRIPTS))
@@ -4590,6 +4628,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(status.remote_head, latest_head)
             self.assertEqual(self.git(skill, "rev-parse", "HEAD").stdout.strip(), first_head)
 
+    @slow_test
     def test_skill_update_action_pulls_ff_only_and_rechecks_status(self) -> None:
         """Update the skill checkout with git pull --ff-only and return current status."""
         sys.path.insert(0, str(SCRIPTS))
@@ -4607,6 +4646,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(result.status.local_head, latest_head)
             self.assertEqual(self.git(skill, "rev-parse", "HEAD").stdout.strip(), latest_head)
 
+    @slow_test
     def test_skill_update_check_reports_missing_upstream_as_unavailable(self) -> None:
         """Explain when a checkout cannot be checked because no upstream branch exists."""
         sys.path.insert(0, str(SCRIPTS))
@@ -4819,6 +4859,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("tail tools", rendered)
         self.assertNotIn("tool calls", rendered)
 
+    @slow_test
     def test_snapshot_agent_live_panels_match_fixture(self) -> None:
         """Snapshot live output and latest tool-call panels from a static fixture."""
         rendered = self.run_script(
@@ -4842,6 +4883,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("model         gpt-5.5", rendered)
         self.assertIn("F(20) = 6765", rendered)
 
+    @slow_test
     def test_snapshot_agent_prompt_view_matches_fixture(self) -> None:
         """Prompt mode shows the agent prompt instead of the live output panel."""
         rendered = self.run_script(
@@ -4865,6 +4907,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("Compute a small independent verification", rendered)
         self.assertNotIn("Live Output", rendered)
 
+    @slow_test
     def test_snapshot_run_live_panels_match_fixture(self) -> None:
         """Keep run-level live output visible above prompt and metrics panels."""
         rendered = self.run_script(
@@ -4940,6 +4983,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(data["source"], "unit-test")
             self.assertEqual(data["data"]["ui_area"], "agent_view")
 
+    @slow_test
     def test_snapshot_minimum_size_matches_live_tui(self) -> None:
         """Reject snapshot terminals smaller than the live TUI can draw cleanly."""
         rendered = self.run_script(
@@ -5038,6 +5082,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("agent-11", rendered)
         self.assertIn("agent_id      agent-11", rendered)
 
+    @slow_test
     def test_snapshot_scroll_selects_later_rows(self) -> None:
         """Exercise snapshot scroll offsets used by fixture-driven visual review."""
         rendered = self.run_script(
@@ -5181,6 +5226,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(ccc_preset.runner, "ccc")
         self.assertEqual(ccc_preset.ccc_runner, "@mm")
 
+    @slow_test
     def test_runner_matrix_mock_run_archives_each_target(self) -> None:
         """Run the reusable runner matrix without model calls and archive every run."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -5218,6 +5264,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(first_run["mode"], "kimi-direct")
             self.assertEqual(first_run["metrics"]["agents_total"], 3)
 
+    @slow_test
     def test_runner_matrix_archive_run_json_is_portable_for_tui_replay(self) -> None:
         """Archived ccc runs should still render after live state and ccc dirs vanish."""
         sys.path.insert(0, str(SCRIPTS))
@@ -5303,6 +5350,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(activity["tokens"]["total"], 99)
             self.assertIn("archived final output", activity["latest_output"])
 
+    @slow_test
     def test_runner_matrix_failed_phase_without_run_path_archives_logs(self) -> None:
         """Killed phases without a parsed run path should fail cleanly, not copy '.'."""
         sys.path.insert(0, str(SCRIPTS))
@@ -5331,6 +5379,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(result["run_json"], "")
             self.assertEqual((Path(result["archive_dir"]) / "stderr.log").read_text(encoding="utf-8"), "terminated\n")
 
+    @slow_test
     def test_runner_matrix_archives_script_declared_output_subdir(self) -> None:
         """Copy the workflow spec's output_subdir instead of hard-coding planning-output."""
         sys.path.insert(0, str(SCRIPTS))
@@ -5361,6 +5410,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(result["status"], "completed")
             self.assertEqual((Path(result["workdir_output"]) / "plan.md").read_text(encoding="utf-8"), "custom\n")
 
+    @slow_test
     def test_runner_matrix_uses_script_generated_workflow_and_project_copies(self) -> None:
         """Save script-generated workflow JSON and run each target in its own project copy."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -5433,6 +5483,7 @@ class WorkflowScriptTests(unittest.TestCase):
             run = json.loads((first_phase_archive / "run.json").read_text(encoding="utf-8"))
             self.assertIn(str(workdir), run["agents"][0]["prompt"])
 
+    @slow_test
     def test_runner_matrix_applies_per_target_max_agents(self) -> None:
         """Allow runner families to use different concurrency caps."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -5495,6 +5546,37 @@ class WorkflowScriptTests(unittest.TestCase):
         import workflow_runner_matrix  # pylint: disable=import-outside-toplevel
 
         self.assertIs(workflow_runner_matrix.normalize_workflow, workflow_plan.normalize_workflow)
+
+    def test_workflow_plan_preserves_phase_gate_metadata(self) -> None:
+        """Keep declared phase gates/checks/decisions available to workflow apply."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_plan  # pylint: disable=import-outside-toplevel
+
+        plan = workflow_plan.normalize_workflow(
+            {
+                "title": "Gated Plan",
+                "decisions": [{"title": "Use worktrees", "rationale": "Parallel writes."}],
+                "gates": [{"name": "merge", "kind": "integration"}],
+                "phases": [
+                    {
+                        "name": "review",
+                        "goal": "Review the draft.",
+                        "gates": [{"name": "review-fix", "kind": "review-fix"}],
+                        "checks": [{"name": "pytest", "cmd": "python3 -m unittest"}],
+                        "decisions": [{"title": "Review model", "rationale": "Use codex."}],
+                        "jobs": [{"name": "reviewer", "prompt": "Review."}],
+                    }
+                ],
+            },
+            fallback_title="fallback",
+        )
+
+        self.assertEqual(plan["decisions"][0]["title"], "Use worktrees")
+        self.assertEqual(plan["gates"][0]["kind"], "integration")
+        self.assertEqual(plan["phases"][0]["goal"], "Review the draft.")
+        self.assertEqual(plan["phases"][0]["gates"][0]["kind"], "review-fix")
+        self.assertEqual(plan["phases"][0]["planned_checks"][0]["name"], "pytest")
+        self.assertEqual(plan["phases"][0]["decisions"][0]["title"], "Review model")
 
     def test_wf_apply_mock_launches_saved_single_phase_plan_and_records_artifact(self) -> None:
         """Launch a saved workflow-plan JSON without model calls and persist the normalized plan."""
@@ -5590,9 +5672,118 @@ class WorkflowScriptTests(unittest.TestCase):
 
             self.assertEqual(summary["jobs"], 2)
             self.assertEqual(run["status"], "completed")
+            self.assertEqual([phase["phase_id"] for phase in run["phases"]], ["phase-draft", "phase-review"])
+            self.assertEqual([phase["status"] for phase in run["phases"]], ["completed", "completed"])
+            self.assertEqual(agents_by_name["a"]["phase_id"], "phase-draft")
+            self.assertEqual(agents_by_name["b"]["phase_id"], "phase-review")
             self.assertEqual(agents_by_name["a"]["stage"], "draft")
             self.assertEqual(agents_by_name["b"]["stage"], "review")
             self.assertEqual(agents_by_name["b"]["depends_on"], "a")
+
+    def test_wf_apply_records_declared_phase_gates_and_plan_decisions(self) -> None:
+        """Make workflow-plan phases/gates visible as first-class run state."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            plan_path = tmp_path / "gated.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Gated Apply",
+                        "decisions": [{"title": "Use ccc", "rationale": "Normalize worker artifacts."}],
+                        "gates": [{"name": "merge-back", "kind": "integration"}],
+                        "phases": [
+                            {
+                                "name": "draft",
+                                "title": "Draft",
+                                "goal": "Produce the first draft.",
+                                "gates": [{"name": "artifact-quality", "kind": "artifact"}],
+                                "checks": [{"name": "draft file exists", "kind": "artifact"}],
+                                "jobs": [{"name": "draft", "prompt": "Draft."}],
+                            },
+                            {
+                                "name": "review",
+                                "title": "Review",
+                                "gates": [{"name": "review-fix", "kind": "review-fix"}],
+                                "decisions": [{"title": "Reviewer model", "rationale": "Use codex."}],
+                                "jobs": [{"name": "review", "prompt": "Review."}],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf("apply", str(plan_path), "--mock", "--startup-delay", "0", env=env)
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            phases_by_id = {phase["phase_id"]: phase for phase in run["phases"]}
+            decisions_by_title = {decision["title"]: decision for decision in run["decisions"]}
+
+            self.assertNotIn("phase-cli-workers", phases_by_id)
+            self.assertEqual(phases_by_id["phase-draft"]["gates"][0]["name"], "artifact-quality")
+            self.assertEqual(phases_by_id["phase-draft"]["planned_checks"][0]["name"], "draft file exists")
+            self.assertEqual(phases_by_id["phase-review"]["gates"][0]["kind"], "review-fix")
+            self.assertEqual(run["metadata"]["workflow_gates"][0]["name"], "merge-back")
+            self.assertEqual(decisions_by_title["Use ccc"]["made_by"], "workflow_apply.py")
+            self.assertEqual(decisions_by_title["Reviewer model"]["phase_id"], "phase-review")
+
+    def test_wf_apply_expansion_agents_inherit_declared_phase(self) -> None:
+        """Runtime expansion should not depend on the removed default worker phase."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            plan_path = tmp_path / "expand.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Apply Expansion",
+                        "phases": [
+                            {
+                                "name": "draft",
+                                "title": "Draft",
+                                "jobs": [{"name": "parent", "prompt": "Expand."}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            envelope = json.dumps(
+                {
+                    "kind": "workflow-expansion",
+                    "schema_version": 1,
+                    "jobs": [{"name": "child", "prompt": "Child."}],
+                }
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CODEX_FAKE_OUTPUT"] = envelope
+            result = self.run_wf(
+                "apply",
+                str(plan_path),
+                "--runner",
+                "codex-direct",
+                "--startup-delay",
+                "0",
+                "--max-round",
+                "2",
+                "--max-job",
+                "2",
+                env=env,
+            )
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            agents_by_name = {agent["name"]: agent for agent in run["agents"]}
+
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(run["phases"][0]["phase_id"], "phase-draft")
+            self.assertEqual(run["phases"][0]["status"], "completed")
+            self.assertEqual(agents_by_name["parent"]["phase_id"], "phase-draft")
+            self.assertEqual(agents_by_name["child"]["phase_id"], "phase-draft")
+            self.assertTrue(any(event.get("kind") == "expansion" and event.get("operation") == "added" for event in run["events"]))
 
     def test_wf_apply_honors_plan_execution_fields_with_cli_overrides(self) -> None:
         """Workflow-plan execution metadata should not be silently discarded."""
@@ -5691,6 +5882,7 @@ class WorkflowScriptTests(unittest.TestCase):
 
         self.assertEqual(plan["ccc_control"], ["@reviewer"])
 
+    @slow_test
     def test_wf_runner_matrix_dispatches_to_script(self) -> None:
         """Expose the reusable runner matrix through the installed shell entrypoint."""
         with tempfile.TemporaryDirectory() as tmp:

@@ -26,8 +26,11 @@ workflow run --title "Kimi lane" --runner kimi-direct --job "review::Review this
 workflow runner-matrix --target kimi-direct --target ccc:kimi --mock --output-dir ~/tmp/workflow-runner-matrix
 workflow fibonacci-stress --n 100 --output-dir ~/tmp/custom-wf-test
 python3 scripts/workflow_tui_tmux_qa.py
+WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py
 python3 tests/test_workflow.py
 ```
+
+`WORKFLOW_TEST_MODE=fast` skips timing-heavy integration, snapshot, runner-matrix, and local-git update tests. The default command runs the full suite.
 
 `workflow` and `wf` are expected to point at `scripts/wf`.
 

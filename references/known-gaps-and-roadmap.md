@@ -27,13 +27,14 @@ dependency edges.
 `test_expansion_envelope_enqueues_and_runs_new_jobs`,
 `test_expansion_caps_hold_and_are_logged`.
 
-### A1b — Workflow-plan phases are execution stages, not rich phase records  · MED
-`workflow apply` is now the right front door for saved workflow plans, but
-multi-phase plans are lifted into staged worker jobs inside one runner phase. The
-state does not yet preserve declared phase/gate records, phase-specific
-acceptance checks, or phase-level review/fix gates from the plan.
-**Fix:** extend `workflow_apply.py` to instantiate declared phases and gate/check
-metadata before dispatch while keeping the staged dependency execution path.
+### A1b — Workflow-plan phases are execution stages, not rich phase records  · MED · **Implemented**
+`workflow apply` now instantiates declared plan phases as first-class phase
+records, attaches workers to those declared phases, preserves phase gates and
+planned-check metadata without treating them as completed verification, records
+plan decisions, and keeps runtime expansion children attached to the parent
+worker's phase.
+**Tests:** `test_wf_apply_records_declared_phase_gates_and_plan_decisions`,
+`test_wf_apply_expansion_agents_inherit_declared_phase`.
 
 ### A2 — No schema-validated structured worker output  · HIGH · **Implemented**
 Added `--result-schema <jsonschema-file>` and per-job `schema` metadata. After
@@ -116,7 +117,7 @@ pause, resume, and stop.
   emit `no run '<id>' (try: wf list)`.
 
 ## Prioritization
-1. **A1b** (rich workflow-plan phase/gate records) — highest-impact follow-up to `workflow apply`.
-2. **A7** (remaining lock boundary documentation / init locking story).
-3. Worktree lanes for write-heavy workflows.
+1. **A7** (remaining lock boundary documentation / init locking story).
+2. Worktree lanes for write-heavy workflows.
+3. Opaque running-agent/liveness invariant for truthful TUI state.
 4. Everything else as polish.

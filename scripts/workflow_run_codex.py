@@ -559,6 +559,7 @@ def add_agent(
     index: int,
     stage: str = "",
     depends_on: str = "",
+    phase_id: str | None = None,
 ) -> dict[str, Any]:
     prefix = workflow_state.slugify(provider.name, fallback="worker")
     agent_id = f"{prefix}-{index + 1:02d}-{workflow_state.slugify(job['name'])}"
@@ -572,7 +573,7 @@ def add_agent(
 
     agent_args = argparse.Namespace(
         run=run["run_id"],
-        phase=PHASE_ID,
+        phase=phase_id or PHASE_ID,
         name=job["name"],
         role=job["role"],
         agent_type=provider.agent_type,
@@ -736,6 +737,14 @@ def quota_retry_sleep_seconds(args: argparse.Namespace) -> float:
     return seconds_until_next_quota_window(buffer_seconds=float(getattr(args, "quota_retry_buffer_secs", 5.0)))
 
 
+def test_interval_env(name: str, default: float) -> float:
+    """Return a test-only polling/sleep interval override."""
+    override = os.environ.get(name)
+    if override is None:
+        return default
+    return max(0.0, float(override))
+
+
 async def sleep_until_quota_retry_allowed(run_id: str, agent_id: str, sleep_seconds: float) -> bool:
     """Sleep for quota backoff, returning false if workflow control cancels it."""
     remaining = max(0.0, sleep_seconds)
@@ -743,7 +752,7 @@ async def sleep_until_quota_retry_allowed(run_id: str, agent_id: str, sleep_seco
         if stop_requested(run_control(run_id)):
             update_agent(run_id, agent_id, status="cancelled", summary="cancelled during quota retry backoff", exit_code=75)
             return False
-        interval = min(remaining, 5.0)
+        interval = min(remaining, test_interval_env("WORKFLOW_QUOTA_RETRY_POLL_SECS", 5.0))
         await asyncio.sleep(interval)
         remaining -= interval
     return not stop_requested(run_control(run_id))
@@ -899,7 +908,7 @@ async def wait_until_launch_allowed(run_id: str, agent_id: str) -> bool:
         if not marked_paused:
             update_agent(run_id, agent_id, status="paused", summary="paused before worker launch")
             marked_paused = True
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(test_interval_env("WORKFLOW_PAUSE_POLL_SECS", 1.0))
 
 
 def command_preview(command: list[str]) -> str:
@@ -1110,7 +1119,7 @@ async def run_worker(
                         failure_retry_count=failure_retry_count,
                         emit_event=True,
                     )
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(test_interval_env("WORKFLOW_FAILURE_RETRY_SLEEP_SECS", 1.0))
                     continue
                 break
 
@@ -1240,6 +1249,7 @@ def _add_expansion_agent(
     args: argparse.Namespace,
     provider: RunnerProvider,
     index: int,
+    phase_id: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Create a new agent from an expansion job and persist it to state."""
     prefix = workflow_state.slugify(provider.name, fallback="worker")
@@ -1255,7 +1265,7 @@ def _add_expansion_agent(
 
     agent_args = argparse.Namespace(
         run=run_id,
-        phase=PHASE_ID,
+        phase=phase_id or PHASE_ID,
         name=job["name"],
         role=job["role"],
         agent_type=provider.agent_type,
@@ -1361,6 +1371,43 @@ def _record_unmet_dependencies(run_id: str, pending: dict[str, tuple[dict[str, A
     workflow_state.mutate_run(run_id, mutator)
 
 
+def _phase_status_from_agents(agents: list[dict[str, Any]], run_status: str) -> str:
+    """Derive one phase status from its attached worker agents."""
+    if not agents:
+        return run_status
+    if any(agent.get("status") == "cancelled" for agent in agents):
+        return "cancelled"
+    if any(agent.get("status") == "failed" for agent in agents):
+        return "failed"
+    if any(agent.get("status") in {"pending", "running", "paused"} for agent in agents):
+        return "running"
+    return "completed"
+
+
+def update_worker_phases(final: dict[str, Any], provider: RunnerProvider) -> None:
+    """Refresh every worker-owning phase after a runner finishes."""
+    phases = final.setdefault("phases", [])
+    agents = final.get("agents", [])
+    timestamp = workflow_state.now()
+    for phase in phases:
+        phase_agents = [agent for agent in agents if agent.get("phase_id") == phase.get("phase_id")]
+        if not phase_agents:
+            continue
+        phase_status = _phase_status_from_agents(phase_agents, final["status"])
+        phase["status"] = phase_status
+        phase["completed_at"] = timestamp if phase_status in {"completed", "failed", "cancelled"} else None
+        workflow_state.add_event(
+            final,
+            "info",
+            f"{provider.name} worker phase {phase_status}",
+            kind="phase",
+            operation="updated",
+            source="workflow_run.run_all",
+            phase_id=phase["phase_id"],
+            data={"status": phase_status, "runner": provider.name},
+        )
+
+
 async def run_all(run: dict[str, Any], args: argparse.Namespace, provider: RunnerProvider) -> str:
     """Run a dynamic worker pool that accepts new agents mid-flight."""
     run_id = run["run_id"]
@@ -1425,7 +1472,7 @@ async def run_all(run: dict[str, Any], args: argparse.Namespace, provider: Runne
                                 _record_expansion_truncation(run_id, updated_agent, "max-round", dropped, round_num + 1)
                                 break
                             total_jobs += 1
-                            _run, new_agent_id = _add_expansion_agent(run_id, job, args, provider, next_index)
+                            _run, new_agent_id = _add_expansion_agent(run_id, job, args, provider, next_index, phase_id=updated_agent.get("phase_id"))
                             next_index += 1
                             new_agent = workflow_state.find_item(_run["agents"], "agent_id", new_agent_id)
                             enqueue_agent(new_agent, round_num + 1)
@@ -1479,19 +1526,7 @@ async def run_all(run: dict[str, Any], args: argparse.Namespace, provider: Runne
         if pending:
             final["status"] = "running"
         record_worker_artifacts(final)
-        phase = workflow_state.find_item(final.setdefault("phases", []), "phase_id", PHASE_ID)
-        phase["status"] = final["status"]
-        phase["completed_at"] = workflow_state.now() if final["status"] in {"completed", "failed", "cancelled"} else None
-        workflow_state.add_event(
-            final,
-            "info",
-            f"{provider.name} worker phase {final['status']}",
-            kind="phase",
-            operation="updated",
-            source="workflow_run.run_all",
-            phase_id=phase["phase_id"],
-            data={"status": final["status"], "runner": provider.name},
-        )
+        update_worker_phases(final, provider)
         return final["status"]
 
     _, status, _ = workflow_state.mutate_run(run["run_id"], mutator)

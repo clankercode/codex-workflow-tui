@@ -58,6 +58,10 @@ def normalize_workflow(raw: dict[str, Any], *, fallback_title: str) -> dict[str,
                 "name": phase_name,
                 "title": str(phase_raw.get("title") or phase_raw.get("name") or phase_name).strip(),
                 "summary": str(phase_raw.get("summary") or "").strip(),
+                "goal": str(phase_raw.get("goal") or phase_raw.get("summary") or "").strip(),
+                "gates": normalize_object_list(phase_raw.get("gates"), "phase gates"),
+                "planned_checks": normalize_object_list(phase_raw.get("checks") or phase_raw.get("planned_checks"), "phase checks"),
+                "decisions": normalize_object_list(phase_raw.get("decisions"), "phase decisions"),
                 "jobs": jobs,
             }
         )
@@ -79,6 +83,8 @@ def normalize_workflow(raw: dict[str, Any], *, fallback_title: str) -> dict[str,
     for field in EXECUTION_FIELDS:
         if field in raw:
             plan[field] = raw[field]
+    plan["decisions"] = normalize_object_list(raw.get("decisions"), "workflow decisions")
+    plan["gates"] = normalize_object_list(raw.get("gates"), "workflow gates")
     if "ccc_control" in plan:
         plan["ccc_control"] = normalize_string_list(plan["ccc_control"], "ccc_control")
     return plan
@@ -115,6 +121,22 @@ def normalize_string_list(value: Any, field_name: str) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value if str(item).strip()]
     raise SystemExit(f"workflow {field_name} must be a string or list of strings")
+
+
+def normalize_object_list(value: Any, field_name: str) -> list[dict[str, Any]]:
+    """Normalize optional metadata lists while keeping their structured fields."""
+    if value in (None, ""):
+        return []
+    if isinstance(value, dict):
+        return [dict(value)]
+    if not isinstance(value, list):
+        raise SystemExit(f"{field_name} must be an object or list of objects")
+    items: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise SystemExit(f"{field_name} entries must be objects")
+        items.append(dict(item))
+    return items
 
 
 def load_workflow_source(source: str, *, fallback_title: str, cwd: Path | None = None) -> dict[str, Any]:

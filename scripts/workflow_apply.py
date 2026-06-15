@@ -92,10 +92,12 @@ def phase_jobs(plan: dict[str, Any]) -> list[dict[str, Any]]:
     jobs: list[dict[str, Any]] = []
     previous_phase_names: list[str] = []
     for phase in plan["phases"]:
+        phase_id = phase_id_for_plan_phase(phase)
         current_phase_names: list[str] = []
         for job in phase["jobs"]:
             flattened = dict(job)
             flattened["stage"] = flattened.get("stage") or phase["name"]
+            flattened["phase_id"] = phase_id
             dependencies = []
             raw_depends = flattened.get("depends_on")
             if isinstance(raw_depends, list):
@@ -111,6 +113,93 @@ def phase_jobs(plan: dict[str, Any]) -> list[dict[str, Any]]:
     return jobs
 
 
+def phase_id_for_plan_phase(phase: dict[str, Any]) -> str:
+    """Return the run phase id for one normalized plan phase."""
+    return f"phase-{workflow_state.slugify(str(phase['name']), fallback='plan')}"
+
+
+def install_plan_phases(run_id: str, plan: dict[str, Any]) -> None:
+    """Replace the default worker phase with declared workflow-plan phases."""
+    timestamp = workflow_state.now()
+
+    def mutator(run: dict[str, Any]) -> None:
+        run["phases"] = [phase for phase in run.get("phases", []) if phase.get("phase_id") != workflow_run_codex.PHASE_ID]
+        existing = {phase.get("phase_id") for phase in run.setdefault("phases", [])}
+        for plan_phase in plan["phases"]:
+            phase_id = phase_id_for_plan_phase(plan_phase)
+            if phase_id in existing:
+                raise SystemExit(f"duplicate declared phase id: {phase_id}")
+            phase = {
+                "phase_id": phase_id,
+                "name": plan_phase.get("title") or plan_phase["name"],
+                "goal": plan_phase.get("goal") or plan_phase.get("summary") or "",
+                "status": "running",
+                "created_at": timestamp,
+                "started_at": timestamp,
+                "completed_at": None,
+                "agent_ids": [],
+                "plan_phase": plan_phase["name"],
+            }
+            if plan_phase.get("summary"):
+                phase["summary"] = plan_phase["summary"]
+            if plan_phase.get("gates"):
+                phase["gates"] = plan_phase["gates"]
+            if plan_phase.get("planned_checks"):
+                phase["planned_checks"] = plan_phase["planned_checks"]
+            run["phases"].append(phase)
+            existing.add(phase_id)
+            workflow_state.add_event(
+                run,
+                "info",
+                f"phase declared: {phase['name']}",
+                kind="phase",
+                operation="declared",
+                source="workflow_apply.apply",
+                phase_id=phase_id,
+                data={"name": phase["name"], "plan_phase": plan_phase["name"]},
+            )
+        if plan.get("gates"):
+            run.setdefault("metadata", {})["workflow_gates"] = plan["gates"]
+
+    workflow_state.mutate_run(run_id, mutator)
+
+
+def record_plan_decisions(run_id: str, plan: dict[str, Any]) -> None:
+    """Record top-level and phase-local plan decisions as durable decisions."""
+    decision_specs: list[tuple[dict[str, Any], str]] = [(decision, "") for decision in plan.get("decisions", [])]
+    for phase in plan["phases"]:
+        decision_specs.extend((decision, phase_id_for_plan_phase(phase)) for decision in phase.get("decisions", []))
+    if not decision_specs:
+        return
+
+    def mutator(run: dict[str, Any]) -> None:
+        decisions = run.setdefault("decisions", [])
+        for index, (spec, phase_id) in enumerate(decision_specs, start=1):
+            title = str(spec.get("title") or spec.get("name") or f"Plan decision {index}").strip()
+            decision = {
+                "decision_id": f"dec-plan-{index:02d}-{workflow_state.slugify(title, fallback='decision')}",
+                "ts": workflow_state.now(),
+                "title": title,
+                "rationale": str(spec.get("rationale") or spec.get("summary") or spec.get("reason") or "").strip(),
+                "made_by": "workflow_apply.py",
+            }
+            if phase_id:
+                decision["phase_id"] = phase_id
+            decisions.append(decision)
+            workflow_state.add_event(
+                run,
+                "info",
+                f"decision recorded: {title}",
+                kind="decision",
+                operation="recorded",
+                source="workflow_apply.apply",
+                phase_id=phase_id,
+                data={"title": title, "made_by": decision["made_by"]},
+            )
+
+    workflow_state.mutate_run(run_id, mutator)
+
+
 def apply_workflow(args: argparse.Namespace) -> int:
     """Create a normal workflow run from one normalized plan."""
     source = source_path(args.plan_source)
@@ -121,9 +210,20 @@ def apply_workflow(args: argparse.Namespace) -> int:
     jobs = phase_jobs(plan)
     provider = workflow_run_codex.build_provider(args)
     run = workflow_run_codex.create_run(args, jobs, provider)
+    install_plan_phases(run["run_id"], plan)
+    record_plan_decisions(run["run_id"], plan)
     record_plan_artifact(run["run_id"], plan)
     for index, job in enumerate(jobs):
-        run = workflow_run_codex.add_agent(run, job, args, provider, index, stage=job.get("stage", ""), depends_on=job.get("depends_on", ""))
+        run = workflow_run_codex.add_agent(
+            run,
+            job,
+            args,
+            provider,
+            index,
+            stage=job.get("stage", ""),
+            depends_on=job.get("depends_on", ""),
+            phase_id=job.get("phase_id"),
+        )
     print(json.dumps({"run_id": run["run_id"], "path": run["paths"]["run_json"], "jobs": len(jobs)}, indent=2))
     if args.dry_run:
         print("dry run: workers were recorded but not launched")

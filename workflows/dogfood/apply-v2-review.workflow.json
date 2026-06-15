@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Dogfood Apply V2 Review",
+  "summary": "Review the workflow apply v2 declared phases/gates patch before it lands.",
+  "goal": "Check the current uncommitted workflow-skill patch for correctness, state-schema coherence, and test coverage.",
+  "runner": "ccc",
+  "ccc_runner": "@glm51",
+  "ccc_output_mode": "stream-json",
+  "permission_mode": "yolo",
+  "sandbox": "read-only",
+  "approval": "never",
+  "max_agents": 1,
+  "startup_delay": 0,
+  "tags": ["dogfood", "workflow-apply-v2"],
+  "decisions": [
+    {
+      "title": "Use workflow apply for the review gate",
+      "rationale": "The task is explicitly dogfooding file-backed workflow launch instead of manual phase setup."
+    }
+  ],
+  "phases": [
+    {
+      "name": "review",
+      "title": "Review",
+      "goal": "Review the current patch and return concrete findings.",
+      "gates": [
+        {
+          "name": "review-fix",
+          "kind": "review-fix",
+          "requires": "All actionable review findings are addressed or explicitly waived."
+        }
+      ],
+      "planned_checks": [
+        {
+          "name": "focused apply tests",
+          "kind": "test",
+          "command": "python3 -m unittest tests.test_workflow.WorkflowScriptTests.test_workflow_plan_preserves_phase_gate_metadata tests.test_workflow.WorkflowScriptTests.test_wf_apply_records_declared_phase_gates_and_plan_decisions"
+        },
+        {
+          "name": "full workflow suite",
+          "kind": "test",
+          "command": "python3 -m unittest tests.test_workflow"
+        }
+      ],
+      "jobs": [
+        {
+          "name": "apply-v2-review",
+          "role": "reviewer",
+          "prompt": "You are reviewing an uncommitted patch in /home/xertrov/.llm-general/ai-coding/codex/skills/workflow. Focus only on the workflow apply v2 declared phases/gates changes. Inspect scripts/workflow_apply.py, scripts/workflow_plan.py, scripts/workflow_run_codex.py, tests/test_workflow.py, and any related docs if relevant. Do not edit files. Return PASS if there are no actionable correctness/test/doc issues. Otherwise return FAIL with findings using file paths and line references. Pay special attention to whether workflow-plan phases/gates/decisions are preserved honestly in run state, whether worker phase status updates still work for normal workflow run, and whether completion/check semantics are not faked."
+        }
+      ]
+    }
+  ]
+}
