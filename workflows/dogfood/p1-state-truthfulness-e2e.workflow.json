@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Dogfood P1 state truthfulness E2E",
+  "goal": "Implement the next P1 backlog slice end-to-end: native-subagent state hygiene, lane ownership/scope checks, and completed-run output fallback.",
+  "cwd": "../..",
+  "runner": "ccc",
+  "ccc_runner": "@mm27",
+  "ccc_output_mode": "stream-json",
+  "permission_mode": "yolo",
+  "startup_delay": 0,
+  "max_agents": 1,
+  "failure_retries": 0,
+  "tags": [
+    "dogfood",
+    "p1",
+    "state-truthfulness",
+    "e2e",
+    "layered-review"
+  ],
+  "decisions": [
+    {
+      "title": "Bigger P1 E2E slice",
+      "rationale": "These backlog items all protect operators from misleading workflow state, so they should be implemented and reviewed together against end-to-end state/TUI behavior."
+    },
+    {
+      "title": "One shared implementation lane",
+      "rationale": "The features likely touch shared state, runner, TUI, and test files. Use one fixed worktree lane with sequential phases to avoid parallel write conflicts while still preserving durable workflow evidence."
+    },
+    {
+      "title": "Mandatory lead review after agents",
+      "rationale": "Recent dogfood showed model review can miss state lifecycle and command-behavior gaps. The workflow prompts require process-level tests and the lead must perform final review before merge."
+    }
+  ],
+  "phases": [
+    {
+      "name": "implementation",
+      "title": "Implementation",
+      "goal": "Implement the P1 misleading-state prevention backlog slice.",
+      "ccc_runner": "@mimo25p",
+      "checks": [
+        {
+          "name": "state truthfulness focused tests",
+          "cmd": "python3 -m pytest tests/test_workflow.py -q -k 'native or ownership or scope or output_fallback or completed_run or opaque or preview'"
+        },
+        {
+          "name": "fast workflow tests",
+          "cmd": "WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py"
+        }
+      ],
+      "jobs": [
+        {
+          "name": "p1-state-truthfulness",
+          "role": "workflow implementer",
+          "prompt": "You are already running as the ccc @mimo25p implementation worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @mimo25p. Edit files directly in this declared worktree lane. Load the pirfl skill from ~/.claude/skills/pirfl if no local copy is available.\n\nTask: implement a bigger P1 workflow-state truthfulness slice for the workflow skill. Cover these backlog items together:\n\n1. Native-subagent status/output integration: native Codex subagents should not be represented as misleading managed workers with no liveness/output. Either add first-class state fields/adapter conventions for native sidecars, or clearly classify them as unmanaged helpers in state/TUI/status. Do not encourage manual stale `running` agents.\n2. Lane ownership/scope checks: compare changed files from worktree lanes against declared `write_scope` and surface warnings/checks before review/integration. This should catch workers changing files outside their owned scope.\n3. Completed-run output fallback: completed/failed/cancelled runs should not look blank when final output artifacts are empty. TUI/status/preview should fall back to transcript snippets, latest output/thinking/todo/tool/error, cancellation reason, last status event, or artifact summaries. The runner should avoid treating empty final-output files as useful artifacts, or synthesize a clear summary.\n\nAcceptance criteria:\n- Add focused tests that reproduce misleading state before the fix and assert the corrected state/UI/preview behavior.\n- Include at least one test that creates a completed worker with empty final output but useful transcript/event data and verifies a nonblank preview/fallback.\n- Include at least one test that creates a lane with write_scope and out-of-scope changes and verifies a warning/check is recorded and visible.\n- Include at least one test for native/unmanaged sidecar semantics so operators can distinguish native helpers from managed external workers.\n- Keep existing opaque-agent invariant, process identity, TUI duration, worktree merge, and workflow apply tests passing.\n- Update SKILL.md/references docs only where behavior changes or new conventions are introduced.\n\nLikely files: scripts/workflow_health.py, scripts/workflow_ops.py, scripts/workflow_run_codex.py, scripts/workflow_tui*.py, scripts/workflow_state.py, tests/test_workflow.py, references/state-schema.md, references/operations.md, references/known-gaps-and-roadmap.md, SKILL.md. Preserve style and avoid broad refactors.\n\nRun at minimum the new focused tests and WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py if practical. Commit your changes on the lane branch with message: feat(workflow): improve state truthfulness checks.\n\nReturn strict JSON with keys: status (complete|partial|blocked), files_changed, tests (array of command/result), behavior (array), blockers (array), last_commit, notes.",
+          "write_scope": [
+            "scripts/workflow_health.py",
+            "scripts/workflow_ops.py",
+            "scripts/workflow_run_codex.py",
+            "scripts/workflow_tui.py",
+            "scripts/workflow_tui_app.py",
+            "scripts/workflow_tui_live.py",
+            "scripts/workflow_state.py",
+            "tests/test_workflow.py",
+            "references/state-schema.md",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md",
+            "SKILL.md",
+            "workflows/dogfood/p1-state-truthfulness-e2e.workflow.json"
+          ],
+          "worktree": {
+            "path": "/home/xertrov/.agents/workflow-system/worktrees/p1-state-truthfulness-e2e",
+            "branch": "workflow/p1-state-truthfulness-e2e",
+            "base": "HEAD",
+            "merge_target": "main",
+            "owner": "ccc-@mimo25p"
+          }
+        }
+      ]
+    },
+    {
+      "name": "structural-review",
+      "title": "Structural Review",
+      "goal": "Review state truthfulness implementation for concrete bugs and missing tests.",
+      "cwd": "/home/xertrov/.agents/workflow-system/worktrees/p1-state-truthfulness-e2e",
+      "ccc_runner": "@mm3",
+      "jobs": [
+        {
+          "name": "mm3-state-truthfulness-review",
+          "role": "workflow reviewer",
+          "prompt": "You are already running as the ccc @mm3 review worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @mm3. Work in the current cwd, which is the implementation worktree lane.\n\nReview the P1 state truthfulness implementation. Focus on misleading-state bugs: stale native sidecars, out-of-scope lane changes, blank completed/cancelled previews, health/status/TUI consistency, and tests that assert actual state/rendered behavior rather than implementation details. If you find concrete issues, fix narrowly and commit with message: fix(workflow): address mm3 state truthfulness review. If no concrete issues, do not commit.\n\nRun focused tests relevant to any fixes. Return strict JSON with keys: status (pass|fixed|blocked), findings (array), tests (array), commits (array), notes.",
+          "write_scope": [
+            "scripts/workflow_health.py",
+            "scripts/workflow_ops.py",
+            "scripts/workflow_run_codex.py",
+            "scripts/workflow_tui.py",
+            "scripts/workflow_tui_app.py",
+            "scripts/workflow_tui_live.py",
+            "scripts/workflow_state.py",
+            "tests/test_workflow.py",
+            "references/state-schema.md",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md",
+            "SKILL.md",
+            "workflows/dogfood/p1-state-truthfulness-e2e.workflow.json"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "semantic-review",
+      "title": "Semantic Review",
+      "goal": "Deep semantic review of state lifecycle and operator-facing behavior.",
+      "cwd": "/home/xertrov/.agents/workflow-system/worktrees/p1-state-truthfulness-e2e",
+      "ccc_runner": "@glm51",
+      "jobs": [
+        {
+          "name": "glm51-state-truthfulness-review",
+          "role": "deep workflow reviewer",
+          "prompt": "You are already running as the ccc @glm51 review worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @glm51. Work in the current cwd.\n\nPerform a deep semantic review of the P1 state truthfulness slice. Check state-schema compatibility, operator-facing status/TUI behavior, health/completion invariants, lane ownership false positives/false negatives, completed-output fallbacks, and native/unmanaged sidecar semantics. If you find concrete issues, fix narrowly and commit with message: fix(workflow): address glm51 state truthfulness review. If no concrete issues, do not commit.\n\nRun focused tests and the fast suite if practical. Return strict JSON with keys: status (pass|fixed|blocked), findings (array), tests (array), commits (array), notes.",
+          "write_scope": [
+            "scripts/workflow_health.py",
+            "scripts/workflow_ops.py",
+            "scripts/workflow_run_codex.py",
+            "scripts/workflow_tui.py",
+            "scripts/workflow_tui_app.py",
+            "scripts/workflow_tui_live.py",
+            "scripts/workflow_state.py",
+            "tests/test_workflow.py",
+            "references/state-schema.md",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md",
+            "SKILL.md",
+            "workflows/dogfood/p1-state-truthfulness-e2e.workflow.json"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "final-review",
+      "title": "Final Regression Review",
+      "goal": "Final regression review after implementation and model-diverse reviews.",
+      "cwd": "/home/xertrov/.agents/workflow-system/worktrees/p1-state-truthfulness-e2e",
+      "ccc_runner": "@mimo25p",
+      "jobs": [
+        {
+          "name": "mimo25p-state-truthfulness-final",
+          "role": "final workflow reviewer",
+          "prompt": "You are already running as the ccc @mimo25p final review worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @mimo25p. Work in the current cwd.\n\nFinal review the P1 state truthfulness branch after prior review commits. Focus on regressions, docs, tests, and whether the feature is understandable for a lead operator dogfooding workflows. If you find concrete issues, fix narrowly and commit with message: fix(workflow): address final state truthfulness review. If no concrete issues, do not commit.\n\nRun focused tests and WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py if practical. Return strict JSON with keys: status (pass|fixed|blocked), findings (array), tests (array), commits (array), notes.",
+          "write_scope": [
+            "scripts/workflow_health.py",
+            "scripts/workflow_ops.py",
+            "scripts/workflow_run_codex.py",
+            "scripts/workflow_tui.py",
+            "scripts/workflow_tui_app.py",
+            "scripts/workflow_tui_live.py",
+            "scripts/workflow_state.py",
+            "tests/test_workflow.py",
+            "references/state-schema.md",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md",
+            "SKILL.md",
+            "workflows/dogfood/p1-state-truthfulness-e2e.workflow.json"
+          ]
+        }
+      ]
+    }
+  ]
+}
