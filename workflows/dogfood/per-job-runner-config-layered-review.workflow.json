@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Dogfood per-job runner config layered review",
+  "goal": "Run ordered multi-model review layers for the per-job runner/model configuration work in one declared workflow.",
+  "cwd": ".",
+  "runner": "ccc",
+  "ccc_runner": "@mm27",
+  "ccc_output_mode": "stream-json",
+  "permission_mode": "yolo",
+  "startup_delay": 0,
+  "max_agents": 1,
+  "failure_retries": 0,
+  "tags": [
+    "dogfood",
+    "per-job-runner-config",
+    "layered-review",
+    "mixed-models"
+  ],
+  "decisions": [
+    {
+      "title": "Single durable review workflow",
+      "rationale": "Use one saved multi-phase workflow instead of serial one-off review launches so dogfood exercises declared phases, phase-level runner overrides, and per-job runner/model config."
+    },
+    {
+      "title": "Rotating model order",
+      "rationale": "@mm3 already caught and fixed the structural launch-provider bug in an accidental exploratory pass, so this workflow uses @glm51 for deeper semantic review and @mimo25p for final regression review."
+    }
+  ],
+  "phases": [
+    {
+      "name": "semantic-review",
+      "title": "Semantic Review",
+      "goal": "Deep review of the mm3-fixed per-job runner configuration implementation.",
+      "ccc_runner": "@glm51",
+      "jobs": [
+        {
+          "name": "glm51-semantic-review",
+          "role": "deep workflow reviewer",
+          "prompt": "You are already running as the ccc @glm51 review worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @glm51. Work in the current cwd.\n\nReview the current branch containing commits 150939c and c8b9e6e for per-job runner/model configuration. @mm3 already fixed a bug where state metadata changed but actual launched commands still used the default provider. Your job is a deeper semantic review: check CLI precedence, root/phase/job merge behavior, actual worker launch behavior, dry-run/mock behavior, timeout/result extraction with per-job providers, ccc vs codex-direct vs ccc-opencode interactions, serialization of execution args into agent state, docs consistency, and test coverage.\n\nIf you find concrete bugs, fix them narrowly and commit with message: fix(workflow): address glm51 per-job runner review. If there are no concrete bugs, do not commit.\n\nRun focused tests relevant to any findings. Prefer process-level assertions over metadata-only assertions where launch behavior matters.\n\nReturn strict JSON with keys: status (pass|fixed|blocked), findings (array of objects with severity, file, line, issue, fix), tests (array of command/result), commits (array), notes.",
+          "write_scope": [
+            "scripts/workflow_plan.py",
+            "scripts/workflow_apply.py",
+            "scripts/workflow_run_codex.py",
+            "tests/test_workflow.py",
+            "SKILL.md",
+            "references/coding-cli-runners.md",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "final-review",
+      "title": "Final Regression Review",
+      "goal": "Final consistency and regression review after semantic review.",
+      "ccc_runner": "@mimo25p",
+      "jobs": [
+        {
+          "name": "mimo25p-final-review",
+          "role": "final workflow reviewer",
+          "prompt": "You are already running as the ccc @mimo25p final review worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @mimo25p. Work in the current cwd.\n\nFinal review the current branch after previous implementation/review commits. Focus on regression risk, tests, documentation, and whether the per-job runner/model feature is understandable and maintainable. Check that the declared layered review workflow itself exercises phase-level ccc_runner overrides correctly.\n\nIf you find concrete issues, fix narrowly and commit with message: fix(workflow): address final per-job runner review. If there are no concrete issues, do not commit.\n\nRun at minimum the focused per-job runner tests and, if practical, WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py.\n\nReturn strict JSON with keys: status (pass|fixed|blocked), findings (array of objects with severity, file, line, issue, fix), tests (array of command/result), commits (array), notes.",
+          "write_scope": [
+            "scripts/workflow_plan.py",
+            "scripts/workflow_apply.py",
+            "scripts/workflow_run_codex.py",
+            "tests/test_workflow.py",
+            "SKILL.md",
+            "references/coding-cli-runners.md",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md",
+            "workflows/dogfood/per-job-runner-config-layered-review.workflow.json"
+          ]
+        }
+      ]
+    }
+  ]
+}
