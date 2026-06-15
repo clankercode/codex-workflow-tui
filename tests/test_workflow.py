@@ -3057,6 +3057,43 @@ class WorkflowScriptTests(unittest.TestCase):
             findings = workflow_health.analyze_run(run)
             self.assertFalse(any(item["kind"] == "phase-empty" for item in findings))
 
+    def test_running_agent_without_liveness_source_warns(self) -> None:
+        """A running managed agent needs a PID, transcript, native id, or explicit unmanaged marker."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+        import workflow_ops  # pylint: disable=import-outside-toplevel
+
+        run = {
+            "run_id": "wf-test",
+            "title": "Opaque",
+            "status": "running",
+            "phases": [{"phase_id": "phase-impl", "status": "running"}],
+            "agents": [{"agent_id": "agent-opaque", "name": "Opaque", "phase_id": "phase-impl", "status": "running", "agent_type": "codex-exec"}],
+            "artifacts": [],
+        }
+
+        findings = workflow_health.analyze_run(run)
+        opaque = next(item for item in findings if item["kind"] == "agent-opaque-running")
+        self.assertEqual(opaque["severity"], workflow_health.WARNING)
+        self.assertIn("no process id, transcript path, native id, or unmanaged marker", opaque["message"])
+        self.assertIn("1 warn", workflow_ops.status_line(run))
+
+    def test_running_agent_with_liveness_source_is_not_flagged_opaque(self) -> None:
+        """Known liveness sources keep running managed agents from looking opaque."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        agents = [
+            {"agent_id": "with-pid", "status": "running", "process_id": 123},
+            {"agent_id": "with-transcript", "status": "running", "jsonl_path": "logs/worker.jsonl"},
+            {"agent_id": "with-native-id", "status": "running", "agent_type": "native-subagent", "thread_id": "native-123"},
+            {"agent_id": "unmanaged-sidecar", "status": "running", "unmanaged": True},
+        ]
+        for agent in agents:
+            run = {"run_id": "wf-test", "status": "running", "phases": [], "agents": [agent], "artifacts": []}
+            findings = workflow_health.analyze_run(run)
+            self.assertFalse(any(item["kind"] == "agent-opaque-running" for item in findings), msg=agent)
+
     def test_operator_done_requires_required_passing_check(self) -> None:
         """Ensure optional checks do not satisfy the default completion gate."""
         with tempfile.TemporaryDirectory() as tmp:

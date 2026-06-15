@@ -56,6 +56,8 @@ workflow add-phase <run-id> \
 
 Native subagents are controlled by the host session, not by the workflow runner. Track them in workflow state only when you can keep status and output coherent. If the host does not expose live status/update hooks, prefer recording a lead-local event, artifact, or completed summary after the subagent returns rather than creating a stale `running` agent.
 
+Running managed agents should have a liveness source. External workers normally record `process_id` and `jsonl_path`; native subagents should record a host id in `thread_id`. If a sidecar is intentionally unmanaged, set `unmanaged: true` in state so health checks know the missing process/transcript data is expected.
+
 When you do have a returned subagent id and will update it later, add it to state:
 
 ```bash

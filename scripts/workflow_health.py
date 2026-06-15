@@ -68,6 +68,20 @@ def resolve_run_path(run: dict[str, Any], path_value: Any, fallback_dir: str | N
     return run_dir / path
 
 
+def agent_has_liveness_source(agent: dict[str, Any]) -> bool:
+    """Return true when a running agent has enough metadata to inspect liveness."""
+    if agent.get("unmanaged") is True:
+        return True
+    if agent.get("process_id") or agent.get("process_group_id"):
+        return True
+    if str(agent.get("jsonl_path") or "").strip():
+        return True
+    agent_type = str(agent.get("agent_type") or "")
+    if agent_type == "native-subagent" and str(agent.get("thread_id") or "").strip():
+        return True
+    return False
+
+
 def issue(
     *,
     run: dict[str, Any],
@@ -256,6 +270,22 @@ def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SEC
                 )
             )
         if status == "running":
+            if not agent_has_liveness_source(agent):
+                findings.append(
+                    issue(
+                        run=run,
+                        severity=WARNING,
+                        kind="agent-opaque-running",
+                        title=f"Agent running without liveness source: {name}",
+                        message="Running managed agent has no process id, transcript path, native id, or unmanaged marker.",
+                        suggestion="Record process_id/jsonl_path/thread_id, mark it unmanaged, or update the agent status.",
+                        entity_type="agent",
+                        entity_id=agent_id,
+                        phase_id=phase_id,
+                        agent_id=agent_id,
+                        ts=str(agent.get("updated_at") or agent.get("started_at") or run.get("updated_at") or ""),
+                    )
+                )
             last_update = agent.get("updated_at") or agent.get("started_at")
             age = seconds_since(last_update, now=now)
             if age is not None and age >= stale_seconds:

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Dogfood opaque running-agent invariant",
+  "goal": "Implement a workflow-state health warning for running agents with no credible liveness source.",
+  "cwd": "../..",
+  "runner": "codex-direct",
+  "mock": true,
+  "startup_delay": 0,
+  "max_agents": 1,
+  "tags": ["dogfood", "invariant", "worktree-lane"],
+  "phases": [
+    {
+      "name": "implementation",
+      "title": "Implementation",
+      "goal": "Implement and test the opaque running-agent invariant.",
+      "checks": [
+        {
+          "name": "targeted health tests",
+          "cmd": "python3 -m unittest tests.test_workflow.WorkflowScriptTests.test_running_agent_without_liveness_source_warns"
+        },
+        {
+          "name": "fast workflow tests",
+          "cmd": "WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py"
+        }
+      ],
+      "jobs": [
+        {
+          "name": "opaque-invariant",
+          "role": "workflow implementer",
+          "prompt": "Implement the opaque running-agent invariant. Preserve existing workflow health patterns and add focused tests.",
+          "write_scope": [
+            "scripts/workflow_health.py",
+            "scripts/workflow_ops.py",
+            "tests/test_workflow.py",
+            "references/known-gaps-and-roadmap.md"
+          ],
+          "worktree": {
+            "branch": "workflow/opaque-running-agent-invariant",
+            "base": "HEAD",
+            "merge_target": "main",
+            "owner": "lead-local"
+          }
+        }
+      ]
+    },
+    {
+      "name": "review",
+      "title": "Review",
+      "goal": "Review the implementation and close any correctness gaps.",
+      "jobs": [
+        {
+          "name": "review",
+          "role": "reviewer",
+          "prompt": "Review the opaque running-agent invariant implementation and tests. Return concrete findings only.",
+          "depends_on": ["opaque-invariant"]
+        }
+      ]
+    }
+  ]
+}

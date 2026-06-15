@@ -112,6 +112,8 @@ pause, resume, and stop.
 - `workflow apply` now supports first-class per-job worktree lanes
   (`worktree: true` or a worktree object) and launches workers inside the lane.
   Automated merge-back/merger-agent orchestration remains future work.
+- Running managed agents without a liveness source now produce a health warning;
+  provide `process_id`, `jsonl_path`, native `thread_id`, or `unmanaged: true`.
 - `ccc --ccc-runner claude` isn't in the selector cwd-forwarding sets, so the
   runner's `--cd`/`--work-dir` plumbing is skipped (works only via ccc's default).
 - `load_run` on a missing id throws a raw `FileNotFoundError`; wrap callers to
@@ -120,5 +122,5 @@ pause, resume, and stop.
 ## Prioritization
 1. **A7** (remaining lock boundary documentation / init locking story).
 2. Automated merge-back/merger-agent orchestration for worktree lanes.
-3. Opaque running-agent/liveness invariant for truthful TUI state.
+3. Process identity display for running agents.
 4. Everything else as polish.
