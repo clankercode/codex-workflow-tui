@@ -120,6 +120,15 @@ Phase ids may be stable human ids such as `phase-research`, or generated ids. Pr
   "process_id": 12345,
   "process_group_id": 12345,
   "write_scope": ["src/review"],
+  "worktree": {
+    "enabled": true,
+    "create": true,
+    "path": "/state/runs/wf-demo/worktrees/review",
+    "branch": "workflow/wf-demo/review",
+    "base": "HEAD",
+    "merge_target": "main",
+    "source_cwd": "/repo/path"
+  },
   "jsonl_path": ".../logs/codex-01-reviewer.jsonl",
   "log_path": ".../logs/codex-01-reviewer.stderr.log",
   "output_path": ".../artifacts/codex-01-reviewer.final.md",

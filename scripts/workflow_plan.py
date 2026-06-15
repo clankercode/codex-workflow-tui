@@ -99,7 +99,7 @@ def normalize_job(item: Any, index: int) -> dict[str, Any]:
         raise SystemExit("each workflow job must include a non-empty prompt")
     name = str(item.get("name") or item.get("role") or f"job-{index + 1}").strip()
     job = {"name": name, "role": str(item.get("role") or name).strip() or name, "prompt": prompt}
-    for field in ("stage", "depends_on", "schema"):
+    for field in ("stage", "depends_on", "schema", "cwd", "write_scope", "worktree"):
         if item.get(field):
             job[field] = item[field]
     return job

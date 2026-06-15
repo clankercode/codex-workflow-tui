@@ -109,8 +109,9 @@ pause, resume, and stop.
 - Partial failure (9/10 workers OK) exits non-zero indistinguishably from total
   failure, and the matrix `break`s remaining phases on it — consider a `partial`
   status / `--allow-partial`.
-- `workflow apply` does not yet expose a first-class worktree lane mechanism;
-  prompts still need to arrange worktrees or disjoint file ownership manually.
+- `workflow apply` now supports first-class per-job worktree lanes
+  (`worktree: true` or a worktree object) and launches workers inside the lane.
+  Automated merge-back/merger-agent orchestration remains future work.
 - `ccc --ccc-runner claude` isn't in the selector cwd-forwarding sets, so the
   runner's `--cd`/`--work-dir` plumbing is skipped (works only via ccc's default).
 - `load_run` on a missing id throws a raw `FileNotFoundError`; wrap callers to
@@ -118,6 +119,6 @@ pause, resume, and stop.
 
 ## Prioritization
 1. **A7** (remaining lock boundary documentation / init locking story).
-2. Worktree lanes for write-heavy workflows.
+2. Automated merge-back/merger-agent orchestration for worktree lanes.
 3. Opaque running-agent/liveness invariant for truthful TUI state.
 4. Everything else as polish.

@@ -9,6 +9,7 @@ import contextlib
 import io
 import json
 import shlex
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,107 @@ def phase_jobs(plan: dict[str, Any]) -> list[dict[str, Any]]:
     return jobs
 
 
+def prepare_worktree_lanes(run_id: str, jobs: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Resolve and optionally create per-job worktree lanes before workers launch."""
+    run = workflow_state.load_run(run_id)
+    worktree_root = Path(run["paths"]["run_dir"]) / "worktrees"
+    prepared: list[dict[str, Any]] = []
+    for job in jobs:
+        lane = resolve_worktree_lane(job, args, run_id, worktree_root)
+        if lane is None:
+            prepared.append(job)
+            continue
+        updated = dict(job)
+        updated["worktree"] = lane
+        updated["cwd"] = lane["path"]
+        if not args.dry_run and lane.get("create", True):
+            create_worktree_lane(args.cwd, lane)
+            record_worktree_lane_event(run_id, updated, lane, operation="created")
+        else:
+            record_worktree_lane_event(run_id, updated, lane, operation="planned")
+        prepared.append(updated)
+    return prepared
+
+
+def resolve_worktree_lane(job: dict[str, Any], args: argparse.Namespace, run_id: str, worktree_root: Path) -> dict[str, Any] | None:
+    """Return normalized worktree metadata for one job, or None when disabled."""
+    raw = job.get("worktree")
+    if raw in (None, False, "", 0):
+        return None
+    if raw is True:
+        spec: dict[str, Any] = {}
+    elif isinstance(raw, dict):
+        spec = dict(raw)
+        if spec.get("enabled") is False:
+            return None
+    else:
+        raise SystemExit("job worktree must be true, false, or an object")
+
+    slug = workflow_state.slugify(str(job.get("name") or "job"), fallback="job")
+    path_value = spec.get("path")
+    if path_value:
+        path = Path(str(path_value)).expanduser()
+        if not path.is_absolute():
+            path = Path(args.cwd) / path
+    else:
+        path = worktree_root / slug
+    branch = str(spec.get("branch") or f"workflow/{run_id}/{slug}").strip()
+    base = str(spec.get("base") or "HEAD").strip()
+    merge_target = str(spec.get("merge_target") or current_branch(args.cwd) or "HEAD").strip()
+    lane = {
+        "enabled": True,
+        "create": bool(spec.get("create", True)),
+        "path": str(path.resolve()),
+        "branch": branch,
+        "base": base,
+        "merge_target": merge_target,
+        "source_cwd": args.cwd,
+    }
+    for key in ("owner", "label", "notes"):
+        if spec.get(key):
+            lane[key] = spec[key]
+    return lane
+
+
+def current_branch(cwd: str) -> str:
+    """Return the current branch name for merge-target metadata when available."""
+    result = subprocess.run(["git", "-C", cwd, "branch", "--show-current"], text=True, capture_output=True, check=False)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def create_worktree_lane(cwd: str, lane: dict[str, Any]) -> None:
+    """Create one git worktree lane."""
+    path = Path(str(lane["path"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    command = ["git", "-C", cwd, "worktree", "add", "-b", str(lane["branch"]), str(path), str(lane["base"])]
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise SystemExit(f"failed to create worktree lane {lane['branch']}: {result.stderr.strip() or result.stdout.strip()}")
+
+
+def record_worktree_lane_event(run_id: str, job: dict[str, Any], lane: dict[str, Any], *, operation: str) -> None:
+    """Record lane creation/planning in run state."""
+    def mutator(run: dict[str, Any]) -> None:
+        workflow_state.add_event(
+            run,
+            "info",
+            f"worktree lane {operation}: {job['name']}",
+            kind="worktree",
+            operation=operation,
+            source="workflow_apply.worktree",
+            phase_id=job.get("phase_id"),
+            data={
+                "job": job.get("name", ""),
+                "path": lane.get("path", ""),
+                "branch": lane.get("branch", ""),
+                "base": lane.get("base", ""),
+                "merge_target": lane.get("merge_target", ""),
+            },
+        )
+
+    workflow_state.mutate_run(run_id, mutator)
+
+
 def phase_id_for_plan_phase(phase: dict[str, Any]) -> str:
     """Return the run phase id for one normalized plan phase."""
     return f"phase-{workflow_state.slugify(str(phase['name']), fallback='plan')}"
@@ -213,6 +315,7 @@ def apply_workflow(args: argparse.Namespace) -> int:
     install_plan_phases(run["run_id"], plan)
     record_plan_decisions(run["run_id"], plan)
     record_plan_artifact(run["run_id"], plan)
+    jobs = prepare_worktree_lanes(run["run_id"], jobs, args)
     for index, job in enumerate(jobs):
         run = workflow_run_codex.add_agent(
             run,

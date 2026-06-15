@@ -33,7 +33,9 @@ workflow apply workflows/review.workflow.json \
 Plans may also use `phases[].jobs`. `workflow apply` records the normalized plan as a `workflow-plan` artifact, preserves execution metadata such as `cwd`, `runner`, `ccc_runner`, `tags`, sandbox/approval settings, and caps, and lets CLI flags override plan defaults.
 Job `name` values are dependency keys, so keep them unique and stable across the whole plan when using `depends_on` or phase staging.
 
-Multi-phase plans are currently flattened into staged jobs with dependency edges. This gives ordered execution and failure propagation, but not rich declared phase/gate records yet.
+Jobs may declare `worktree: true` or a `worktree` object with `path`, `branch`, `base`, `merge_target`, `owner`, or `label`. `workflow apply` creates the lane before launch, stores the normalized lane metadata on the agent, and runs that worker with the lane as its cwd. Omitted paths default under the workflow run state directory. `--dry-run` records planned lanes without creating them.
+
+Multi-phase plans are flattened into staged jobs with dependency edges and declared phase/gate/check records. This gives ordered execution, failure propagation, and visible phase status in the run state.
 
 ## Providers
 

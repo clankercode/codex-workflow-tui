@@ -171,6 +171,9 @@ class WorkflowScriptTests(unittest.TestCase):
                 from pathlib import Path
 
                 state_path = os.environ.get("CODEX_FAKE_STATE")
+                args_path = os.environ.get("CODEX_FAKE_ARGS")
+                if args_path:
+                    Path(args_path).write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
                 attempt = 0
                 if state_path:
                     path = Path(state_path)
@@ -5578,6 +5581,32 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(plan["phases"][0]["planned_checks"][0]["name"], "pytest")
         self.assertEqual(plan["phases"][0]["decisions"][0]["title"], "Review model")
 
+    def test_workflow_plan_preserves_job_lane_metadata(self) -> None:
+        """Keep job-level cwd, write scope, and worktree lane metadata intact."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_plan  # pylint: disable=import-outside-toplevel
+
+        plan = workflow_plan.normalize_workflow(
+            {
+                "title": "Lane Plan",
+                "jobs": [
+                    {
+                        "name": "impl",
+                        "prompt": "Implement.",
+                        "cwd": "lane-a",
+                        "write_scope": ["src/a"],
+                        "worktree": {"branch": "lane/impl", "base": "main", "merge_target": "main"},
+                    }
+                ],
+            },
+            fallback_title="fallback",
+        )
+
+        job = plan["jobs"][0]
+        self.assertEqual(job["cwd"], "lane-a")
+        self.assertEqual(job["write_scope"], ["src/a"])
+        self.assertEqual(job["worktree"]["branch"], "lane/impl")
+
     def test_wf_apply_mock_launches_saved_single_phase_plan_and_records_artifact(self) -> None:
         """Launch a saved workflow-plan JSON without model calls and persist the normalized plan."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -5784,6 +5813,56 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agents_by_name["parent"]["phase_id"], "phase-draft")
             self.assertEqual(agents_by_name["child"]["phase_id"], "phase-draft")
             self.assertTrue(any(event.get("kind") == "expansion" and event.get("operation") == "added" for event in run["events"]))
+
+    def test_wf_apply_creates_worktree_lane_and_launches_worker_there(self) -> None:
+        """Worktree jobs should create a lane, record it, and pass its cwd to the runner."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "note.txt").write_text("base\n", encoding="utf-8")
+            self.git(repo, "add", "note.txt")
+            self.git(repo, "commit", "-m", "base")
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            args_path = tmp_path / "codex-args.json"
+            plan_path = tmp_path / "worktree.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Worktree Apply",
+                        "cwd": str(repo),
+                        "jobs": [
+                            {
+                                "name": "impl",
+                                "prompt": "Implement in a lane.",
+                                "write_scope": ["src"],
+                                "worktree": {"branch": "workflow/test-impl", "merge_target": "main"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CODEX_FAKE_ARGS"] = str(args_path)
+            result = self.run_wf("apply", str(plan_path), "--runner", "codex-direct", "--startup-delay", "0", env=env)
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            agent = run["agents"][0]
+            codex_args = json.loads(args_path.read_text(encoding="utf-8"))
+            lane_path = Path(agent["cwd"])
+
+            self.assertEqual(run["status"], "completed")
+            self.assertTrue(lane_path.exists())
+            self.assertEqual(agent["worktree"]["branch"], "workflow/test-impl")
+            self.assertEqual(agent["worktree"]["merge_target"], "main")
+            self.assertEqual(agent["write_scope"], ["src"])
+            self.assertEqual(codex_args[codex_args.index("--cd") + 1], str(lane_path))
+            self.assertTrue(any(event.get("kind") == "worktree" and event.get("operation") == "created" for event in run["events"]))
 
     def test_wf_apply_honors_plan_execution_fields_with_cli_overrides(self) -> None:
         """Workflow-plan execution metadata should not be silently discarded."""

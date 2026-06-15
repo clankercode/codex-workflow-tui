@@ -25,7 +25,24 @@ workflow apply workflows/review.workflow.json \
   --max-agents 4
 ```
 
-Generator scripts must print one JSON `workflow-plan` object. Job `name` values must be unique and stable across the whole plan because dependency edges use those names. `workflow apply` preserves plan metadata such as `cwd`, `runner`, `ccc_runner`, `tags`, `model`, sandbox/approval settings, and caps, while explicit CLI flags override plan defaults. Multi-phase plans are currently flattened into staged jobs with dependency edges; a later phase starts only after its declared upstream jobs complete.
+Generator scripts must print one JSON `workflow-plan` object. Job `name` values must be unique and stable across the whole plan because dependency edges use those names. `workflow apply` preserves plan metadata such as `cwd`, `runner`, `ccc_runner`, `tags`, `model`, sandbox/approval settings, and caps, while explicit CLI flags override plan defaults. Multi-phase plans are flattened into staged jobs with dependency edges; a later phase starts only after its declared upstream jobs complete, and declared phases/gates/checks are recorded in run state.
+
+Jobs can request isolated write lanes with `worktree: true` or a worktree object:
+
+```json
+{
+  "name": "impl-a",
+  "prompt": "Implement the bounded change.",
+  "write_scope": ["src/a"],
+  "worktree": {
+    "branch": "workflow/my-run/impl-a",
+    "base": "HEAD",
+    "merge_target": "main"
+  }
+}
+```
+
+When enabled, `workflow apply` creates the git worktree before launching the worker and sets that worker's `cwd` to the lane path. If `path` is omitted, the lane lives under the workflow run state directory, not inside the source checkout. Use `dry_run` to record planned lanes without creating them.
 3. If you are operating manually, initialize state before delegating:
 
 ```bash
@@ -69,7 +86,7 @@ python3 ~/.agents/skills/workflow/scripts/workflow_tui.py
 - Do not delegate the immediate blocking task. Keep the critical path local while sidecar agents work.
 - Give every agent a bounded scope, expected output, file ownership if it may edit, and a reminder that other agents may be working concurrently.
 - Prefer read-only agents for research and review. Give write access only when the lane owns a disjoint file set or worktree.
-- For write-heavy parallelism, use worktrees or explicit file ownership. Avoid two agents editing the same file.
+- For write-heavy parallelism, declare per-job `worktree` lanes or explicit `write_scope`. Avoid two agents editing the same file.
 - Always verify subagent and worker results before presenting them as true.
 - A worker's final output is data for the lead, not prose for a human. Ask for a parseable shape (JSON or markdown with fixed headings), state the schema in the prompt, and re-dispatch the lane on malformed output instead of parsing slop. Persist it as the agent `--result-file`.
 

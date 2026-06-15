@@ -82,6 +82,11 @@ class RunnerProvider:
         return WorkerResult(result=text, summary=first_line(text) or f"{self.name} exited {exit_code}")
 
 
+def agent_cwd(agent: dict[str, Any], args: argparse.Namespace) -> str:
+    """Return the effective working directory for one worker agent."""
+    return str(agent.get("cwd") or args.cwd)
+
+
 class CodexDirectProvider(RunnerProvider):
     """Use Codex directly through `codex exec --json`."""
 
@@ -96,7 +101,7 @@ class CodexDirectProvider(RunnerProvider):
             "exec",
             "--json",
             "--cd",
-            args.cwd,
+            agent_cwd(agent, args),
             "--sandbox",
             args.sandbox,
         ]
@@ -148,7 +153,7 @@ class OpencodeDirectProvider(RunnerProvider):
             "--format",
             "json",
             "--dir",
-            args.cwd,
+            agent_cwd(agent, args),
             "--title",
             agent["name"],
         ]
@@ -206,7 +211,7 @@ class KimiDirectProvider(RunnerProvider):
             "--input-format",
             "text",
             "--work-dir",
-            args.cwd,
+            agent_cwd(agent, args),
         ]
         if args.model:
             command.extend(["--model", args.model])
@@ -292,11 +297,11 @@ class CccProvider(RunnerProvider):
         if args.timeout_secs:
             command.extend(["--timeout-secs", str(args.timeout_secs)])
         if self.is_opencode_selector():
-            command.extend(["--runner-arg", "--dir", "--runner-arg", args.cwd])
+            command.extend(["--runner-arg", "--dir", "--runner-arg", agent_cwd(agent, args)])
         elif self.is_kimi_selector():
-            command.extend(["--runner-arg", "--work-dir", "--runner-arg", args.cwd])
+            command.extend(["--runner-arg", "--work-dir", "--runner-arg", agent_cwd(agent, args)])
         elif self.is_codex_selector():
-            command.extend(["--runner-arg", "--cd", "--runner-arg", args.cwd])
+            command.extend(["--runner-arg", "--cd", "--runner-arg", agent_cwd(agent, args)])
         if self.is_kimi_selector() and args.kimi_max_steps_per_turn:
             command.extend(["--runner-arg", "--max-steps-per-turn", "--runner-arg", str(args.kimi_max_steps_per_turn)])
         command.append(self.selector)
@@ -420,6 +425,9 @@ def load_jobs(args: argparse.Namespace) -> list[dict[str, str]]:
                     "prompt": str(item["prompt"]),
                     "stage": str(item.get("stage") or ""),
                     "depends_on": item.get("depends_on") or "",
+                    "cwd": item.get("cwd") or "",
+                    "write_scope": item.get("write_scope") or [],
+                    "worktree": item.get("worktree") or {},
                 }
             )
     if not jobs:
@@ -581,11 +589,11 @@ def add_agent(
         status="pending",
         prompt=None,
         prompt_file=str(prompt_path),
-        cwd=args.cwd,
+        cwd=str(job.get("cwd") or args.cwd),
         model=args.model or "",
         thread_id=None,
         process_id=None,
-        write_scope=[],
+        write_scope=job.get("write_scope") or [],
         jsonl_path=str(jsonl_path),
         log_path=str(stderr_path),
         output_path=str(output_path),
@@ -599,6 +607,8 @@ def add_agent(
         extra["depends_on"] = depends_on
     if job.get("schema"):
         extra["schema"] = _resolve_schema(job["schema"])
+    if job.get("worktree"):
+        extra["worktree"] = job["worktree"]
     if extra:
         update_agent(run["run_id"], agent_id, **extra)
     return workflow_state.load_run(run["run_id"])
@@ -1003,7 +1013,7 @@ async def run_worker(
                     return
                 attempt += 1
                 command = provider.build_command(agent, args)
-                proc = await startup_limiter.create_process(command, cwd=args.cwd)
+                proc = await startup_limiter.create_process(command, cwd=agent_cwd(agent, args))
                 if started_epoch is None:
                     started_epoch = time.time()
                 if attempt > 1:
@@ -1273,11 +1283,11 @@ def _add_expansion_agent(
         status="pending",
         prompt=None,
         prompt_file=str(prompt_path),
-        cwd=args.cwd,
+        cwd=str(job.get("cwd") or args.cwd),
         model=args.model or "",
         thread_id=None,
         process_id=None,
-        write_scope=[],
+        write_scope=job.get("write_scope") or [],
         jsonl_path=str(jsonl_path),
         log_path=str(stderr_path),
         output_path=str(output_path),
@@ -1293,6 +1303,8 @@ def _add_expansion_agent(
         extra["depends_on"] = depends_on
     if job.get("schema"):
         extra["schema"] = _resolve_schema(job["schema"])
+    if job.get("worktree"):
+        extra["worktree"] = job["worktree"]
     if extra:
         update_agent(run_id, agent_id, **extra)
     return workflow_state.load_run(run_id), agent_id
@@ -1471,6 +1483,12 @@ async def run_all(run: dict[str, Any], args: argparse.Namespace, provider: Runne
                                 dropped = len(expansion_jobs) - added
                                 _record_expansion_truncation(run_id, updated_agent, "max-round", dropped, round_num + 1)
                                 break
+                            if not job.get("cwd") and updated_agent.get("cwd"):
+                                job["cwd"] = updated_agent["cwd"]
+                            if not job.get("write_scope") and updated_agent.get("write_scope"):
+                                job["write_scope"] = updated_agent["write_scope"]
+                            if not job.get("worktree") and updated_agent.get("worktree"):
+                                job["worktree"] = updated_agent["worktree"]
                             total_jobs += 1
                             _run, new_agent_id = _add_expansion_agent(run_id, job, args, provider, next_index, phase_id=updated_agent.get("phase_id"))
                             next_index += 1
