@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Dogfood conflict-solving merger agents",
+  "goal": "Implement a bounded v1 for agent-assisted conflict resolution after workflow worktree lane merge conflicts.",
+  "cwd": "../..",
+  "runner": "ccc",
+  "ccc_runner": "@mm27",
+  "ccc_output_mode": "stream-json",
+  "permission_mode": "yolo",
+  "startup_delay": 0,
+  "max_agents": 1,
+  "failure_retries": 0,
+  "tags": [
+    "dogfood",
+    "worktree-lane",
+    "merge-conflicts",
+    "layered-review"
+  ],
+  "decisions": [
+    {
+      "title": "Single workflow with shared lane",
+      "rationale": "Run implementation and ordered reviews in one workflow plan. The implementation job owns a fixed worktree path; later review jobs depend on it and use that same cwd."
+    },
+    {
+      "title": "Bounded v1 scope",
+      "rationale": "Implement safe conflict-assist orchestration and state recording, not autonomous magic merging. The command should surface enough context and optionally launch a bounded merger worker; final merge still needs verification."
+    }
+  ],
+  "phases": [
+    {
+      "name": "implementation",
+      "title": "Implementation",
+      "goal": "Add a bounded conflict-solving merger-agent path for conflicted worktree lane merges.",
+      "ccc_runner": "@mimo25p",
+      "checks": [
+        {
+          "name": "conflict-assist focused tests",
+          "cmd": "python3 -m pytest tests/test_workflow.py -q -k 'merge_lanes and conflict'"
+        },
+        {
+          "name": "fast workflow tests",
+          "cmd": "WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py"
+        }
+      ],
+      "jobs": [
+        {
+          "name": "conflict-solving-merger-agents",
+          "role": "workflow implementer",
+          "prompt": "You are already running as the ccc @mimo25p implementation worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @mimo25p. Edit files directly in this declared worktree lane. Load the pirfl skill from ~/.claude/skills/pirfl if no local copy is available.\n\nTask: implement the backlog item 'Conflict-solving merger agents for worktree lanes' for the workflow skill.\n\nCurrent behavior: workflow merge-lanes merges completed worktree branches into the run cwd and records checks/events. On conflict it records a failed merge check, optionally aborts, and exits non-zero. Desired bounded v1: after a conflict is recorded, provide a first-class command or option that prepares conflict context and can launch/record a merger-agent step to resolve the conflict in a controlled way. Keep the design safe and explicit: do not silently auto-merge without evidence; preserve clean-tree checks; record artifacts/checks/events; make no-model/dry-run behavior safe; make the final state understandable in TUI/status.\n\nLikely shape: add a command such as `workflow merge-conflicts <run-id>` or an option on `merge-lanes` that creates a merger-agent prompt/artifact from the conflicted lane, target branch, failed merge log, git status, conflicted files, and instructions. It may optionally run a configured coding worker, or for v1 may record the exact bounded prompt/next action if launching another worker is too large. Prefer a useful small v1 over a broad redesign.\n\nAcceptance criteria:\n- Focused tests cover a merge conflict and the new conflict-assist/merger-agent path.\n- State records a durable artifact or check with conflict context and the intended merger action.\n- The command refuses unsafe conditions such as missing conflict checks, dirty target tree when inappropriate, or unsupported run state.\n- Docs explain how to use the feature and where human verification remains required.\n- Existing merge-lanes success/conflict behavior keeps passing.\n\nScope: scripts/workflow_ops.py, scripts/wf, tests/test_workflow.py, references/operations.md, references/known-gaps-and-roadmap.md, SKILL.md if needed, and workflow dogfood plan docs if useful. Avoid broad refactors. Commit your changes on the lane branch with message: feat(workflow): add conflict-solving merger agents.\n\nRun at minimum focused merge/conflict tests and WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py if practical. Return strict JSON with keys: status (complete|partial|blocked), files_changed, tests (array of command/result), behavior (array), blockers (array), last_commit, notes.",
+          "write_scope": [
+            "scripts/workflow_ops.py",
+            "scripts/wf",
+            "tests/test_workflow.py",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md",
+            "SKILL.md",
+            "workflows/dogfood/conflict-solving-merger-agents.workflow.json"
+          ],
+          "worktree": {
+            "path": "/home/xertrov/.agents/workflow-system/worktrees/conflict-solving-merger-agents",
+            "branch": "workflow/conflict-solving-merger-agents",
+            "base": "HEAD",
+            "merge_target": "main",
+            "owner": "ccc-@mimo25p"
+          }
+        }
+      ]
+    },
+    {
+      "name": "structural-review",
+      "title": "Structural Review",
+      "goal": "Review conflict-solving merger-agent implementation for safety and integration gaps.",
+      "cwd": "/home/xertrov/.agents/workflow-system/worktrees/conflict-solving-merger-agents",
+      "ccc_runner": "@mm3",
+      "jobs": [
+        {
+          "name": "mm3-structural-review",
+          "role": "workflow reviewer",
+          "prompt": "You are already running as the ccc @mm3 review worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @mm3. Work in the current cwd, which is the implementation worktree lane.\n\nReview the conflict-solving merger-agent implementation. Focus on safety around dirty trees and unresolved conflicts, state/check/artifact consistency, test coverage for actual git conflict behavior, CLI ergonomics, docs accuracy, and whether the implementation avoids silently claiming conflict resolution without verification. If you find concrete issues, fix narrowly and commit with message: fix(workflow): address mm3 conflict merger review. If no concrete issues, do not commit.\n\nRun focused tests relevant to any fixes. Return strict JSON with keys: status (pass|fixed|blocked), findings (array), tests (array), commits (array), notes.",
+          "write_scope": [
+            "scripts/workflow_ops.py",
+            "scripts/wf",
+            "tests/test_workflow.py",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md",
+            "SKILL.md",
+            "workflows/dogfood/conflict-solving-merger-agents.workflow.json"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "semantic-review",
+      "title": "Semantic Review",
+      "goal": "Deep semantic review of merger-agent behavior after structural review.",
+      "cwd": "/home/xertrov/.agents/workflow-system/worktrees/conflict-solving-merger-agents",
+      "ccc_runner": "@glm51",
+      "jobs": [
+        {
+          "name": "glm51-semantic-review",
+          "role": "deep workflow reviewer",
+          "prompt": "You are already running as the ccc @glm51 review worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @glm51. Work in the current cwd.\n\nPerform a deep semantic review of the conflict-solving merger-agent feature. Check the actual git behavior, state invariants, failed-check lifecycle, artifact paths, command help, documentation, and whether a user can recover from a conflicted merge without corrupting the target checkout. If you find concrete issues, fix narrowly and commit with message: fix(workflow): address glm51 conflict merger review. If no concrete issues, do not commit.\n\nRun focused tests and the fast suite if practical. Return strict JSON with keys: status (pass|fixed|blocked), findings (array), tests (array), commits (array), notes.",
+          "write_scope": [
+            "scripts/workflow_ops.py",
+            "scripts/wf",
+            "tests/test_workflow.py",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md",
+            "SKILL.md",
+            "workflows/dogfood/conflict-solving-merger-agents.workflow.json"
+          ]
+        }
+      ]
+    }
+  ]
+}
