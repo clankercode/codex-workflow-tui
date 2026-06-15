@@ -1,8 +1,8 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 ╭─────────────────── Runs ───────────────────╮╭──── overview  ● runs  phases  agents  events  decisions  artifacts ────╮
-│    State  Title                            ││ id          wf-fixture-e2e-live                                        │
-│ ▸  RUN    Live Telemetry Fixture           ││ title       Live Telemetry Fixture                                     │
-│                                            ││ status      running                                                    │
+│    Workflow                                ││ id          wf-fixture-e2e-live                                        │
+│ ▸  Live Telemetry Fixture                  ││ title       Live Telemetry Fixture                                     │
+│      > RUN > 0s > Live test worker         ││ status      running                                                    │
 │                                            ││ mode        codex-direct                                               │
 │                                            ││ paused      no                                                         │
 │                                            ││ stop req    no                                                         │
@@ -10,7 +10,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ updated     Jun 11 10:09 AEST                                          │
 │                                            ││ state       run.json                                                   │
 │                                            ││ ╭──────────────────────────── Live Stats ────────────────────────────╮ │
-│                                            ││ │ tokens      1234       tool calls 1          active     1          │ │
+│                                            ││ │ tokens      1234       tail tools 1          active     1          │ │
 │                                            ││ │ longest     Live test… agents     1          phases     1          │ │
 │                                            ││ │ checks      0                                                      │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
@@ -20,6 +20,9 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ │ Worker is still streaming context, but the current artifact        │ │
 │                                            ││ │ already contains the answer.                                       │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
+│                                            ││ ╭────────────────────────── Running Agents ──────────────────────────╮ │
+│                                            ││ │ Live test worker <1 us                                             │ │
+│                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────── Latest Tool Calls ─────────────────────────╮ │
 │                                            ││ │ command_execution · completed · /usr/bin/python3 -c "a,b=0,1\nfor  │ │
 │                                            ││ │ _ in range(20): a,b=b,a+b\nprint(a)"                               │ │
@@ -27,9 +30,6 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ ╭────────────────────────────── Prompt ──────────────────────────────╮ │
 │                                            ││ │ Fixture workflow for live TUI telemetry panels.                    │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││                                                                        │
-│                                            ││                                                                        │
-│                                            ││                                                                        │
 │                                            ││                                                                        │
 │                                            ││                                                                        │
 ╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯

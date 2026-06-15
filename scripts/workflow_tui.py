@@ -30,6 +30,7 @@ from rich.text import Text
 
 import workflow_state
 import workflow_health
+import workflow_tui_live
 
 TABS = ("overview", "runs", "phases", "agents", "events", "decisions", "artifacts")
 AGENT_SCOPES = ("phase", "all")
@@ -268,6 +269,17 @@ def display_timestamp(value: Any) -> str:
 def snapshot_reference_time() -> datetime | None:
     """Return the optional deterministic clock used by snapshot renderers."""
     return parse_local_datetime(os.environ.get(SNAPSHOT_NOW_ENV))
+
+
+def run_duration_text(run: dict[str, Any], now: datetime | None = None) -> str:
+    return workflow_tui_live.run_duration_text(
+        run, parse_local_datetime, format_duration_seconds, workflow_state.TERMINAL_STATUS_VALUES, now, snapshot_reference_time
+    )
+
+
+def reference_epoch() -> float:
+    reference = snapshot_reference_time()
+    return reference.timestamp() if reference else time.time()
 
 
 def display_event_timestamp(value: Any, now: datetime | None = None) -> str:
@@ -695,21 +707,29 @@ def make_attention_detail(item: dict[str, Any]) -> Group:
 def make_runs_table(runs: list[dict[str, Any]], selected: int, visible: int) -> Table:
     table = Table(box=None, expand=True, show_header=True, header_style="bold bright_black", pad_edge=False)
     table.add_column("", width=1, no_wrap=True)
-    table.add_column("State", width=5, no_wrap=True)
-    table.add_column("Title", ratio=1, overflow="ellipsis", no_wrap=True)
+    table.add_column("Workflow", ratio=1, overflow="ellipsis", no_wrap=False)
     if not runs:
-        table.add_row("", Text("NONE", style="dim"), "No workflow runs found.")
+        table.add_row("", "No workflow runs found.")
         return table
     selected = clamp_index(selected, len(runs))
     start = window_start(selected, len(runs), visible)
     for index, run in enumerate(runs[start : start + visible], start=start):
-        metrics = run.get("metrics", {})
-        agents_total = metrics.get("agents_total", len(run.get("agents", [])))
         style = "reverse" if index == selected else ""
+        status_label = STATUS_META.get(str(run.get("status", "")), (str(run.get("status", "")).upper()[:4], ""))[0]
+        duration = run_duration_text(run)
+        summary = Text(str(run.get("title", "")) or "(untitled)")
+        summary.append("\n  > ", style="dim")
+        summary.append(status_label, style=status_text(run.get("status", "")).style)
+        if duration:
+            summary.append(" > ", style="dim")
+            summary.append(duration, style="bright_black")
+        running_text = workflow_tui_live.running_agents_inline_text(run)
+        if running_text:
+            summary.append(" > ", style="dim")
+            summary.append(running_text, style="green")
         table.add_row(
             marker_text(index == selected),
-            status_text(run.get("status", "")),
-            str(run.get("title", "")),
+            summary,
             style=style,
         )
     return table
@@ -951,6 +971,8 @@ def parse_json_activity(text: str) -> dict[str, Any]:
     output_parts: list[str] = []
     tool_calls: dict[str, str] = {}
     tool_order: list[str] = []
+    todos: list[dict[str, str]] = []
+    thinking_parts: list[str] = []
     tokens = empty_token_totals()
     parse_errors = 0
     last_activity_epoch = 0.0
@@ -976,6 +998,12 @@ def parse_json_activity(text: str) -> dict[str, Any]:
             if key not in tool_calls:
                 tool_order.append(key)
             tool_calls[key] = summarize_tool_call(event)
+        event_todos = workflow_tui_live.todo_items_from_event(event)
+        if event_todos:
+            todos = event_todos
+        thinking_text = workflow_tui_live.thinking_text_from_event(event)
+        if thinking_text:
+            thinking_parts.append(thinking_text)
         for token_source in (event.get("tokens"), event.get("usage"), part.get("tokens"), part.get("usage"), item.get("tokens"), item.get("usage")):
             if isinstance(token_source, dict):
                 merge_token_max(tokens, token_source)
@@ -986,6 +1014,8 @@ def parse_json_activity(text: str) -> dict[str, Any]:
         "latest_output": trim_preview("\n\n".join(output_parts)),
         "tool_calls": ordered_tools[-6:],
         "tool_call_count": len(ordered_tools),
+        "todos": todos,
+        "latest_thinking": trim_preview("\n\n".join(thinking_parts)),
         "tokens": tokens,
         "parse_errors": parse_errors,
         "last_activity_epoch": last_activity_epoch,
@@ -1030,6 +1060,8 @@ def parse_text_activity(text: str) -> dict[str, Any]:
         "latest_output": trim_preview("\n".join(output_source)),
         "tool_calls": tool_lines[-6:],
         "tool_call_count": len(tool_groups),
+        "todos": [],
+        "latest_thinking": "",
         "tokens": empty_token_totals(),
         "parse_errors": 0,
         "last_activity_epoch": 0.0,
@@ -1184,21 +1216,12 @@ def collect_run_activity(run: dict[str, Any]) -> dict[str, Any]:
             unknown_agents += 1
     token_totals["known_agents"] = known_agents
     token_totals["unknown_agents"] = unknown_agents
-    running_agents = [agent for agent in run.get("agents", []) if agent.get("status") == "running"]
-    now_epoch = time.time()
     longest_running = None
-    for agent in running_agents:
-        started = agent.get("started_epoch")
-        if started is None and agent.get("started_at"):
-            try:
-                started = datetime.fromisoformat(str(agent["started_at"]).replace("Z", "+00:00")).timestamp()
-            except ValueError:
-                started = None
-        if started is None:
-            continue
-        elapsed = max(0.0, now_epoch - float(started))
-        if longest_running is None or elapsed > longest_running["elapsed_seconds"]:
-            longest_running = {"name": agent.get("name", ""), "agent_id": agent.get("agent_id", ""), "elapsed_seconds": round(elapsed, 1)}
+    running_summaries = workflow_tui_live.running_agent_summaries(run, reference_epoch())
+    for agent in running_summaries:
+        elapsed = agent.get("elapsed_seconds")
+        if elapsed is not None and (longest_running is None or elapsed > longest_running["elapsed_seconds"]):
+            longest_running = agent
     longest_completed = None
     for agent in run.get("agents", []):
         duration = parse_duration_seconds(agent.get("duration_seconds"))
@@ -1212,7 +1235,10 @@ def collect_run_activity(run: dict[str, Any]) -> dict[str, Any]:
         "tool_call_count": sum(token_value(activity.get("tool_call_count")) for activity in activities),
         "latest_tool_calls": [call for activity in ordered_activities for call in activity.get("tool_calls", [])][-8:],
         "latest_output": next((activity["latest_output"] for activity in reversed(ordered_activities) if activity.get("latest_output")), ""),
+        "latest_todos": next((activity["todos"] for activity in reversed(ordered_activities) if activity.get("todos")), []),
+        "latest_thinking": next((activity["latest_thinking"] for activity in reversed(ordered_activities) if activity.get("latest_thinking")), ""),
         "longest_running": longest_running,
+        "running_agents": running_summaries,
         "longest_completed": longest_completed,
     }
 
@@ -1326,7 +1352,7 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
     )
     live_rows = [
         ("tokens", format_token_total(live.get("tokens", {}))),
-        ("tool calls", live.get("tool_call_count", 0)),
+        ("tail tools", live.get("tool_call_count", 0)),
         ("active", len([agent for agent in run.get("agents", []) if agent.get("status") == "running"])),
         ("longest", longest_agent_label(live)),
         ("agents", metrics.get("agents_total", len(run.get("agents", [])))),
@@ -1337,8 +1363,16 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
     tool_text = "\n".join(live.get("latest_tool_calls", [])[-8:]) or "No tool calls recorded yet."
     latest = Panel(Text(live.get("latest_output") or "No live output yet.", overflow="fold"), title="Live Output", border_style="yellow", box=box.ROUNDED)
     panels: list[Any] = [facts, live_stats, latest]
-    if live.get("latest_tool_calls"):
-        panels.append(Panel(Text(tool_text, overflow="fold"), title="Latest Tool Calls", border_style="cyan", box=box.ROUNDED))
+    if detail_height is None or detail_height >= 28:
+        running_text = workflow_tui_live.running_agents_text(live, format_duration_seconds)
+        if running_text:
+            panels.append(Panel(Text(running_text, overflow="fold"), title="Running Agents", border_style="green", box=box.ROUNDED))
+        if live.get("latest_tool_calls"):
+            panels.append(Panel(Text(tool_text, overflow="fold"), title="Latest Tool Calls", border_style="cyan", box=box.ROUNDED))
+        if live.get("latest_todos"):
+            panels.append(Panel(Text(workflow_tui_live.todo_status_text(live["latest_todos"]), overflow="fold"), title="Todos", border_style="blue", box=box.ROUNDED))
+        if live.get("latest_thinking"):
+            panels.append(Panel(Text(live["latest_thinking"], overflow="fold"), title="Latest Thinking", border_style="bright_black", box=box.ROUNDED))
     if detail_height is None or detail_height >= 26:
         panels.append(prompt)
     return Group(*panels)
@@ -1388,7 +1422,7 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
     activity = agent_activity(agent, run)
     stats_rows = [
         ("tokens", format_token_total(activity.get("tokens", {}))),
-        ("tools", activity.get("tool_call_count", 0)),
+        ("tail tools", activity.get("tool_call_count", 0)),
         ("parse errs", activity.get("parse_errors", 0)),
         ("status", agent.get("status", "")),
         ("thread", agent.get("thread_id", "")),
@@ -1415,6 +1449,10 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
     ]
     if activity.get("tool_calls"):
         panels.append(Panel(Text(tool_text, overflow="fold"), title="Latest Tool Calls", border_style="cyan", box=box.ROUNDED))
+    if activity.get("todos"):
+        panels.append(Panel(Text(workflow_tui_live.todo_status_text(activity["todos"]), overflow="fold"), title="Todos", border_style="blue", box=box.ROUNDED))
+    if activity.get("latest_thinking"):
+        panels.append(Panel(Text(activity["latest_thinking"], overflow="fold"), title="Latest Thinking", border_style="bright_black", box=box.ROUNDED))
     panels.append(body)
     return Group(*panels)
 

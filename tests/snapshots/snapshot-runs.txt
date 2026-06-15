@@ -1,29 +1,29 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 ╭────────────────── Runs ──────────────────╮╭───────────── ovr  ● run  pha  agt  evt  dec  art ──────────────╮
-│    State  Title                          ││ id          wf-fixture-rich                                    │
-│ ▸  RUN    Fixture Workflow With Paralle… ││ title       Fixture Workflow With Parallel Review              │
-│    DONE   Completed Smoke Fixture        ││ status      running                                            │
-│    FAIL   Failed Worker Fixture          ││ mode        hybrid                                             │
-│    BLCK   Blocked Decision Fixture       ││ paused      no                                                 │
-│    PAUS   Paused Operator Fixture        ││ stop req    no                                                 │
-│    CNCL   Cancelled Scope Fixture        ││ cwd         /home/xertrov/src/demo                             │
-│    PEND   Pending Dispatch Fixture       ││ updated     Jun 11 10:05 AEST                                  │
-│                                          ││ state       /home/xertrov/.llm-general/ai-coding/codex/workfl… │
-│                                          ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
-│                                          ││ │ tokens      unknown  tool calls 0       active     1       │ │
-│                                          ││ │ longest     Securit… agents     3       phases     3       │ │
-│                                          ││ │ checks      1                                              │ │
-│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
-│                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
+│    Workflow                              ││ id          wf-fixture-rich                                    │
+│ ▸  Fixture Workflow With Parallel Review ││ title       Fixture Workflow With Parallel Review              │
+│      > RUN > 6m 00s > Security reviewer  ││ status      running                                            │
+│    Completed Smoke Fixture               ││ mode        hybrid                                             │
+│      > DONE > 30m 00s                    ││ paused      no                                                 │
+│    Failed Worker Fixture                 ││ stop req    no                                                 │
+│      > FAIL > 30m 00s                    ││ cwd         /home/xertrov/src/demo                             │
+│    Blocked Decision Fixture              ││ updated     Jun 11 10:05 AEST                                  │
+│      > BLCK > 3h 06m                     ││ state       /home/xertrov/.llm-general/ai-coding/codex/workfl… │
+│    Paused Operator Fixture               ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
+│      > PAUS > 4h 06m                     ││ │ tokens      unknown  tail tools 0       active     1       │ │
+│    Cancelled Scope Fixture               ││ │ longest     Securit… agents     3       phases     3       │ │
+│      > CNCL > 30m 00s                    ││ │ checks      1                                              │ │
+│    Pending Dispatch Fixture              ││ ╰────────────────────────────────────────────────────────────╯ │
+│      > PEND > 6h 06m                     ││ ╭─────────────────────── Live Output ────────────────────────╮ │
 │                                          ││ │ No live output yet.                                        │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭────────────────────── Running Agents ──────────────────────╮ │
+│                                          ││ │ Security reviewer 4m 40s                                   │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭────────────────────────── Prompt ──────────────────────────╮ │
 │                                          ││ │ Build and review a Codex workflow system with a polished   │ │
 │                                          ││ │ TUI, fixtures, snapshots, and clear state.                 │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
-│                                          ││                                                                │
-│                                          ││                                                                │
-│                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │
 ╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯

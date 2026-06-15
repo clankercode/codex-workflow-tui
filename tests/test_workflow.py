@@ -873,6 +873,145 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual({artifact["kind"] for artifact in data["artifacts"]}, {"worker-output"})
             self.assertTrue(all(Path(artifact["path"]).exists() for artifact in data["artifacts"]))
 
+    def test_mock_runner_attaches_workers_to_existing_run(self) -> None:
+        """--attach-run should add workers to an existing workflow run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_script(
+                "workflow_state.py",
+                "init",
+                "--title",
+                "Existing Run",
+                "--prompt",
+                "accept worker attachments",
+                "--cwd",
+                str(ROOT),
+                env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            launched = self.run_script(
+                "workflow_run_codex.py",
+                "--attach-run",
+                run_id,
+                "--cwd",
+                str(ROOT),
+                "--mock",
+                "--startup-delay",
+                "0",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            payload = json.loads(launched.stdout.split("\ncommand:", 1)[0])
+            self.assertEqual(payload["run_id"], run_id)
+            runs_dir = Path(env["WORKFLOW_STATE_DIR"]) / "runs"
+            self.assertEqual(len(list(runs_dir.glob("*/run.json"))), 1)
+            data = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual(data["phases"][0]["phase_id"], "phase-cli-workers")
+            self.assertEqual(data["phases"][0]["status"], "completed")
+            self.assertEqual(data["agents"][0]["name"], "alpha")
+            self.assertEqual(data["agents"][0]["status"], "completed")
+            self.assertEqual(data["decisions"][0]["title"], "Runner selected: codex-direct")
+
+    def test_update_agent_suppresses_unchanged_running_refresh_events(self) -> None:
+        """Live telemetry refreshes should not append durable events."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            old_env = os.environ.get("WORKFLOW_STATE_DIR")
+            os.environ["WORKFLOW_STATE_DIR"] = env["WORKFLOW_STATE_DIR"]
+            sys.path.insert(0, str(SCRIPTS))
+            try:
+                import workflow_run_codex  # pylint: disable=import-outside-toplevel
+
+                created = self.run_script(
+                    "workflow_state.py",
+                    "init",
+                    "--title",
+                    "Event Quieting",
+                    "--prompt",
+                    "quiet telemetry updates",
+                    "--cwd",
+                    str(ROOT),
+                    env=env,
+                )
+                run_id = json.loads(created.stdout)["run_id"]
+                self.run_script(
+                    "workflow_state.py",
+                    "add-agent",
+                    run_id,
+                    "--agent-id",
+                    "agent-quiet",
+                    "--name",
+                    "Quiet Agent",
+                    "--status",
+                    "pending",
+                    "--prompt",
+                    "do quiet work",
+                    env=env,
+                )
+                before = workflow_run_codex.workflow_state.load_run(run_id)
+                workflow_run_codex.update_agent(run_id, "agent-quiet", status="running", latest_output="first")
+                after_transition = workflow_run_codex.workflow_state.load_run(run_id)
+                workflow_run_codex.update_agent(run_id, "agent-quiet", status="running", latest_output="second")
+                workflow_run_codex.update_agent(run_id, "agent-quiet", latest_output="third", tool_call_count=3)
+                after_refresh = workflow_run_codex.workflow_state.load_run(run_id)
+                self.assertEqual(len(after_transition["events"]), len(before["events"]) + 1)
+                self.assertEqual(len(after_refresh["events"]), len(after_transition["events"]))
+                self.assertEqual(after_refresh["agents"][0]["latest_output"], "third")
+                self.assertEqual(after_refresh["agents"][0]["tool_call_count"], 3)
+            finally:
+                if old_env is None:
+                    os.environ.pop("WORKFLOW_STATE_DIR", None)
+                else:
+                    os.environ["WORKFLOW_STATE_DIR"] = old_env
+
+    def test_parent_run_links_new_child_run_metadata_and_event(self) -> None:
+        """--parent-run should link a newly created run back to its parent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_script(
+                "workflow_state.py",
+                "init",
+                "--title",
+                "Parent Run",
+                "--prompt",
+                "own child workflows",
+                "--cwd",
+                str(ROOT),
+                env=env,
+            )
+            parent_id = json.loads(created.stdout)["run_id"]
+            launched = self.run_script(
+                "workflow_run_codex.py",
+                "--title",
+                "Child Run",
+                "--parent-run",
+                parent_id,
+                "--cwd",
+                str(ROOT),
+                "--mock",
+                "--startup-delay",
+                "0",
+                "--job",
+                "alpha::Alpha prompt",
+                env=env,
+            )
+            child_id = json.loads(launched.stdout.split("\ncommand:", 1)[0])["run_id"]
+            child = json.loads(self.run_script("workflow_state.py", "show", child_id, "--json", env=env).stdout)
+            parent = json.loads(self.run_script("workflow_state.py", "show", parent_id, "--json", env=env).stdout)
+            self.assertEqual(child["metadata"]["parent_run_id"], parent_id)
+            self.assertTrue(
+                any(
+                    event.get("operation") == "child_run_linked"
+                    and event.get("data", {}).get("child_run_id") == child_id
+                    for event in parent["events"]
+                )
+            )
+
     def test_opencode_direct_extracts_text_events(self) -> None:
         """Extract final OpenCode answers from the JSON text event shape."""
         sys.path.insert(0, str(SCRIPTS))
@@ -3535,6 +3674,25 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("Workflow: Resume selected run", labels)
         self.assertIn("Workflow: Stop selected run", labels)
 
+    def test_system_clipboard_helper_uses_x11_clipboard_selection(self) -> None:
+        """The live copy action should have a Ctrl+V clipboard fallback, not primary selection."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_app  # pylint: disable=import-outside-toplevel
+
+        calls: list[tuple[list[str], str]] = []
+
+        def fake_run(command: list[str], **kwargs: object) -> object:
+            calls.append((command, str(kwargs.get("input", ""))))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(workflow_tui_app.shutil, "which", side_effect=lambda name: "/usr/bin/xclip" if name == "xclip" else None):
+            with mock.patch.object(workflow_tui_app.subprocess, "run", side_effect=fake_run):
+                copied, method = workflow_tui_app.copy_to_system_clipboard("wf-123")
+
+        self.assertTrue(copied)
+        self.assertEqual(method, "xclip")
+        self.assertEqual(calls, [(["/usr/bin/xclip", "-selection", "clipboard"], "wf-123")])
+
     def test_textual_venv_reexec_uses_cli_entrypoint(self) -> None:
         """Re-entering the workflow venv should launch the CLI backend, not the app helper."""
         import builtins
@@ -3722,6 +3880,101 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(workflow_tui.display_event_timestamp("2026-06-11T00:05:00Z", now=reference), "10:05:00 AEST")
         self.assertEqual(workflow_tui.display_event_timestamp("2026-06-09T21:05:00Z", now=reference), "26-06-10 07:05")
         self.assertEqual(workflow_tui.display_event_timestamp("", now=reference.astimezone(timezone.utc)), "")
+
+    def test_run_duration_uses_live_and_terminal_timestamps(self) -> None:
+        """Run overview durations should use the right start, end, and deterministic clocks."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        now = datetime.fromisoformat("2026-06-11T00:06:00+00:00")
+        self.assertEqual(
+            workflow_tui.run_duration_text(
+                {
+                    "status": "running",
+                    "created_at": "2026-06-11T00:00:00Z",
+                    "started_at": "2026-06-11T00:01:00Z",
+                    "updated_at": "2026-06-11T00:02:00Z",
+                },
+                now=now,
+            ),
+            "5m 00s",
+        )
+        self.assertEqual(
+            workflow_tui.run_duration_text(
+                {
+                    "status": "completed",
+                    "created_at": "2026-06-11T00:00:00Z",
+                    "started_at": "2026-06-11T00:01:00Z",
+                    "completed_at": "2026-06-11T00:03:30Z",
+                    "updated_at": "2026-06-11T00:05:00Z",
+                },
+                now=now,
+            ),
+            "2m 30s",
+        )
+        self.assertEqual(
+            workflow_tui.run_duration_text(
+                {
+                    "status": "failed",
+                    "created_at": "2026-06-11T00:00:30Z",
+                    "started_at": None,
+                    "updated_at": "2026-06-11T00:03:00Z",
+                },
+                now=now,
+            ),
+            "2m 30s",
+        )
+        self.assertEqual(
+            workflow_tui.run_duration_text(
+                {
+                    "status": "running",
+                    "created_at": "2026-06-11T00:07:00Z",
+                    "started_at": "2026-06-11T00:08:00Z",
+                },
+                now=now,
+            ),
+            "0s",
+        )
+
+    def test_runs_table_uses_two_line_title_state_duration_rows(self) -> None:
+        """The runs overview keeps title, state, duration, and active agents compact."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        old_now = os.environ.get("WORKFLOW_TUI_SNAPSHOT_NOW")
+        os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = "2026-06-11T00:06:00Z"
+        try:
+            sink = io.StringIO()
+            console = Console(file=sink, width=52, force_terminal=False, color_system=None)
+            console.print(
+                workflow_tui.make_runs_table(
+                    [
+                        {
+                            "title": "Short Workflow",
+                            "status": "running",
+                            "created_at": "2026-06-11T00:00:00Z",
+                            "started_at": "2026-06-11T00:01:00Z",
+                            "agents": [
+                                {"agent_id": "a", "name": "Alpha", "status": "running", "started_at": "2026-06-11T00:01:00Z"},
+                                {"agent_id": "b", "name": "Beta", "status": "running", "started_at": "2026-06-11T00:04:30Z"},
+                            ],
+                        }
+                    ],
+                    0,
+                    4,
+                )
+            )
+        finally:
+            if old_now is None:
+                os.environ.pop("WORKFLOW_TUI_SNAPSHOT_NOW", None)
+            else:
+                os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = old_now
+        rendered = sink.getvalue()
+        self.assertIn("Short Workflow", rendered)
+        self.assertIn("> RUN > 5m 00s", rendered)
+        self.assertIn("Alpha", rendered)
+        self.assertIn("Beta", rendered)
+        self.assertNotIn("Duration", rendered)
 
     def test_duration_fields_render_with_human_units(self) -> None:
         """Tiny duration fields should not leak scientific notation or bare zeroes."""
@@ -4125,6 +4378,56 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(activity["tokens"]["total_source"], "derived_from_provider_parts")
         self.assertEqual(workflow_tui.format_token_total(activity["tokens"]), "17 derived")
 
+    def test_json_activity_extracts_todos_from_todo_tool_events(self) -> None:
+        """Provider TodoWrite-like tool payloads should feed the live todo panel."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+        import workflow_tui_live  # pylint: disable=import-outside-toplevel
+
+        activity = workflow_tui.parse_json_activity(
+            json.dumps(
+                {
+                    "type": "tool_use",
+                    "part": {
+                        "type": "tool",
+                        "tool": "TodoWrite",
+                        "state": {
+                            "status": "completed",
+                            "input": {
+                                "todos": [
+                                    {"content": "Inspect parser", "status": "completed"},
+                                    {"content": "Update snapshots", "status": "in_progress"},
+                                ]
+                            },
+                        },
+                    },
+                }
+            )
+        )
+
+        self.assertEqual(activity["todos"][0]["content"], "Inspect parser")
+        self.assertEqual(activity["todos"][1]["status"], "in_progress")
+        self.assertEqual(
+            workflow_tui_live.todo_status_text(activity["todos"]),
+            "[✓] Inspect parser\n[~] Update snapshots",
+        )
+
+    def test_json_activity_extracts_actual_thinking_text_only_when_present(self) -> None:
+        """Show real provider reasoning text without inventing it from token counts."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        with_text = workflow_tui.parse_json_activity(
+            json.dumps({"type": "reasoning", "part": {"type": "reasoning", "text": "Checking edge cases."}})
+        )
+        without_text = workflow_tui.parse_json_activity(
+            json.dumps({"type": "turn.completed", "usage": {"output_tokens_details": {"reasoning_tokens": 12}}})
+        )
+
+        self.assertEqual(with_text["latest_thinking"], "Checking edge cases.")
+        self.assertEqual(without_text["tokens"]["reasoning"], 12)
+        self.assertEqual(without_text["latest_thinking"], "")
+
     def test_aggregate_token_total_marks_unknown_agents(self) -> None:
         """Mark run token totals incomplete when any agent has no usage telemetry."""
         sys.path.insert(0, str(SCRIPTS))
@@ -4163,6 +4466,40 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(aggregate["longest_completed"]["name"], "Slow")
         self.assertIn("Slow", workflow_tui.longest_agent_label(aggregate))
         self.assertIn("2m", workflow_tui.longest_agent_label(aggregate))
+
+    def test_run_detail_lists_all_running_agents_with_elapsed_time(self) -> None:
+        """Run detail should not hide active workers behind the single longest label."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run = {
+            "run_id": "wf-running",
+            "title": "Running Workers",
+            "status": "running",
+            "agents": [
+                {"agent_id": "a", "name": "Alpha", "status": "running", "started_at": "2026-06-11T00:01:00Z"},
+                {"agent_id": "b", "name": "Beta", "status": "running", "started_at": "2026-06-11T00:04:30Z"},
+            ],
+            "metrics": {"agents_total": 2, "phases_total": 1, "checks_total": 0},
+        }
+        old_now = os.environ.get("WORKFLOW_TUI_SNAPSHOT_NOW")
+        os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = "2026-06-11T00:06:00Z"
+        try:
+            sink = io.StringIO()
+            console = Console(file=sink, width=100, force_terminal=False, color_system=None)
+            console.print(workflow_tui.make_run_detail(run))
+        finally:
+            if old_now is None:
+                os.environ.pop("WORKFLOW_TUI_SNAPSHOT_NOW", None)
+            else:
+                os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = old_now
+
+        rendered = sink.getvalue()
+        self.assertIn("Running Agents", rendered)
+        self.assertIn("Alpha", rendered)
+        self.assertIn("5m 00s", rendered)
+        self.assertIn("Beta", rendered)
+        self.assertIn("1m 30s", rendered)
 
     def test_skill_update_check_reports_remote_git_update(self) -> None:
         """Detect a newer upstream commit without mutating the local checkout."""
@@ -4395,6 +4732,20 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("tools", rendered.splitlines()[0])
         self.assertIn("active", rendered.splitlines()[0])
         self.assertIn("agents", rendered.splitlines()[0])
+
+    def test_run_detail_labels_tool_count_as_tail_window_count(self) -> None:
+        """Do not present tailed transcript tool counts as a cumulative total."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run = workflow_tui.load_fixture(str(E2E_FIXTURE))[0]
+        sink = io.StringIO()
+        console = Console(file=sink, width=120, force_terminal=False, color_system=None)
+        console.print(workflow_tui.make_run_detail(run))
+        rendered = sink.getvalue()
+
+        self.assertIn("tail tools", rendered)
+        self.assertNotIn("tool calls", rendered)
 
     def test_snapshot_agent_live_panels_match_fixture(self) -> None:
         """Snapshot live output and latest tool-call panels from a static fixture."""

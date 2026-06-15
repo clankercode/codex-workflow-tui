@@ -9,7 +9,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                            ││ │ phase         phase-calc                                           │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────────── Live Stats ────────────────────────────╮ │
-│                                            ││ │ tokens      1234       tools      1          parse errs 0          │ │
+│                                            ││ │ tokens      1234       tail tools 1          parse errs 0          │ │
 │                                            ││ │ status      running    thread     thread-li…                       │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────── Latest Tool Calls ─────────────────────────╮ │

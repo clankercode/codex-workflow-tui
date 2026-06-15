@@ -3,13 +3,35 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
+import shutil
+import subprocess
 import sys
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 import workflow_state
+
+
+def copy_to_system_clipboard(value: str) -> tuple[bool, str]:
+    """Copy to the regular desktop clipboard used by Ctrl+V."""
+    commands = [
+        ("wl-copy", ["wl-copy"]),
+        ("xclip", ["xclip", "-selection", "clipboard"]),
+        ("xsel", ["xsel", "--clipboard", "--input"]),
+    ]
+    for method, command in commands:
+        executable = shutil.which(command[0])
+        if not executable:
+            continue
+        try:
+            subprocess.run([executable, *command[1:]], input=value, text=True, check=True, capture_output=True, timeout=2.0)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        return True, method
+    return False, ""
 
 
 def maybe_reexec_textual_venv(tui: Any) -> None:
@@ -385,8 +407,13 @@ def run_textual_app(tui: Any) -> None:
             if not value:
                 self.notify(f"No {label or mode} to copy", title="Workflow", severity="warning", timeout=0.8)
                 return
-            self.copy_to_clipboard(value)
-            self.notify(f"Copied {label}", title="Workflow", timeout=0.8)
+            with contextlib.suppress(Exception):
+                self.copy_to_clipboard(value)
+            copied, method = copy_to_system_clipboard(value)
+            if copied:
+                self.notify(f"Copied {label} to clipboard ({method})", title="Workflow", timeout=0.8)
+            else:
+                self.notify(f"Copied {label} inside Textual; no system clipboard helper found", title="Workflow", severity="warning", timeout=2.0)
 
         def action_copy_selected_id(self) -> None:
             self.copy_selection("id")

@@ -453,7 +453,72 @@ def create_run(args: argparse.Namespace, jobs: list[dict[str, str]], provider: R
     with open(os.devnull, "w", encoding="utf-8") as sink, contextlib.redirect_stdout(sink):
         workflow_state.cmd_add_phase(phase_args)
     record_runner_decision(run["run_id"], args, provider, len(jobs))
+    parent_run = getattr(args, "parent_run", None)
+    if parent_run:
+        link_parent_run(run["run_id"], parent_run)
     return workflow_state.load_run(run["run_id"])
+
+
+def attach_run(args: argparse.Namespace, jobs: list[dict[str, str]], provider: RunnerProvider) -> dict[str, Any]:
+    """Load an existing run and prepare it for coding-CLI workers."""
+    run_id = args.attach_run
+
+    def mutator(run: dict[str, Any]) -> None:
+        run["status"] = "running"
+        phases = run.setdefault("phases", [])
+        phase = next((item for item in phases if item.get("phase_id") == PHASE_ID), None)
+        timestamp = workflow_state.now()
+        if phase is None:
+            phase = {
+                "phase_id": PHASE_ID,
+                "name": "Coding CLI workers",
+                "goal": f"Run independent {provider.name} workers and collect durable results.",
+                "status": "running",
+                "created_at": timestamp,
+                "started_at": timestamp,
+                "completed_at": None,
+                "agent_ids": [],
+            }
+            phases.append(phase)
+            workflow_state.add_event(
+                run,
+                "info",
+                "phase added: Coding CLI workers",
+                kind="phase",
+                operation="added",
+                source="workflow_run.attach_run",
+                phase_id=PHASE_ID,
+                data={"name": phase["name"], "status": phase["status"]},
+            )
+        else:
+            phase["status"] = "running"
+            phase["started_at"] = phase.get("started_at") or timestamp
+            phase["completed_at"] = None
+
+    workflow_state.mutate_run(run_id, mutator)
+    record_runner_decision(run_id, args, provider, len(jobs))
+    return workflow_state.load_run(run_id)
+
+
+def link_parent_run(child_run_id: str, parent_run_id: str) -> None:
+    """Persist child metadata and add one parent event linking to the child."""
+    def child_mutator(run: dict[str, Any]) -> None:
+        run.setdefault("metadata", {})["parent_run_id"] = parent_run_id
+
+    workflow_state.mutate_run(child_run_id, child_mutator)
+
+    def parent_mutator(run: dict[str, Any]) -> None:
+        workflow_state.add_event(
+            run,
+            "info",
+            f"child workflow launched: {child_run_id}",
+            kind="workflow",
+            operation="child_run_linked",
+            source="workflow_run.create_run",
+            data={"child_run_id": child_run_id},
+        )
+
+    workflow_state.mutate_run(parent_run_id, parent_mutator)
 
 
 def record_runner_decision(run_id: str, args: argparse.Namespace, provider: RunnerProvider, job_count: int) -> None:
@@ -538,9 +603,10 @@ def add_agent(
     return workflow_state.load_run(run["run_id"])
 
 
-def update_agent(run_id: str, agent_id: str, **values: Any) -> None:
+def update_agent(run_id: str, agent_id: str, *, emit_event: bool | None = None, **values: Any) -> None:
     def mutator(run: dict[str, Any]) -> None:
         agent = workflow_state.find_item(run.setdefault("agents", []), "agent_id", agent_id)
+        previous_status = agent.get("status")
         for key, value in values.items():
             if value is not None:
                 agent[key] = value
@@ -552,6 +618,10 @@ def update_agent(run_id: str, agent_id: str, **values: Any) -> None:
         elif status:
             agent["completed_at"] = None
         agent["updated_at"] = workflow_state.now()
+        run["last_activity_at"] = agent["updated_at"]
+        should_emit = emit_event if emit_event is not None else bool(status and status != previous_status)
+        if not should_emit:
+            return
         workflow_state.add_event(
             run,
             "info",
@@ -861,7 +931,7 @@ async def run_worker(
             telemetry_agent.update({key: value for key, value in extra.items() if value is not None})
         fields = telemetry_fields_for_agent(telemetry_agent)
         if fields:
-            update_agent(run_id, agent["agent_id"], **fields)
+            update_agent(run_id, agent["agent_id"], emit_event=False, **fields)
             last_telemetry_update = now
 
     if not await wait_until_launch_allowed(run_id, agent["agent_id"]):
@@ -941,9 +1011,10 @@ async def run_worker(
                     command_preview=provider.preview_command(command, agent, args),
                     quota_retry_count=quota_retry_count,
                     failure_retry_count=failure_retry_count,
+                    process_id=proc.pid,
+                    process_group_id=proc.pid,
+                    emit_event=True,
                 )
-                update_agent(run_id, agent["agent_id"], process_id=proc.pid)
-                update_agent(run_id, agent["agent_id"], process_group_id=proc.pid)
 
                 assert proc.stdout is not None
                 assert proc.stderr is not None
@@ -1010,6 +1081,7 @@ async def run_worker(
                         exit_code=exit_code,
                         quota_retry_count=quota_retry_count,
                         quota_sleep_seconds=round(sleep_seconds, 3),
+                        emit_event=True,
                     )
                     if not await sleep_until_quota_retry_allowed(run_id, agent["agent_id"], sleep_seconds):
                         return
@@ -1036,6 +1108,7 @@ async def run_worker(
                         ),
                         exit_code=exit_code,
                         failure_retry_count=failure_retry_count,
+                        emit_event=True,
                     )
                     await asyncio.sleep(1.0)
                     continue
@@ -1484,7 +1557,9 @@ def nonnegative_float(value: str) -> float:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--title", required=True)
+    parser.add_argument("--title")
+    parser.add_argument("--run", "--attach-run", dest="attach_run", help="attach workers to an existing workflow run")
+    parser.add_argument("--parent-run", help="record a newly created run as a child of this existing workflow run")
     parser.add_argument("--prompt")
     parser.add_argument("--prompt-file")
     parser.add_argument("--cwd", default=os.getcwd())
@@ -1522,6 +1597,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if not args.attach_run and not args.title:
+        raise SystemExit("--title is required unless --run/--attach-run is supplied")
+    if args.attach_run and args.parent_run:
+        raise SystemExit("--parent-run only applies when creating a new run")
     args.cwd = str(Path(args.cwd).expanduser().resolve())
     if args.result_schema:
         args.result_schema_obj = _resolve_schema(args.result_schema)
@@ -1529,7 +1608,7 @@ def main() -> None:
         args.result_schema_obj = None
     jobs = load_jobs(args)
     provider = build_provider(args)
-    run = create_run(args, jobs, provider)
+    run = attach_run(args, jobs, provider) if args.attach_run else create_run(args, jobs, provider)
     for index, job in enumerate(jobs):
         run = add_agent(run, job, args, provider, index, stage=job.get("stage", ""), depends_on=job.get("depends_on", ""))
     print(json.dumps({"run_id": run["run_id"], "path": run["paths"]["run_json"], "jobs": len(jobs)}, indent=2))
@@ -1539,7 +1618,10 @@ def main() -> None:
         replay = ["python3", __file__, "--runner", args.runner]
         if args.runner == "ccc" and args.ccc_runner:
             replay.extend(["--ccc-runner", args.ccc_runner])
-        replay.extend(["--title", args.title, "..."])
+        if args.attach_run:
+            replay.extend(["--attach-run", args.attach_run, "..."])
+        else:
+            replay.extend(["--title", args.title, "..."])
         print("command:", shlex.join(replay))
     status = asyncio.run(run_all(workflow_state.load_run(run["run_id"]), args, provider))
     if status != "completed":
