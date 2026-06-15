@@ -7402,5 +7402,266 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(len(check_ids), len(set(check_ids)))
 
 
+class StateTruthfulnessTests(unittest.TestCase):
+    """Focused tests for P1 state truthfulness improvements."""
+
+    def test_native_subagent_without_liveness_is_classified_as_unmanaged(self) -> None:
+        """Native subagents without process/transcript should be treated as unmanaged sidecars."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+        import workflow_state  # pylint: disable=import-outside-toplevel
+
+        agent = {"agent_id": "ns-1", "status": "running", "agent_type": "native-subagent", "thread_id": ""}
+        self.assertTrue(workflow_health.agent_is_effectively_unmanaged(agent))
+        self.assertTrue(workflow_state.is_native_subagent(agent))
+
+    def test_native_subagent_with_thread_id_has_liveness(self) -> None:
+        """Native subagents with thread_id have a liveness source and are not flagged opaque."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        agent = {"agent_id": "ns-2", "status": "running", "agent_type": "native-subagent", "thread_id": "ses_abc"}
+        run = {"run_id": "wf-test", "status": "running", "phases": [], "agents": [agent], "artifacts": []}
+        findings = workflow_health.analyze_run(run)
+        self.assertFalse(any(item["kind"] == "agent-opaque-running" for item in findings))
+
+    def test_native_subagent_without_liveness_does_not_warn_opaque(self) -> None:
+        """Native subagents without liveness should use unmanaged classification, not opaque warning."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        agent = {"agent_id": "ns-3", "status": "running", "agent_type": "native-subagent"}
+        run = {"run_id": "wf-test", "status": "running", "phases": [], "agents": [agent], "artifacts": []}
+        findings = workflow_health.analyze_run(run)
+        self.assertFalse(any(item["kind"] == "agent-opaque-running" for item in findings))
+
+    def test_external_worker_without_liveness_warns_opaque(self) -> None:
+        """External workers (non-native-subagent) without liveness should still warn opaque."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        agent = {"agent_id": "ext-1", "status": "running", "agent_type": "codex-exec"}
+        run = {"run_id": "wf-test", "status": "running", "phases": [], "agents": [agent], "artifacts": []}
+        findings = workflow_health.analyze_run(run)
+        self.assertTrue(any(item["kind"] == "agent-opaque-running" for item in findings))
+
+    def test_unmanaged_flag_overrides_native_subagent_check(self) -> None:
+        """An explicit unmanaged=true flag should always make an agent effectively unmanaged."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        agent = {"agent_id": "um-1", "status": "running", "agent_type": "codex-exec", "unmanaged": True}
+        self.assertTrue(workflow_health.agent_is_effectively_unmanaged(agent))
+
+    def test_completed_agent_with_empty_output_shows_fallback_in_tui(self) -> None:
+        """A completed agent with empty output but useful transcript should produce fallback output."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            jsonl_path = tmp_path / "worker.jsonl"
+            jsonl_path.write_text(
+                json.dumps({"type": "step_finish", "part": {"tokens": {"total": 42, "input": 40, "output": 2}}}) + "\n",
+                encoding="utf-8",
+            )
+            agent = {
+                "agent_id": "agent-fallback",
+                "name": "Fallback Agent",
+                "status": "completed",
+                "jsonl_path": str(jsonl_path),
+                "output_path": str(tmp_path / "missing.final.md"),
+                "log_path": "",
+                "result": "",
+                "summary": "",
+                "exit_code": 0,
+            }
+            activity = workflow_tui.agent_activity(agent)
+            self.assertIn("fallback_output", activity)
+            self.assertIn("exit code", activity["fallback_output"])
+
+    def test_cancelled_agent_with_stop_reason_shows_fallback(self) -> None:
+        """A cancelled agent with a stop_result should surface the termination reason."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        agent = {
+            "agent_id": "agent-cancelled",
+            "name": "Cancelled Agent",
+            "status": "cancelled",
+            "jsonl_path": "",
+            "output_path": "",
+            "log_path": "",
+            "result": "",
+            "summary": "cancelled by operator",
+            "stop_result": {"sent": True, "reason": "SIGTERM", "target": "process_group"},
+        }
+        activity = workflow_tui.agent_activity(agent)
+        self.assertIn("fallback_output", activity)
+        self.assertIn("SIGTERM", activity["fallback_output"])
+
+    def test_agent_output_empty_health_check_warns_for_completed_with_fallback_data(self) -> None:
+        """Health check should warn when a completed agent has empty output but fallback data exists."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        agent = {
+            "agent_id": "agent-empty",
+            "name": "Empty Agent",
+            "status": "completed",
+            "phase_id": "phase-impl",
+            "result": "",
+            "summary": "",
+            "jsonl_path": "logs/worker.jsonl",
+            "output_path": "",
+            "exit_code": 0,
+        }
+        run = {
+            "run_id": "wf-test",
+            "status": "running",
+            "phases": [{"phase_id": "phase-impl", "status": "running"}],
+            "agents": [agent],
+            "artifacts": [],
+        }
+        findings = workflow_health.analyze_run(run)
+        empty_warning = [item for item in findings if item["kind"] == "agent-output-empty"]
+        self.assertEqual(len(empty_warning), 1)
+        self.assertIn("transcript", empty_warning[0]["message"])
+        self.assertIn("exit code", empty_warning[0]["message"])
+
+    def test_agent_output_empty_health_check_silent_when_no_fallback(self) -> None:
+        """No output-empty warning when no fallback data is available either."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        agent = {
+            "agent_id": "agent-nothing",
+            "name": "Nothing Agent",
+            "status": "completed",
+            "phase_id": "phase-impl",
+            "result": "",
+            "summary": "done",
+            "jsonl_path": "",
+            "output_path": "",
+        }
+        run = {
+            "run_id": "wf-test",
+            "status": "running",
+            "phases": [{"phase_id": "phase-impl", "status": "running"}],
+            "agents": [agent],
+            "artifacts": [],
+        }
+        findings = workflow_health.analyze_run(run)
+        self.assertFalse(any(item["kind"] == "agent-output-empty" for item in findings))
+
+    def test_lane_scope_violations_detects_out_of_scope_changes(self) -> None:
+        """merge-lanes should record scope-violation events when files outside write_scope change."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "src").mkdir()
+            (repo / "src" / "main.py").write_text("print('hello')\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True, text=True, capture_output=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=t@t", "commit", "-m", "base"],
+                check=True, text=True, capture_output=True,
+            )
+            subprocess.run(["git", "-C", str(repo), "checkout", "-b", "workflow/lane"], check=True, text=True, capture_output=True)
+            (repo / "src" / "main.py").write_text("print('changed')\n", encoding="utf-8")
+            (repo / "tests").mkdir()
+            (repo / "tests" / "test_main.py").write_text("assert True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True, text=True, capture_output=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=t@t", "commit", "-m", "lane change"],
+                check=True, text=True, capture_output=True,
+            )
+            subprocess.run(["git", "-C", str(repo), "checkout", "main"], check=True, text=True, capture_output=True)
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            scripts = str(SCRIPTS)
+            wf = str(SCRIPTS / "wf")
+
+            created = subprocess.run(
+                [wf, "init", "--title", "Scope Check", "--prompt", "scope", "--cwd", str(repo)],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            subprocess.run(
+                [wf, "add-phase", run_id, "--phase-id", "phase-impl", "--name", "Impl", "--status", "completed"],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            subprocess.run(
+                [wf, "add-agent", run_id, "--phase", "phase-impl", "--agent-id", "agent-scope",
+                 "--name", "scoped", "--agent-type", "codex-exec", "--status", "completed",
+                 "--write-scope", "src", "--cwd", str(repo)],
+                check=True, text=True, capture_output=True, env=env,
+            )
+
+            run_path = Path(json.loads(created.stdout)["path"])
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {
+                "branch": "workflow/lane",
+                "path": str(tmp_path / "lane"),
+                "merge_target": "main",
+                "base": "HEAD",
+            }
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            result = subprocess.run(
+                [wf, "merge-lanes", run_id],
+                check=False, text=True, capture_output=True, env=env,
+            )
+            merged = json.loads(result.stdout)
+            self.assertIn("scope_warnings", merged)
+            self.assertTrue(any(w["agent_id"] == "agent-scope" for w in merged["scope_warnings"]))
+            violations = next(w["violations"] for w in merged["scope_warnings"] if w["agent_id"] == "agent-scope")
+            self.assertIn("tests/test_main.py", violations)
+
+            run_after = json.loads(run_path.read_text(encoding="utf-8"))
+            self.assertTrue(
+                any(event.get("operation") == "scope-violation" for event in run_after["events"]),
+                msg="expected scope-violation event in run state",
+            )
+
+    def test_lane_scope_violations_empty_when_no_write_scope(self) -> None:
+        """No scope violations when write_scope is empty (no restriction)."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_ops  # pylint: disable=import-outside-toplevel
+
+        agent = {
+            "agent_id": "agent-unscoped",
+            "write_scope": [],
+            "worktree": {"branch": "workflow/lane", "base": "HEAD"},
+        }
+        violations = workflow_ops.lane_scope_violations(agent, "/tmp")
+        self.assertEqual(violations, [])
+
+    def test_lane_scope_violations_covers_nested_paths(self) -> None:
+        """write_scope entries should cover files in subdirectories."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_ops  # pylint: disable=import-outside-toplevel
+
+        agent = {
+            "agent_id": "agent-nested",
+            "write_scope": ["src/module"],
+            "worktree": {"branch": "workflow/lane", "base": "HEAD"},
+        }
+
+        def fake_git_checked(cwd: str, *args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args, 0, stdout="src/module/deep/file.py\nsrc/other.py\n", stderr="")
+
+        original = workflow_ops.git_checked
+        workflow_ops.git_checked = fake_git_checked  # type: ignore[assignment]
+        try:
+            violations = workflow_ops.lane_scope_violations(agent, "/tmp")
+        finally:
+            workflow_ops.git_checked = original  # type: ignore[assignment]
+
+        self.assertEqual(violations, ["src/other.py"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -538,6 +538,12 @@ def cmd_set_status(args: argparse.Namespace) -> None:
     print(json.dumps({"run_id": data["run_id"], "status": data["status"]}, indent=2))
 
 
+def is_native_subagent(agent: dict[str, Any]) -> bool:
+    """Return true when an agent record represents a native host-sidecar subagent."""
+    agent_type = str(agent.get("agent_type") or "")
+    return agent_type == "native-subagent"
+
+
 def active_status(status: Any) -> bool:
     return str(status or "") in {"pending", "running", "blocked", "paused"}
 

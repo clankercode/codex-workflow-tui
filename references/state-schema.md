@@ -142,8 +142,10 @@ Phase ids may be stable human ids such as `phase-research`, or generated ids. Pr
 }
 ```
 
-For native subagents, set `agent_type` to `native-subagent` and store the subagent id in `thread_id` when the host exposes one. A `running` managed agent should have at least one liveness source: `process_id`/`process_group_id`, `jsonl_path`, native `thread_id`, or explicit `unmanaged: true` for sidecars the workflow runner cannot inspect.
+For native subagents, set `agent_type` to `native-subagent` and store the subagent id in `thread_id` when the host exposes one. A `running` managed agent should have at least one liveness source: `process_id`/`process_group_id`, `jsonl_path`, native `thread_id`, or explicit `unmanaged: true` for sidecars the workflow runner cannot inspect. Native subagents without `process_id` or `jsonl_path` are auto-classified as effectively unmanaged so health checks do not demand liveness sources that will never exist.
 For work performed directly by the coordinator session, set `agent_type` to `lead-local` so completed phases still have an owner/audit record.
+
+For completed/failed/cancelled agents, the TUI falls back to transcript snippets, latest tool calls, thinking text, cancellation reason, status, or exit code when the final output artifact and result are empty. This prevents blank agent views for runs that completed with useful transcript data but no synthesized final output.
 
 For external workers, `jsonl_path` is the durable transcript path. Direct Codex and OpenCode providers usually store JSONL there; `ccc-*` providers may store `transcript.txt` or `transcript.jsonl` there. The final answer is mirrored into `result` and `output_path`.
 

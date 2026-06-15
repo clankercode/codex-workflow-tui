@@ -37,6 +37,8 @@ workflow merge-lanes <run-id>
 
 `merge-lanes` only considers completed agents with `worktree.branch` metadata, skips lanes already marked merged, aborts if the run cwd is dirty, and records `worktree` events for successful merges or conflicts. Use `--agent <id-or-name>` to merge selected lanes.
 
+When a lane has a declared `write_scope`, `merge-lanes` checks whether changed files fall outside that scope and records a `scope-violation` warning event and includes `scope_warnings` in the merge result. This catches workers that edited files beyond their owned lane before integration.
+
 ### Conflict Assist
 
 When `merge-lanes` records a conflict, use `merge-conflicts` to prepare a merger-agent prompt and context artifact:
@@ -96,7 +98,7 @@ workflow add-phase <run-id> \
 
 Native subagents are controlled by the host session, not by the workflow runner. Track them in workflow state only when you can keep status and output coherent. If the host does not expose live status/update hooks, prefer recording a lead-local event, artifact, or completed summary after the subagent returns rather than creating a stale `running` agent.
 
-Running managed agents should have a liveness source. External workers normally record `process_id` and `jsonl_path`; native subagents should record a host id in `thread_id`. If a sidecar is intentionally unmanaged, set `unmanaged: true` in state so health checks know the missing process/transcript data is expected.
+Running managed agents should have a liveness source. External workers normally record `process_id` and `jsonl_path`; native subagents should record a host id in `thread_id`. If a sidecar is intentionally unmanaged, set `unmanaged: true` in state so health checks know the missing process/transcript data is expected. Native subagents without a `process_id` or `jsonl_path` are auto-classified as effectively unmanaged; health checks do not demand liveness sources that the workflow runner cannot provide.
 
 When you do have a returned subagent id and will update it later, add it to state:
 

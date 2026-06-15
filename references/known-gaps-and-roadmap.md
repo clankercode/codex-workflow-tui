@@ -134,5 +134,5 @@ pause, resume, and stop.
 ## Prioritization
 1. **A7** (remaining lock boundary documentation / init locking story).
 2. ~~Conflict-solving merger agents for worktree lanes.~~ **Implemented.**
-3. Native-subagent status/output integration.
+3. ~~Native-subagent status/output integration.~~ **Implemented.** Native subagents without `process_id`/`jsonl_path` are now auto-classified as effectively unmanaged; health checks no longer demand liveness sources that will never exist. TUI shows fallback output panels for completed/failed/cancelled agents with empty final output. Lane merge now checks changed files against declared `write_scope` and records scope-violation warnings.
 4. Everything else as polish.

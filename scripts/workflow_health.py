@@ -82,6 +82,24 @@ def agent_has_liveness_source(agent: dict[str, Any]) -> bool:
     return False
 
 
+def agent_is_effectively_unmanaged(agent: dict[str, Any]) -> bool:
+    """Return true when an agent should be treated as unmanaged by the runner.
+
+    Native subagents without a recorded process id are host-sidecar helpers
+    that the workflow runner cannot inspect for liveness.  They should be
+    classified as effectively unmanaged so health checks do not demand
+    process transcripts that will never exist.
+    """
+    if agent.get("unmanaged") is True:
+        return True
+    agent_type = str(agent.get("agent_type") or "")
+    if agent_type != "native-subagent":
+        return False
+    has_process = bool(agent.get("process_id") or agent.get("process_group_id"))
+    has_jsonl = bool(str(agent.get("jsonl_path") or "").strip())
+    return not has_process and not has_jsonl
+
+
 def issue(
     *,
     run: dict[str, Any],
@@ -270,7 +288,7 @@ def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SEC
                 )
             )
         if status == "running":
-            if not agent_has_liveness_source(agent):
+            if not agent_has_liveness_source(agent) and not agent_is_effectively_unmanaged(agent):
                 findings.append(
                     issue(
                         run=run,
@@ -321,6 +339,38 @@ def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SEC
                     ts=str(agent.get("updated_at") or ""),
                 )
             )
+        if status in {"completed", "failed", "cancelled"}:
+            has_output_text = bool(str(agent.get("result") or "").strip())
+            has_summary = bool(str(agent.get("summary") or "").strip())
+            has_output_file = output_path is not None and output_path.exists()
+            has_jsonl = bool(str(agent.get("jsonl_path") or "").strip())
+            has_latest_output = bool(str(agent.get("latest_output") or "").strip())
+            if not has_output_text and not has_summary and not has_output_file and not has_latest_output:
+                fallback_sources = []
+                if has_jsonl:
+                    fallback_sources.append("transcript")
+                if agent.get("latest_tool_calls"):
+                    fallback_sources.append("tool calls")
+                if agent.get("exit_code") is not None:
+                    fallback_sources.append("exit code")
+                if agent.get("stop_result"):
+                    fallback_sources.append("termination result")
+                if fallback_sources:
+                    findings.append(
+                        issue(
+                            run=run,
+                            severity=WARNING,
+                            kind="agent-output-empty",
+                            title=f"Empty output with fallback data: {name}",
+                            message=f"Agent {status} with no final output; available fallback: {', '.join(fallback_sources)}.",
+                            suggestion="Review transcript/tool events or update the agent result from available data.",
+                            entity_type="agent",
+                            entity_id=agent_id,
+                            phase_id=phase_id,
+                            agent_id=agent_id,
+                            ts=str(agent.get("updated_at") or agent.get("completed_at") or ""),
+                        )
+                    )
 
     for check in latest_checks(run):
         status = str(check.get("status", ""))

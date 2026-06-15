@@ -361,6 +361,37 @@ def completed_worktree_lane_agents(run: dict[str, Any]) -> list[dict[str, Any]]:
     return lanes
 
 
+def lane_scope_violations(agent: dict[str, Any], cwd: str) -> list[str]:
+    """Return files changed in a lane that fall outside declared write_scope.
+
+    Returns a list of changed file paths that are not covered by any
+    write_scope entry.  An empty write_scope means no scope restriction.
+    """
+    write_scope = agent.get("write_scope") or []
+    if not write_scope:
+        return []
+    worktree = agent.get("worktree") or {}
+    branch = str(worktree.get("branch") or "").strip()
+    base = str(worktree.get("base") or "HEAD").strip()
+    if not branch:
+        return []
+    result = git_checked(cwd, "diff", "--name-only", f"{base}...{branch}")
+    if result.returncode != 0:
+        return []
+    changed_files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    violations: list[str] = []
+    for file_path in changed_files:
+        covered = False
+        for scope in write_scope:
+            scope_str = str(scope).strip().rstrip("/")
+            if file_path == scope_str or file_path.startswith(scope_str + "/") or file_path.startswith(scope_str):
+                covered = True
+                break
+        if not covered:
+            violations.append(file_path)
+    return violations
+
+
 def git_checked(cwd: str, *args: str) -> subprocess.CompletedProcess[str]:
     """Run git and return captured output without raising."""
     return subprocess.run(["git", "-C", cwd, *args], text=True, capture_output=True, check=False)
@@ -457,6 +488,7 @@ def cmd_merge_lanes(args: argparse.Namespace) -> None:
     merged: list[str] = []
     conflicts: list[dict[str, str]] = []
     skipped: list[str] = []
+    scope_warnings: list[dict[str, Any]] = []
     for agent in lanes:
         agent_id = str(agent.get("agent_id") or "")
         worktree = agent.get("worktree", {})
@@ -466,6 +498,22 @@ def cmd_merge_lanes(args: argparse.Namespace) -> None:
             raise SystemExit(f"run cwd is not on target branch {target_branch!r}")
         if merge_target and target_branch != merge_target:
             raise SystemExit(f"lane {agent_id} targets {merge_target!r}; current target is {target_branch!r}")
+        violations = lane_scope_violations(agent, cwd)
+        if violations:
+            scope_warnings.append({"agent_id": agent_id, "violations": violations})
+            workflow_state.mutate_run(
+                args.run,
+                lambda data, agent_id=agent_id, violations=violations: workflow_state.add_event(
+                    data,
+                    "warning",
+                    f"lane scope violation: {agent_id} changed {len(violations)} file(s) outside write_scope",
+                    kind="worktree",
+                    operation="scope-violation",
+                    source="workflow_ops.merge_lanes",
+                    agent_id=agent_id,
+                    data={"violations": violations[:20]},
+                ),
+            )
         if args.dry_run:
             skipped.append(agent_id)
             continue
@@ -549,7 +597,10 @@ def cmd_merge_lanes(args: argparse.Namespace) -> None:
             )
 
         workflow_state.mutate_run(args.run, conflict_mutator)
-    print_json({"run_id": args.run, "merged": merged, "skipped": skipped, "conflicts": conflicts})
+    result_payload: dict[str, Any] = {"run_id": args.run, "merged": merged, "skipped": skipped, "conflicts": conflicts}
+    if scope_warnings:
+        result_payload["scope_warnings"] = scope_warnings
+    print_json(result_payload)
     if conflicts:
         raise SystemExit(1)
 

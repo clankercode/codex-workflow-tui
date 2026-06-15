@@ -1189,6 +1189,34 @@ def agent_activity(agent: dict[str, Any], run: dict[str, Any] | None = None) -> 
     activity["last_activity_epoch"] = max(float(activity.get("last_activity_epoch") or 0.0), fallback_epoch)
     activity["transcript_path"] = str(transcript_path or "")
     activity["output_path"] = str(output_path or "")
+
+    status = str(agent.get("status", ""))
+    if status in workflow_state.TERMINAL_STATUS_VALUES:
+        has_visible_output = bool(str(activity.get("latest_output") or "").strip())
+        has_summary = bool(str(agent.get("summary") or "").strip())
+        has_result = bool(str(agent.get("result") or "").strip())
+        has_stop_result = isinstance(agent.get("stop_result"), dict)
+        if not has_visible_output and not has_result and (not has_summary or has_stop_result):
+            fallback_parts: list[str] = []
+            if activity.get("latest_thinking"):
+                fallback_parts.append(f"[thinking] {activity['latest_thinking']}")
+            if activity.get("tool_calls"):
+                fallback_parts.append(f"[tools] {'; '.join(activity['tool_calls'][-3:])}")
+            if agent.get("latest_output"):
+                fallback_parts.append(f"[last output] {agent['latest_output']}")
+            stop_result = agent.get("stop_result")
+            if isinstance(stop_result, dict) and stop_result.get("reason"):
+                fallback_parts.append(f"[termination] {stop_result['reason']}")
+            if agent.get("summary"):
+                fallback_parts.append(f"[status] {agent['summary']}")
+            exit_code = agent.get("exit_code")
+            if exit_code is not None:
+                fallback_parts.append(f"[exit code] {exit_code}")
+            if fallback_parts:
+                activity["fallback_output"] = trim_preview("\n".join(fallback_parts))
+            elif activity.get("parse_errors"):
+                activity["fallback_output"] = f"[no readable output; {activity['parse_errors']} parse errors in transcript]"
+
     return activity
 
 
@@ -1471,6 +1499,8 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
         panels.append(Panel(Text(workflow_tui_live.todo_status_text(activity["todos"]), overflow="fold"), title="Todos", border_style="blue", box=box.ROUNDED))
     if activity.get("latest_thinking"):
         panels.append(Panel(Text(activity["latest_thinking"], overflow="fold"), title="Latest Thinking", border_style="bright_black", box=box.ROUNDED))
+    if activity.get("fallback_output") and str(agent.get("status", "")) in workflow_state.TERMINAL_STATUS_VALUES:
+        panels.append(Panel(Text(activity["fallback_output"], overflow="fold"), title="Fallback (no final output)", border_style="yellow", box=box.ROUNDED))
     panels.append(body)
     return Group(*panels)
 
