@@ -37,6 +37,24 @@ workflow merge-lanes <run-id>
 
 `merge-lanes` only considers completed agents with `worktree.branch` metadata, skips lanes already marked merged, aborts if the run cwd is dirty, and records `worktree` events for successful merges or conflicts. Use `--agent <id-or-name>` to merge selected lanes.
 
+### Conflict Assist
+
+When `merge-lanes` records a conflict, use `merge-conflicts` to prepare a merger-agent prompt and context artifact:
+
+```bash
+workflow merge-conflicts <run-id>
+```
+
+This finds the conflicted lane, gathers the failed merge log, conflicted files, branch metadata, and original task prompt, then writes:
+
+- A **merger prompt** artifact (`merger-prompt-<agent-id>.md`) with bounded resolution instructions.
+- A **merger context** artifact (`merger-context-<agent-id>.json`) with structured conflict metadata.
+- A `merge-conflict-assist` check (status `pending`) and event in run state.
+
+If the previous merge was aborted (tree is clean), the command still records the context and prints a hint to re-merge with `--leave-conflicts` so a merger agent can work on the actual conflicts. If `--leave-conflicts` was used and the tree is in a conflicted state, the context includes the list of conflicted files.
+
+The merger prompt is designed to be fed to any coding-CLI worker (Codex, Kimi, OpenCode, ccc) for automated resolution. Human verification is always required before marking the workflow complete — the merger agent's output is not trusted without review.
+
 ## Create A Run
 
 Use manual run creation when the lead session is doing the orchestration by hand or a workflow shape cannot yet be represented as a `workflow-plan`:

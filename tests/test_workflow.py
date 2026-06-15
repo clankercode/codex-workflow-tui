@@ -6893,6 +6893,164 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(summary["status"], "completed")
             self.assertEqual(summary["targets"][0]["runner"], "codex-direct")
 
+    def test_merge_conflicts_prepares_context_after_aborted_conflict(self) -> None:
+        """merge-conflicts should produce prompt/context artifacts after a conflict with aborted merge."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "note.txt").write_text("base\n", encoding="utf-8")
+            self.git(repo, "add", "note.txt")
+            self.git(repo, "commit", "-m", "base")
+            self.git(repo, "checkout", "-b", "workflow/conflict-lane")
+            (repo / "note.txt").write_text("lane\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "lane change")
+            self.git(repo, "checkout", "main")
+            (repo / "note.txt").write_text("main\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "main change")
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            created = self.run_wf("init", "--title", "Conflict Assist", "--prompt", "merge", "--cwd", str(repo), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-impl", "--name", "Implementation", "--status", "completed", env=env)
+            self.run_wf(
+                "add-agent",
+                run_id,
+                "--phase",
+                "phase-impl",
+                "--agent-id",
+                "agent-conflict",
+                "--name",
+                "lane",
+                "--agent-type",
+                "codex-exec",
+                "--status",
+                "completed",
+                "--cwd",
+                str(repo),
+                "--prompt",
+                "implement feature X in note.txt",
+                env=env,
+            )
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {"branch": "workflow/conflict-lane", "path": str(tmp_path / "lane"), "merge_target": "main"}
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            self.run_wf("merge-lanes", run_id, env=env, check=False)
+
+            result = self.run_wf("merge-conflicts", run_id, env=env)
+            output = json.loads(result.stdout)
+            run_after = json.loads(run_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(output["run_id"], run_id)
+            self.assertEqual(output["agent_id"], "agent-conflict")
+            self.assertEqual(output["branch"], "workflow/conflict-lane")
+            self.assertTrue(output["merge_aborted"])
+            self.assertIn("hint", output)
+            self.assertTrue(Path(output["prompt_path"]).is_file())
+            self.assertTrue(Path(output["context_path"]).is_file())
+
+            prompt_text = Path(output["prompt_path"]).read_text(encoding="utf-8")
+            self.assertIn("Merge Conflict Resolution", prompt_text)
+            self.assertIn("implement feature X in note.txt", prompt_text)
+            self.assertIn("agent-conflict", prompt_text)
+
+            context_data = json.loads(Path(output["context_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(context_data["agent_id"], "agent-conflict")
+            self.assertTrue(context_data["merge_aborted"])
+
+            merger_artifacts = [a for a in run_after["artifacts"] if a["kind"] in {"merger-prompt", "merger-context"}]
+            self.assertEqual(len(merger_artifacts), 2)
+            self.assertTrue(any(
+                e.get("operation") == "merge-conflict-assist" for e in run_after["events"]
+            ))
+            self.assertTrue(any(
+                c.get("kind") == "merge-conflict-assist" and c.get("status") == "pending"
+                for c in run_after["checks"]
+            ))
+
+    def test_merge_conflicts_detects_conflicted_files_when_left_in_place(self) -> None:
+        """merge-conflicts should list conflicted files when merge-lanes used --leave-conflicts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "note.txt").write_text("base\n", encoding="utf-8")
+            self.git(repo, "add", "note.txt")
+            self.git(repo, "commit", "-m", "base")
+            self.git(repo, "checkout", "-b", "workflow/conflict-lane")
+            (repo / "note.txt").write_text("lane\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "lane change")
+            self.git(repo, "checkout", "main")
+            (repo / "note.txt").write_text("main\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "main change")
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            created = self.run_wf("init", "--title", "Leave Conflicts", "--prompt", "merge", "--cwd", str(repo), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-impl", "--name", "Implementation", "--status", "completed", env=env)
+            self.run_wf(
+                "add-agent",
+                run_id,
+                "--phase",
+                "phase-impl",
+                "--agent-id",
+                "agent-conflict",
+                "--name",
+                "lane",
+                "--agent-type",
+                "codex-exec",
+                "--status",
+                "completed",
+                "--cwd",
+                str(repo),
+                env=env,
+            )
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {"branch": "workflow/conflict-lane", "path": str(tmp_path / "lane"), "merge_target": "main"}
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            self.run_wf("merge-lanes", run_id, "--leave-conflicts", env=env, check=False)
+
+            dirty = self.git(repo, "status", "--porcelain")
+            self.assertIn("UU", dirty.stdout)
+
+            result = self.run_wf("merge-conflicts", run_id, env=env)
+            output = json.loads(result.stdout)
+
+            self.assertFalse(output["merge_aborted"])
+            self.assertIn("note.txt", output["conflict_files"])
+            self.assertNotIn("hint", output)
+
+    def test_merge_conflicts_refuses_without_conflict(self) -> None:
+        """merge-conflicts should refuse when no conflicted merge exists in the run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "note.txt").write_text("base\n", encoding="utf-8")
+            self.git(repo, "add", "note.txt")
+            self.git(repo, "commit", "-m", "base")
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            created = self.run_wf("init", "--title", "No Conflict", "--prompt", "no conflict here", "--cwd", str(repo), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+
+            result = self.run_wf("merge-conflicts", run_id, env=env, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("no conflicted merge found", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

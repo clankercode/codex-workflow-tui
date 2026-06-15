@@ -490,6 +490,14 @@ def cmd_merge_lanes(args: argparse.Namespace) -> None:
                 git_checked(cwd, "merge", "--abort")
             check_id = record_merge_check(args.run, agent_id, branch, cwd=cwd, status="failed", exit_code=result.returncode, output=output)
             conflicts.append({"agent_id": agent_id, "branch": branch, "message": first_line(output), "check_id": check_id})
+
+            def conflict_agent_mutator(data: dict[str, Any]) -> None:
+                state_agent = workflow_state.find_item(data.setdefault("agents", []), "agent_id", agent_id)
+                worktree = state_agent.setdefault("worktree", {})
+                worktree["merge_status"] = "conflicted"
+                worktree["merge_check_id"] = check_id
+
+            workflow_state.mutate_run(args.run, conflict_agent_mutator)
             break
         merge_commit = git_checked(cwd, "rev-parse", "HEAD").stdout.strip()
         check_id = record_merge_check(
@@ -544,6 +552,220 @@ def cmd_merge_lanes(args: argparse.Namespace) -> None:
     print_json({"run_id": args.run, "merged": merged, "skipped": skipped, "conflicts": conflicts})
     if conflicts:
         raise SystemExit(1)
+
+
+def find_conflict_context(run: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Find the first agent with merge_status=conflicted and its failed merge check.
+
+    Returns (agent, check) or raises SystemExit if no conflict is found.
+    """
+    for agent in run.get("agents", []):
+        worktree = agent.get("worktree", {})
+        if worktree.get("merge_status") != "conflicted":
+            continue
+        check_id = worktree.get("merge_check_id") or ""
+        check = {}
+        if check_id:
+            for c in run.get("checks", []):
+                if c.get("check_id") == check_id:
+                    check = c
+                    break
+        if not check:
+            for c in reversed(run.get("checks", [])):
+                if c.get("kind") == "merge" and c.get("status") == "failed":
+                    check = c
+                    break
+        return agent, check
+    raise SystemExit("no conflicted merge found in run; run merge-lanes first and expect a conflict")
+
+
+def build_merger_prompt(
+    run: dict[str, Any],
+    agent: dict[str, Any],
+    check: dict[str, Any],
+    conflict_files: list[str],
+    cwd: str,
+) -> str:
+    """Build a bounded merger-agent prompt from conflict context."""
+    agent_id = agent.get("agent_id", "")
+    agent_name = agent.get("name", agent_id)
+    branch = agent.get("worktree", {}).get("branch", "")
+    target = agent.get("worktree", {}).get("merge_target", "")
+    original_prompt = agent.get("prompt", "")
+    merge_log = check.get("summary", "")
+    check_log_path = check.get("log_path", "")
+    log_content = ""
+    if check_log_path and Path(check_log_path).is_file():
+        try:
+            log_content = Path(check_log_path).read_text(encoding="utf-8")[:4000]
+        except OSError:
+            pass
+
+    parts = [
+        "# Merge Conflict Resolution",
+        "",
+        "## Context",
+        f"- Run: {run.get('run_id', '')}",
+        f"- Agent: {agent_name} ({agent_id})",
+        f"- Branch: `{branch}` -> `{target}`",
+        f"- Working directory: {cwd}",
+        "",
+        "## Original Task",
+        original_prompt or "(no prompt recorded)",
+        "",
+        "## Conflict Summary",
+        merge_log or "(no merge summary)",
+        "",
+    ]
+    if log_content:
+        parts += [
+            "## Merge Log (truncated)",
+            "```",
+            log_content,
+            "```",
+            "",
+        ]
+    if conflict_files:
+        parts += [
+            "## Conflicted Files",
+            *(f"- `{f}`" for f in conflict_files),
+            "",
+        ]
+    parts += [
+        "## Instructions",
+        "1. Examine each conflicted file and understand both sides of the change.",
+        "2. Resolve conflicts preserving the intent of both the lane work and the target branch.",
+        "3. After resolving, run tests or verification appropriate to the changed files.",
+        "4. Stage resolved files and commit with a message like: `merge: resolve conflicts from {branch}`.",
+        "5. Do NOT force-push or rewrite history. The resolution commit should be a normal merge commit.",
+        "",
+        "## Verification",
+        "After resolution, the lead agent should verify the merge with `wf verify` and `wf merge-lanes` "
+        "(the lane will be skipped since it is already marked merged after a successful resolution).",
+        "",
+        "## Safety",
+        "- If you cannot resolve a conflict cleanly, leave it staged and report what is blocked.",
+        "- Do not silently drop either side's changes.",
+        "- Human verification is required before marking the workflow complete.",
+    ]
+    return "\n".join(parts)
+
+
+def cmd_merge_conflicts(args: argparse.Namespace) -> None:
+    """Prepare conflict context and a merger-agent prompt for a failed merge."""
+    run = workflow_state.load_run(args.run)
+    cwd = str(run.get("cwd") or "")
+    if not cwd:
+        raise SystemExit("run has no cwd; cannot prepare merge conflict context")
+
+    agent, check = find_conflict_context(run)
+    agent_id = str(agent.get("agent_id") or "")
+    worktree = agent.get("worktree", {})
+    branch = str(worktree.get("branch") or "")
+
+    conflict_files: list[str] = []
+    git_status = git_checked(cwd, "status", "--porcelain")
+    if git_status.returncode == 0 and git_status.stdout.strip():
+        for line in git_status.stdout.strip().splitlines():
+            line = line.strip()
+            if line and line[:2] in {"UU", "AA", "DD", "AU", "UA", "DU", "UD"}:
+                conflict_files.append(line[3:])
+
+    is_dirty = bool(git_status.stdout.strip()) if git_status.returncode == 0 else False
+    merge_aborted = not is_dirty
+
+    prompt = build_merger_prompt(run, agent, check, conflict_files, cwd)
+
+    run_dir = Path(run.get("paths", {}).get("run_dir") or workflow_state.run_dir(args.run))
+    artifacts_dir = run_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    prompt_filename = f"merger-prompt-{agent_id}.md"
+    prompt_path = artifacts_dir / prompt_filename
+    prompt_path.write_text(prompt, encoding="utf-8")
+
+    context = {
+        "run_id": args.run,
+        "agent_id": agent_id,
+        "branch": branch,
+        "target": worktree.get("merge_target", ""),
+        "conflict_files": conflict_files,
+        "merge_aborted": merge_aborted,
+        "merge_check_id": check.get("check_id", ""),
+        "prompt_path": str(prompt_path),
+    }
+    context_filename = f"merger-context-{agent_id}.json"
+    context_path = artifacts_dir / context_filename
+    context_path.write_text(json.dumps(context, indent=2, sort_keys=True), encoding="utf-8")
+
+    def mutator(data: dict[str, Any]) -> None:
+        data.setdefault("artifacts", []).append({
+            "artifact_id": workflow_state.short_id("art"),
+            "ts": workflow_state.now(),
+            "kind": "merger-prompt",
+            "title": f"merger prompt for {agent_id}",
+            "path": str(prompt_path),
+            "agent_id": agent_id,
+        })
+        data.setdefault("artifacts", []).append({
+            "artifact_id": workflow_state.short_id("art"),
+            "ts": workflow_state.now(),
+            "kind": "merger-context",
+            "title": f"merger context for {agent_id}",
+            "path": str(context_path),
+            "agent_id": agent_id,
+        })
+        check_id = workflow_state.short_id("chk")
+        data.setdefault("checks", []).append({
+            "check_id": check_id,
+            "ts": workflow_state.now(),
+            "name": f"merge-conflict context: {agent_id}",
+            "kind": "merge-conflict-assist",
+            "status": "pending",
+            "required": True,
+            "command": "",
+            "cwd": cwd,
+            "exit_code": 0,
+            "duration_seconds": 0.0,
+            "summary": f"conflict context prepared for {agent_id}; merger prompt at {prompt_path.name}",
+            "log_path": "",
+            "completed_at": workflow_state.now(),
+            "evidence_path": str(context_path),
+            "external_ref": "",
+        })
+        workflow_state.add_event(
+            data,
+            "warning",
+            f"merge conflict assist prepared: {agent_id}",
+            kind="worktree",
+            operation="merge-conflict-assist",
+            source="workflow_ops.merge_conflicts",
+            agent_id=agent_id,
+            data={
+                "branch": branch,
+                "conflict_files": conflict_files,
+                "merge_aborted": merge_aborted,
+                "prompt_path": str(prompt_path),
+                "context_path": str(context_path),
+            },
+        )
+
+    workflow_state.mutate_run(args.run, mutator)
+    result = {
+        "run_id": args.run,
+        "agent_id": agent_id,
+        "branch": branch,
+        "conflict_files": conflict_files,
+        "merge_aborted": merge_aborted,
+        "prompt_path": str(prompt_path),
+        "context_path": str(context_path),
+    }
+    if merge_aborted:
+        result["hint"] = (
+            "The previous merge was aborted and the tree is clean. "
+            "To let a merger agent work on conflicts, re-run merge-lanes with --leave-conflicts, "
+            "then re-run merge-conflicts."
+        )
+    print_json(result)
 
 
 def cmd_done(args: argparse.Namespace) -> None:
@@ -726,6 +948,10 @@ def build_parser() -> argparse.ArgumentParser:
     merge_lanes.add_argument("--leave-conflicts", action="store_true", help="leave conflicted merge state in place instead of aborting")
     merge_lanes.add_argument("--dry-run", action="store_true")
     merge_lanes.set_defaults(func=cmd_merge_lanes)
+
+    merge_conflicts = sub.add_parser("merge-conflicts", help="prepare conflict context and merger-agent prompt for a failed merge")
+    merge_conflicts.add_argument("run")
+    merge_conflicts.set_defaults(func=cmd_merge_conflicts)
 
     done = sub.add_parser("done", help="complete a workflow after safety checks")
     done.add_argument("run")

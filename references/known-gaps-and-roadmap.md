@@ -112,7 +112,8 @@ pause, resume, and stop.
 - `workflow apply` now supports first-class per-job worktree lanes
   (`worktree: true` or a worktree object) and launches workers inside the lane.
   `workflow merge-lanes` can merge completed lane branches back into the run cwd;
-  conflict-solving merger agents remain future work.
+  `workflow merge-conflicts` prepares conflict context and a bounded merger-agent
+  prompt for resolution. **Implemented** (2026-06-16).
 - Per-job runner/model configuration is implemented: jobs and phases may override
   `runner`, `ccc_runner`, `model`, `sandbox`, `approval`, and other execution
   fields with root < phase < job precedence. CLI flags still override all
@@ -132,6 +133,6 @@ pause, resume, and stop.
 
 ## Prioritization
 1. **A7** (remaining lock boundary documentation / init locking story).
-2. Conflict-solving merger agents for worktree lanes.
+2. ~~Conflict-solving merger agents for worktree lanes.~~ **Implemented.**
 3. Native-subagent status/output integration.
 4. Everything else as polish.
