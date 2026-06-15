@@ -11,10 +11,10 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                          ││ │ Run independent review lanes and surface blockers.         │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││                                                                │
-│                                          ││   State     Name                                               │
+│                                          ││   State     Time       Name                                    │
 │                                          ││  ────────────────────────────────────────────────────────────  │
-│                                          ││   ▸ RUN     Security reviewer                                  │
-│                                          ││     DONE    Test coverage reviewer                             │
+│                                          ││   ▸ RUN     4m 40s     Security reviewer                       │
+│                                          ││     DONE    1m 38s     Test coverage reviewer                  │
 │                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │

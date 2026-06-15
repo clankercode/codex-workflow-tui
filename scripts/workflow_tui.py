@@ -277,6 +277,10 @@ def run_duration_text(run: dict[str, Any], now: datetime | None = None) -> str:
     )
 
 
+def agent_duration_text(agent: dict[str, Any], now: datetime | None = None) -> str:
+    return workflow_tui_live.agent_duration_text(agent, parse_local_datetime, parse_duration_seconds, format_duration_seconds, workflow_state.TERMINAL_STATUS_VALUES, now, snapshot_reference_time)
+
+
 def reference_epoch() -> float:
     reference = snapshot_reference_time()
     return reference.timestamp() if reference else time.time()
@@ -1402,9 +1406,10 @@ def make_phase_table(phases: list[dict[str, Any]], selected: int, visible: int) 
 def make_agent_table(agents: list[dict[str, Any]], selected: int, visible: int, empty_message: str = "No agents") -> Table:
     table = Table(box=box.SIMPLE_HEAD, expand=True, header_style="bold bright_black")
     table.add_column("State", width=7, no_wrap=True)
+    table.add_column("Time", width=8, no_wrap=True)
     table.add_column("Name", ratio=1, overflow="ellipsis", no_wrap=True)
     if not agents:
-        table.add_row("", empty_message)
+        table.add_row("", "", empty_message)
         return table
     selected = clamp_index(selected, len(agents))
     start = window_start(selected, len(agents), visible)
@@ -1412,6 +1417,7 @@ def make_agent_table(agents: list[dict[str, Any]], selected: int, visible: int, 
         style = "reverse" if index == selected else ""
         table.add_row(
             marked_status_text(index == selected, agent.get("status", "")),
+            Text(agent_duration_text(agent), style="bright_black"),
             str(agent.get("name", "")),
             style=style,
         )
@@ -1420,10 +1426,13 @@ def make_agent_table(agents: list[dict[str, Any]], selected: int, visible: int, 
 
 def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None = None, agent_view: str = "live") -> Group:
     activity = agent_activity(agent, run)
+    duration_label = "duration" if str(agent.get("status", "")) in workflow_state.TERMINAL_STATUS_VALUES else "elapsed"
+    duration_text = agent_duration_text(agent)
     stats_rows = [
         ("tokens", format_token_total(activity.get("tokens", {}))),
         ("tail tools", activity.get("tool_call_count", 0)),
         ("parse errs", activity.get("parse_errors", 0)),
+        (duration_label, duration_text),
         ("status", agent.get("status", "")),
         ("thread", agent.get("thread_id", "")),
     ]

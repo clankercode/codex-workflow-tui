@@ -62,6 +62,36 @@ def run_duration_text(
     return format_duration(seconds) or ""
 
 
+def agent_duration_text(
+    agent: dict[str, Any],
+    parse_datetime: Any,
+    parse_seconds: Any,
+    format_duration: Any,
+    terminal_statuses: set[str],
+    now: datetime | None,
+    snapshot_now: Any,
+) -> str:
+    """Return a human-readable elapsed or terminal duration for an agent."""
+    start = parse_datetime(agent.get("started_at"))
+    if start is None:
+        epoch = parse_seconds(agent.get("started_epoch"))
+        if epoch is not None:
+            start = datetime.fromtimestamp(epoch).astimezone()
+    if start is None:
+        return format_duration(agent.get("duration_seconds")) or ""
+    if str(agent.get("status", "")) in terminal_statuses:
+        end = parse_datetime(agent.get("completed_at") or agent.get("updated_at"))
+        if end is None:
+            return format_duration(agent.get("duration_seconds")) or ""
+    else:
+        effective_now = now or snapshot_now() or datetime.now(start.tzinfo)
+        end = effective_now.astimezone(start.tzinfo) if effective_now.tzinfo else effective_now.replace(tzinfo=start.tzinfo)
+    seconds = max(0.0, (end - start).total_seconds())
+    if seconds == 0:
+        return "0s"
+    return format_duration(seconds) or ""
+
+
 def running_agent_summaries(run: dict[str, Any], now_epoch: float) -> list[dict[str, Any]]:
     """Return compact state-derived summaries for active agents."""
     summaries: list[dict[str, Any]] = []

@@ -5,9 +5,10 @@ The orchestration patterns that make a multi-agent workflow both *correct* and
 the lanes. Read this before designing a non-trivial fan-out.
 
 These are ported from the Claude Code Workflow tool's operating model and adapted
-to this skill's primitives (`workflow run --job`, phases, agents, decisions,
-artifacts, `workflow verify`, lead synthesis). Pick by task and compose freely —
-the list is a toolbox, not a checklist.
+to this skill's primitives (`workflow apply` for reusable plans, `workflow run --job`
+for one-stage fan-out, phases, agents, decisions, artifacts, `workflow verify`,
+lead synthesis). Pick by task and compose freely — the list is a toolbox, not a
+checklist.
 
 ---
 
@@ -40,14 +41,15 @@ A barrier is NOT justified by:
 and the transform has no cross-item dependency, you don't need the barrier. Start
 each B-lane as soon as its A-lane returns.
 
-**How to express it here.** The `workflow run` launcher is a *flat fan-out then
-barrier* over one job set — that is one stage. To pipeline across stages, the lead
-does NOT wait for the whole first batch before launching the second: as each
-stage-1 agent's result lands (watch state / native subagent return), the lead
-immediately launches that item's stage-2 lane and records it under the next phase.
-Reserve a single `workflow run` barrier for the genuine cross-item steps above.
-(Per-item pipelining inside one runner call is a current engine gap — see
-`coding-cli-runners.md` on the `{"kind":"workflow-expansion"}` envelope.)
+**How to express it here.** The `workflow run` launcher is one stage over one
+job set, and jobs may carry `stage`/`depends_on` metadata. `workflow apply` can
+preserve a declared phase order by flattening phases into staged jobs with
+dependencies. Runtime expansion is supported when worker output contains a
+`{"kind":"workflow-expansion","schema_version":1,"jobs":[...]}` envelope, guarded
+by `--max-round` and `--max-job`. Use unique, stable job names because dependency
+edges point at names. Reserve a whole-stage barrier for the genuine cross-item
+steps above; otherwise model finer-grained dependencies or launch each downstream
+lane as its upstream result lands.
 
 ---
 

@@ -8,10 +8,10 @@ This skill mirrors Claude Code workflow concepts using native subagents when ava
 | --- | --- |
 | Subagents | Native subagents spawned from the main conversation when the host exposes them |
 | Agent view | `workflow_tui.py` over explicit workflow state |
-| Dynamic workflows | `workflow_run.py` or main-session orchestration that fans out workers and records phases |
+| Dynamic workflows | `workflow apply` / `workflow exec` for saved workflow-plan files or generator scripts; `workflow start` for planner-generated jobs; `workflow run` for low-level fan-out |
 | Agent teams | Lead-agent pattern: main session coordinates roles, state, and synthesis |
 | Background sessions | External coding-CLI workers through direct Codex, OpenCode, Kimi, or `ccc` providers |
-| Workflows saved as commands | Skill scripts in `~/.agents/skills/workflow/scripts` plus command symlinks in `~/.local/bin` |
+| Workflows saved as commands | `workflow-plan` JSON or generator scripts launched with `workflow apply`, plus skill scripts in `~/.agents/skills/workflow/scripts` and command symlinks in `~/.local/bin` |
 | Subagent transcripts | Native subagent IDs plus worker transcripts or JSONL logs |
 | Hook-visible state | `run.json` state contract for external hook/tool consumers |
 | Worktree isolation | Use git worktrees or disjoint file ownership for write-heavy workers |

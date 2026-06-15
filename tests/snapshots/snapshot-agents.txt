@@ -1,16 +1,16 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 ╭───────────── Agents: Review ─────────────╮╭───────────── ovr  run  pha  ● agt  evt  dec  art ──────────────╮
 │                                          ││ ╭────────────────────────── Agent ───────────────────────────╮ │
-│   State     Name                         ││ │ agent_id      agent-tests                                  │ │
+│   State     Time       Name              ││ │ agent_id      agent-tests                                  │ │
 │  ──────────────────────────────────────  ││ │ name          Test coverage reviewer                       │ │
-│     RUN     Security reviewer            ││ │ role          test review                                  │ │
-│   ▸ DONE    Test coverage reviewer       ││ │ type          codex-exec                                   │ │
+│     RUN     4m 40s     Security revie…   ││ │ role          test review                                  │ │
+│   ▸ DONE    1m 38s     Test coverage …   ││ │ type          codex-exec                                   │ │
 │                                          ││ │ model         gpt-5.4-mini                                 │ │
 │                                          ││ │ phase         phase-review                                 │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
 │                                          ││ │ tokens      unknown  tail tools 0       parse errs 0       │ │
-│                                          ││ │ status      complet… thread     thread…                    │ │
+│                                          ││ │ duration    1m 38s   status     comple… thread     thread… │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
 │                                          ││ │ Found one missing negative case                            │ │

@@ -12,7 +12,21 @@ Treat the current coding-agent conversation as the lead agent: keep decisions, a
 ## Start Every Workflow
 
 1. Decide whether this is a workflow. Use a workflow when at least two independent lanes exist, output would otherwise pollute the main context, or the user asks for subagents, agent teams, dynamic workflows, a workflow TUI, or active workflow state.
-2. Initialize state before delegating:
+2. Choose the front door:
+   - For repeatable or complex workflows, prefer a saved `workflow-plan` JSON file or generator script and launch it with `workflow apply` (alias: `workflow exec`). This records the normalized plan as a durable artifact before workers start.
+   - For a broad natural-language goal with no plan file yet, use `workflow start "<goal>"` so a planner creates the first job set.
+   - For a simple flat batch with a hand-written job list, use `workflow run`.
+   - Use `workflow init` plus manual `add-phase`/`add-agent` only for manual bookkeeping or lead-local work that cannot yet be represented by a plan.
+
+```bash
+workflow apply workflows/review.workflow.json \
+  --runner ccc \
+  --ccc-runner @mm \
+  --max-agents 4
+```
+
+Generator scripts must print one JSON `workflow-plan` object. Job `name` values must be unique and stable across the whole plan because dependency edges use those names. `workflow apply` preserves plan metadata such as `cwd`, `runner`, `ccc_runner`, `tags`, `model`, sandbox/approval settings, and caps, while explicit CLI flags override plan defaults. Multi-phase plans are currently flattened into staged jobs with dependency edges; a later phase starts only after its declared upstream jobs complete.
+3. If you are operating manually, initialize state before delegating:
 
 ```bash
 workflow init \
@@ -22,14 +36,14 @@ workflow init \
   --mode hybrid
 ```
 
-3. Add phases that match how the work will be judged. Prefer phases such as `research`, `design`, `implementation`, `review`, and `verification`.
-4. Spawn native subagents for sidecar tasks when the current session exposes subagent tools. For each spawned subagent, add an agent record with its prompt, scope, and returned agent id.
-5. For larger or more isolated work, launch external coding-CLI workers with `workflow_run.py`. These workers can use direct Codex, direct Kimi, `ccc`-wrapped Codex, `ccc`-wrapped OpenCode, or another `ccc` runner while updating the same state files.
+4. Add phases that match how the work will be judged. Prefer phases such as `research`, `design`, `implementation`, `review`, and `verification`.
+5. Spawn native subagents for sidecar tasks when the current session exposes subagent tools. Native subagents are best treated as lead-session sidecars unless you can keep their workflow status/output coherent. Do not create long-lived `running` workflow agents for native subagents unless you will update them when they finish; otherwise record a lead-local event, artifact, or completed summary after they return.
+6. For larger or more isolated work, launch external coding-CLI workers through `workflow apply`, `workflow start`, or the lower-level `workflow run`. These workers can use direct Codex, direct Kimi, `ccc`-wrapped Codex, `ccc`-wrapped OpenCode, or another `ccc` runner while updating the same state files.
    Use `--max-agents` to cap simultaneous workers and `--startup-delay` to pace launches; defaults are 4 workers and 1.0 seconds.
-   When the user gives a broad natural-language goal, use `wf start "<goal>"` to ask a planner agent for a job decomposition, save the generated plan as an artifact, and then launch the worker jobs through the same runner/rate-limit interface.
-6. Keep state current: mark phases and agents `running`, `blocked`, `completed`, or `failed`; record important choices with `workflow decision`, durable outputs with `workflow artifact`, and verification/result summaries as events.
+   When the user gives a broad natural-language goal, use `wf start "<goal>"` to ask a planner agent for a job decomposition, save the generated plan as an artifact, and then launch the worker jobs through the same runner/rate-limit interface. Use `--mock` for a no-model rehearsal; `--mock-plan` only mocks the planner and still launches real workers unless combined with `--mock` or `--dry-run`.
+7. Keep state current: mark phases and agents `running`, `blocked`, `completed`, or `failed`; record important choices with `workflow decision`, durable outputs with `workflow artifact`, and verification/result summaries as events.
    If the lead session implements a phase locally, add a `lead-local` agent or a decision/event before marking that phase complete so the TUI does not show a mysterious empty implementation phase.
-7. Use the TUI while work is active:
+8. Use the TUI while work is active:
 
 ```bash
 workflow tui
@@ -97,7 +111,20 @@ Read `references/claude-code-parity.md` when designing or extending the workflow
 
 ## Coding CLI Workers
 
-Use external coding-CLI workers when the task needs a separate process, durable logs, or a bigger isolated run:
+Use external coding-CLI workers when the task needs a separate process, durable logs, or a bigger isolated run.
+
+For reusable workflows, start from a checked-in plan file or generator script:
+
+```bash
+workflow apply workflows/review.workflow.json \
+  --runner ccc \
+  --ccc-runner @mimo25p \
+  --max-agents 4
+```
+
+`workflow apply` accepts either JSON or an executable/Python script that prints JSON. The plan should use `kind: "workflow-plan"` and contain either `jobs` or `phases[].jobs`; job `name` values must be unique/stable because `depends_on` points at names. The launcher records the normalized plan as a `workflow-plan` artifact before dispatch.
+
+For broad ad-hoc goals, use the planner:
 
 ```bash
 workflow start "review this repository and fix the highest-impact issues" \
@@ -106,7 +133,9 @@ workflow start "review this repository and fix the highest-impact issues" \
   --max-agents 4
 ```
 
-`workflow start` first runs a planner agent, records its generated plan as a decision and artifact, then launches the planned jobs. Use `--mock` for a no-model rehearsal, or `--mock-plan` to use the deterministic planner while still launching real workers.
+`workflow start` first runs a planner agent, records its generated plan as a decision and artifact, then launches the planned jobs. Use `--mock` for a no-model rehearsal, or `--mock-plan` to use the deterministic planner while still launching real workers. Add `--dry-run` or `--mock` with `--mock-plan` when you want to avoid worker calls.
+
+For deterministic one-stage fan-out from shell, use the lower-level runner:
 
 ```bash
 workflow run \

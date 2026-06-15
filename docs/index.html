@@ -56,7 +56,7 @@
           </div>
           <div class="hero-command" aria-label="Example command">
             <span class="prompt">$</span>
-            <code>workflow run --title "Review lanes" --runner ccc-opencode --job "review::Review this branch."</code>
+            <code>workflow apply workflows/review.workflow.json --runner ccc --ccc-runner @mm</code>
           </div>
         </div>
         <aside class="hero-readout" aria-label="Workflow telemetry summary">
@@ -189,6 +189,14 @@
           <button class="command-row" type="button" data-copy="workflow tui">
             <span>open the board</span>
             <code>workflow tui</code>
+          </button>
+          <button
+            class="command-row"
+            type="button"
+            data-copy="workflow apply workflows/review.workflow.json --runner ccc --ccc-runner @mm --max-agents 4"
+          >
+            <span>launch a plan</span>
+            <code>workflow apply workflows/review.workflow.json --runner ccc --ccc-runner @mm --max-agents 4</code>
           </button>
           <button
             class="command-row"

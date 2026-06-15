@@ -1,16 +1,16 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 ╭─────────── Agents: Calculation ────────────╮╭──── overview  runs  phases  ● agents  events  decisions  artifacts ────╮
 │                                            ││ ╭────────────────────────────── Agent ───────────────────────────────╮ │
-│   State     Name                           ││ │ agent_id      agent-live-tests                                     │ │
+│   State     Time       Name                ││ │ agent_id      agent-live-tests                                     │ │
 │  ────────────────────────────────────────  ││ │ name          Live test worker                                     │ │
-│   ▸ RUN     Live test worker               ││ │ role          calculation                                          │ │
+│   ▸ RUN     0s         Live test worker    ││ │ role          calculation                                          │ │
 │                                            ││ │ type          codex-direct                                         │ │
 │                                            ││ │ model         gpt-5.5                                              │ │
 │                                            ││ │ phase         phase-calc                                           │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────────── Live Stats ────────────────────────────╮ │
 │                                            ││ │ tokens      1234       tail tools 1          parse errs 0          │ │
-│                                            ││ │ status      running    thread     thread-li…                       │ │
+│                                            ││ │ elapsed     0s         status     running    thread     thread-li… │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────── Latest Tool Calls ─────────────────────────╮ │
 │                                            ││ │ command_execution · completed · /usr/bin/python3 -c "a,b=0,1\nfor  │ │

@@ -239,7 +239,7 @@ Decisions are durable choices that should remain visible after event rollover.
 }
 ```
 
-Use decisions for runner/provider choices, scope changes, risk acceptances, and architectural tradeoffs. `workflow_run.py` (a thin shim to `workflow_run_codex.py`) automatically records its runner/concurrency choice.
+Use decisions for runner/provider choices, scope changes, risk acceptances, and architectural tradeoffs. Worker launchers such as `workflow apply`, `workflow start`, and `workflow run` automatically record their runner/concurrency choices.
 
 ## Artifacts
 
@@ -257,7 +257,7 @@ Artifacts are durable outputs that should be easy to navigate from the TUI.
 }
 ```
 
-Use `kind=file` for manually recorded reports and `kind=worker-output` for worker final outputs. `workflow_run.py` automatically exposes each worker final output as an artifact.
+Use `kind=file` for manually recorded reports, `kind=workflow-plan` for normalized saved/generator workflow plans, and `kind=worker-output` for worker final outputs. `workflow apply` records the normalized plan before dispatch; worker runners automatically expose each worker final output as an artifact.
 
 ## Write Semantics
 

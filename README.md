@@ -9,6 +9,7 @@ Site: https://clankercode.github.io/codex-workflow-tui/
 - A global Codex skill named `workflow`
 - Persistent workflow state beside the skill checkout, e.g. `~/.agents/workflow-system/state`
 - Native subagent operating guidance for parallel research, implementation, review, and synthesis
+- Saved `workflow-plan` JSON or generator-script launch with recorded plan artifacts
 - External coding-CLI workers through direct Codex, direct OpenCode, direct Kimi, and `ccc` providers
 - Rate limits for worker startup and concurrency
 - A Rich/Textual TUI for active runs, phases, agents, events, decisions, artifacts, live output, and copyable ids/paths
@@ -18,6 +19,7 @@ Site: https://clankercode.github.io/codex-workflow-tui/
 
 ```bash
 workflow tui
+workflow apply workflows/review.workflow.json --runner ccc --ccc-runner @mm --max-agents 4
 workflow init --title "Example" --prompt "Do the thing" --cwd "$PWD"
 workflow run --title "Review lanes" --runner ccc-opencode --max-agents 4 --startup-delay 1.0 --job "review::Review this branch."
 workflow run --title "Kimi lane" --runner kimi-direct --job "review::Review this branch."

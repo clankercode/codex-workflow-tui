@@ -30,6 +30,8 @@ $PROG - agent workflow helper
 Usage:
   $PROG tui
   $PROG start <goal> [workflow_start.py args...]
+  $PROG apply <workflow-json-or-script> [workflow_apply.py args...]
+  $PROG exec <workflow-json-or-script> [workflow_apply.py args...]
   $PROG run [workflow_run.py args...]
   $PROG run-codex [workflow_run_codex.py args...]
   $PROG runner-matrix [workflow_runner_matrix.py args...]
@@ -88,6 +90,9 @@ case "$cmd" in
     ;;
   start)
     exec python3 "$SCRIPT_DIR/workflow_start.py" "$@"
+    ;;
+  apply|exec)
+    exec python3 "$SCRIPT_DIR/workflow_apply.py" "$@"
     ;;
   run)
     exec python3 "$SCRIPT_DIR/workflow_run.py" "$@"

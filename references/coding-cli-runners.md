@@ -1,8 +1,39 @@
 # Coding CLI Runners
 
-Use `workflow_run.py` when a workflow lane should run in its own process.
+Use the workflow worker runners when a workflow lane should run in its own process.
 The runner interface is provider-neutral: every provider builds a command, captures stdout/stderr, extracts a final result, and mirrors paths back into `run.json`.
+`workflow apply` is the preferred front door for saved workflow-plan files or generator scripts.
 `workflow start` uses the same providers twice: once for the planner agent, then again for the generated worker jobs.
+`workflow run` is the lower-level flat fan-out primitive.
+
+## Workflow-Plan Launchers
+
+Use `workflow apply` for repeatable workflows:
+
+```bash
+workflow apply workflows/review.workflow.json \
+  --runner ccc \
+  --ccc-runner @mimo25p \
+  --max-agents 4
+```
+
+`workflow exec` is an alias. The input may be JSON or an executable/Python script that prints one JSON object:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Project planning",
+  "summary": "optional objective",
+  "goal": "optional original goal",
+  "jobs": [{"name": "architecture", "role": "planner", "prompt": "bounded worker prompt"}]
+}
+```
+
+Plans may also use `phases[].jobs`. `workflow apply` records the normalized plan as a `workflow-plan` artifact, preserves execution metadata such as `cwd`, `runner`, `ccc_runner`, `tags`, sandbox/approval settings, and caps, and lets CLI flags override plan defaults.
+Job `name` values are dependency keys, so keep them unique and stable across the whole plan when using `depends_on` or phase staging.
+
+Multi-phase plans are currently flattened into staged jobs with dependency edges. This gives ordered execution and failure propagation, but not rich declared phase/gate records yet.
 
 ## Providers
 
@@ -128,7 +159,7 @@ It also writes `<output-dir>/runner-matrix-summary.json`.
 Use `--mock` or `--dry-run` for no-model rehearsals.
 Use `--all-common` to expand `codex-direct`, `kimi-direct`, `opencode-direct`, `ccc:opencode`, and `ccc:kimi`.
 
-Runner matrices can also load reusable workflow-plan scripts:
+Runner matrices can also load reusable workflow-plan scripts when comparing several targets:
 
 ```bash
 workflow runner-matrix \
@@ -160,9 +191,9 @@ The script prints a reusable workflow object:
 
 When `--project-src` is set, the matrix copies that directory once per target under `<output-dir>/workdirs/<label>/`, excluding `.git` and common caches.
 Script args may include `{project_dir}`, `{target}`, `{label}`, and `{output_dir}` placeholders.
-The generated workflow JSON is saved before execution under `<output-dir>/workflows/<label>.workflow.json`; a derived jobs array is passed to `workflow run`.
+The generated workflow JSON is saved before execution under `<output-dir>/workflows/<label>.workflow.json`; the same normalization rules as `workflow apply` are used before a derived jobs array is passed to `workflow run`.
 
-This is dynamic pre-run expansion. The current runner does not yet expand additional jobs from structured worker results while a phase is running; add that only behind an explicit future envelope such as `{"kind":"workflow-expansion","schema_version":1,"jobs":[...]}` with max-round and max-job guards.
+This is dynamic pre-run expansion. Runtime expansion is also supported when a worker returns a structured envelope such as `{"kind":"workflow-expansion","schema_version":1,"jobs":[...]}`; those jobs are enqueued behind `--max-round` and `--max-job` guards. Use explicit `depends_on` names when generated jobs must wait for specific upstream jobs instead of the whole prior stage.
 
 ## Safety
 

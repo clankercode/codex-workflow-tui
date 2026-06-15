@@ -18,6 +18,7 @@ from typing import Any
 sys.dont_write_bytecode = True
 
 import workflow_run_codex
+from workflow_plan import normalize_workflow
 import workflow_state
 
 
@@ -133,61 +134,6 @@ def format_arg(value: str, *, target: MatrixTarget, workdir: Path, output_dir: P
         workdir=str(workdir),
         output_dir=str(output_dir),
     )
-
-
-def normalize_workflow(raw: dict[str, Any], *, fallback_title: str) -> dict[str, Any]:
-    """Validate and normalize a script-generated workflow object."""
-    if isinstance(raw.get("phases"), list):
-        phases_raw = raw["phases"]
-    else:
-        phases_raw = [{"name": "main", "jobs": raw.get("jobs")}]
-    phases: list[dict[str, Any]] = []
-    for phase_index, phase_raw in enumerate(phases_raw):
-        if not isinstance(phase_raw, dict):
-            raise SystemExit("each workflow phase must be an object")
-        phase_name = workflow_state.slugify(str(phase_raw.get("name") or phase_raw.get("phase") or f"phase-{phase_index + 1}"), fallback=f"phase-{phase_index + 1}")
-        jobs_raw = phase_raw.get("jobs")
-        if not isinstance(jobs_raw, list) or not jobs_raw:
-            raise SystemExit("each workflow phase must contain a non-empty jobs array")
-        jobs = [normalize_job(item, index) for index, item in enumerate(jobs_raw)]
-        phases.append(
-            {
-                "name": phase_name,
-                "title": str(phase_raw.get("title") or phase_raw.get("name") or phase_name).strip(),
-                "summary": str(phase_raw.get("summary") or "").strip(),
-                "jobs": jobs,
-            }
-        )
-    return {
-        "schema_version": int(raw.get("schema_version") or 1),
-        "kind": str(raw.get("kind") or "workflow-plan"),
-        "title": str(raw.get("title") or fallback_title).strip()[:120],
-        "summary": str(raw.get("summary") or "").strip(),
-        "goal": str(raw.get("goal") or "").strip(),
-        "output_subdir": normalize_output_subdir(raw.get("output_subdir")),
-        "phases": phases,
-        "jobs": phases[0]["jobs"] if len(phases) == 1 else [],
-    }
-
-
-def normalize_job(item: Any, index: int) -> dict[str, Any]:
-    """Validate and normalize one workflow job."""
-    if not isinstance(item, dict):
-        raise SystemExit("each workflow job must be an object")
-    prompt = str(item.get("prompt") or "").strip()
-    if not prompt:
-        raise SystemExit("each workflow job must include a non-empty prompt")
-    name = str(item.get("name") or item.get("role") or f"job-{index + 1}").strip()
-    return {"name": name, "role": str(item.get("role") or name).strip() or name, "prompt": prompt}
-
-
-def normalize_output_subdir(value: Any) -> str:
-    """Return a safe relative output directory from workflow metadata."""
-    text = str(value or "planning-output").strip() or "planning-output"
-    path = Path(text)
-    if path.is_absolute() or ".." in path.parts:
-        raise SystemExit("workflow output_subdir must be a relative path without '..'")
-    return path.as_posix()
 
 
 def write_default_workflow(args: argparse.Namespace, output_dir: Path) -> WorkflowSpec:

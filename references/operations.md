@@ -1,8 +1,35 @@
 # Workflow Operations
 
-Use these commands when operating a workflow manually.
+Use these commands when operating a workflow. Prefer `workflow apply` for repeatable workflows, then drop down to `workflow start`, `workflow run`, or manual state commands only when they fit the job better.
+
+## Launch From A Workflow File
+
+For saved workflows, checked-in workflow specs, or generator scripts, use `workflow apply`:
+
+```bash
+workflow apply workflows/review.workflow.json \
+  --runner ccc \
+  --ccc-runner @mm \
+  --max-agents 4 \
+  --startup-delay 1.0
+```
+
+`workflow exec` is an alias for the same command.
+
+The input may be JSON or an executable/Python script that prints JSON. The object should use `kind: "workflow-plan"` and include either:
+
+- `jobs`: a flat list of worker jobs
+- `phases[].jobs`: staged jobs; later phase jobs depend on prior phase jobs
+
+Job `name` values are dependency keys. Keep them unique and stable across the whole plan, especially when using explicit `depends_on` or `phases[].jobs`.
+
+The launcher records the normalized plan as a `workflow-plan` artifact, preserves execution fields such as `cwd`, `runner`, `ccc_runner`, `tags`, model, sandbox/approval settings, and caps, and lets explicit CLI flags override plan defaults.
+
+Multi-phase apply is currently an execution lift over one normal worker run: it preserves stage order with dependencies, but it does not yet create rich declared phase/gate records.
 
 ## Create A Run
+
+Use manual run creation when the lead session is doing the orchestration by hand or a workflow shape cannot yet be represented as a `workflow-plan`:
 
 ```bash
 workflow init \
@@ -27,7 +54,9 @@ workflow add-phase <run-id> \
 
 ## Track Native Subagents
 
-After spawning a native subagent from the main session, add it to state:
+Native subagents are controlled by the host session, not by the workflow runner. Track them in workflow state only when you can keep status and output coherent. If the host does not expose live status/update hooks, prefer recording a lead-local event, artifact, or completed summary after the subagent returns rather than creating a stale `running` agent.
+
+When you do have a returned subagent id and will update it later, add it to state:
 
 ```bash
 workflow add-agent <run-id> \
@@ -86,7 +115,7 @@ workflow start "summarize the current repo" --mock-plan --runner ccc-opencode
 
 `--mock` avoids model calls for the planner and workers. `--mock-plan` uses the deterministic local planner but still runs real workers unless combined with `--dry-run` or `--mock`.
 
-For deterministic fan-out from shell:
+For deterministic one-stage fan-out from shell, use the lower-level runner:
 
 ```bash
 workflow run \

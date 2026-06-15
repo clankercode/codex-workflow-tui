@@ -1409,9 +1409,9 @@ async def run_all(run: dict[str, Any], args: argparse.Namespace, provider: Runne
                 run_snapshot = workflow_state.load_run(run_id)
                 updated_agent = workflow_state.find_item(run_snapshot["agents"], "agent_id", agent["agent_id"])
                 async with state_lock:
-                    completed_names.add(updated_agent["name"])
                     status = updated_agent.get("status")
                     if status == "completed":
+                        completed_names.add(updated_agent["name"])
                         expansion_jobs = _parse_expansion_jobs(updated_agent.get("result") or "")
                         added = 0
                         dropped = 0
@@ -1447,12 +1447,11 @@ async def run_all(run: dict[str, Any], args: argparse.Namespace, provider: Runne
                             summary=message,
                             exit_code=1,
                         )
-                    completed_names.add(updated_agent["name"])
                     release_pending()
             finally:
                 async with state_lock:
                     active_workers -= 1
-                    should_shutdown = active_workers == 0 and queue.empty() and not pending_by_id and not shutdown_sent
+                    should_shutdown = active_workers == 0 and queue.empty() and not shutdown_sent
                     if should_shutdown:
                         shutdown_sent = True
                         for _ in range(args.max_agents):

@@ -1874,6 +1874,7 @@ class WorkflowScriptTests(unittest.TestCase):
                 "--title",
                 "Truncated Plan",
                 "--mock-plan",
+                "--mock",
                 "--max-jobs",
                 "2",
                 "--startup-delay",
@@ -4003,6 +4004,77 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertNotIn("e-", rendered.lower())
         self.assertNotIn("0.0", rendered)
 
+    def test_agents_table_shows_live_and_terminal_durations(self) -> None:
+        """Agent rows should expose compact live elapsed and terminal duration values."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        old_now = os.environ.get("WORKFLOW_TUI_SNAPSHOT_NOW")
+        os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = "2026-06-11T00:06:00Z"
+        try:
+            sink = io.StringIO()
+            console = Console(file=sink, width=84, force_terminal=False, color_system=None)
+            console.print(
+                workflow_tui.make_agent_table(
+                    [
+                        {"agent_id": "a", "name": "Alpha", "status": "running", "started_at": "2026-06-11T00:01:00Z"},
+                        {
+                            "agent_id": "b",
+                            "name": "Beta",
+                            "status": "completed",
+                            "started_at": "2026-06-11T00:02:00Z",
+                            "completed_at": "2026-06-11T00:04:15Z",
+                        },
+                        {
+                            "agent_id": "c",
+                            "name": "Gamma",
+                            "status": "failed",
+                            "started_epoch": 1781136120,
+                            "updated_at": "2026-06-11T00:04:00Z",
+                        },
+                    ],
+                    0,
+                    8,
+                )
+            )
+        finally:
+            if old_now is None:
+                os.environ.pop("WORKFLOW_TUI_SNAPSHOT_NOW", None)
+            else:
+                os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = old_now
+
+        rendered = sink.getvalue()
+        self.assertIn("Time", rendered)
+        self.assertIn("5m 00s", rendered)
+        self.assertIn("2m 15s", rendered)
+        self.assertIn("2m 00s", rendered)
+
+    def test_agent_detail_shows_elapsed_stat_for_running_worker(self) -> None:
+        """Selected-agent detail should expose elapsed time with the other live stats."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        old_now = os.environ.get("WORKFLOW_TUI_SNAPSHOT_NOW")
+        os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = "2026-06-11T00:06:00Z"
+        try:
+            sink = io.StringIO()
+            console = Console(file=sink, width=100, force_terminal=False, color_system=None)
+            console.print(
+                workflow_tui.make_agent_activity_detail(
+                    {"agent_id": "a", "name": "Alpha", "status": "running", "started_at": "2026-06-11T00:01:00Z"},
+                    {"agents": []},
+                )
+            )
+        finally:
+            if old_now is None:
+                os.environ.pop("WORKFLOW_TUI_SNAPSHOT_NOW", None)
+            else:
+                os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = old_now
+
+        rendered = sink.getvalue()
+        self.assertIn("elapsed", rendered)
+        self.assertIn("5m 00s", rendered)
+
     def test_event_type_cells_are_colorized(self) -> None:
         """Use styled event type cells instead of plain event text only."""
         sys.path.insert(0, str(SCRIPTS))
@@ -5415,6 +5487,209 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertTrue(all(str(tmp_path) not in job["prompt"] for phase in plan["phases"] for job in phase["jobs"]))
             self.assertTrue(all("Current working directory: `.`" in job["prompt"] for phase in plan["phases"] for job in phase["jobs"]))
             self.assertTrue(all("Do not launch nested agents" in job["prompt"] for phase in plan["phases"] for job in phase["jobs"]))
+
+    def test_workflow_plan_normalization_is_shared_with_runner_matrix(self) -> None:
+        """Keep workflow-file launchers and runner-matrix on one schema."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_plan  # pylint: disable=import-outside-toplevel
+        import workflow_runner_matrix  # pylint: disable=import-outside-toplevel
+
+        self.assertIs(workflow_runner_matrix.normalize_workflow, workflow_plan.normalize_workflow)
+
+    def test_wf_apply_mock_launches_saved_single_phase_plan_and_records_artifact(self) -> None:
+        """Launch a saved workflow-plan JSON without model calls and persist the normalized plan."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            plan_path = tmp_path / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Apply Plan",
+                        "jobs": [
+                            {"name": "alpha", "role": "tester", "prompt": "Say alpha."},
+                            {"name": "beta", "prompt": "Say beta."},
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf(
+                "apply",
+                str(plan_path),
+                "--mock",
+                "--startup-delay",
+                "0",
+                "--max-agents",
+                "2",
+                env=env,
+            )
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            artifacts = [item for item in run["artifacts"] if item["kind"] == "workflow-plan"]
+            recorded_plan = json.loads(Path(artifacts[0]["path"]).read_text(encoding="utf-8"))
+
+            self.assertEqual(summary["jobs"], 2)
+            self.assertEqual(run["title"], "Apply Plan")
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(recorded_plan["kind"], "workflow-plan")
+            self.assertEqual([job["name"] for job in recorded_plan["jobs"]], ["alpha", "beta"])
+
+    def test_wf_apply_accepts_python_plan_generator(self) -> None:
+        """Accept executable or Python scripts that print workflow-plan JSON."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            generator = tmp_path / "generate_plan.py"
+            generator.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    print(json.dumps({
+                        "title": "Generated Apply Plan",
+                        "jobs": [{"name": "generated", "prompt": "Generated prompt."}]
+                    }))
+                    """
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf("exec", str(generator), "--mock", "--startup-delay", "0", env=env)
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+
+            self.assertEqual(run["title"], "Generated Apply Plan")
+            self.assertEqual(run["metrics"]["agents_total"], 1)
+
+    def test_wf_apply_launches_multi_phase_plan_as_ordered_stages(self) -> None:
+        """Launch phased workflow-plan JSON by preserving stage order in one run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            plan_path = tmp_path / "multi.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Too Much",
+                        "phases": [
+                            {"name": "draft", "jobs": [{"name": "a", "prompt": "A"}]},
+                            {"name": "review", "jobs": [{"name": "b", "prompt": "B"}]},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf("apply", str(plan_path), "--mock", "--startup-delay", "0", env=env)
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            agents_by_name = {agent["name"]: agent for agent in run["agents"]}
+
+            self.assertEqual(summary["jobs"], 2)
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(agents_by_name["a"]["stage"], "draft")
+            self.assertEqual(agents_by_name["b"]["stage"], "review")
+            self.assertEqual(agents_by_name["b"]["depends_on"], "a")
+
+    def test_wf_apply_honors_plan_execution_fields_with_cli_overrides(self) -> None:
+        """Workflow-plan execution metadata should not be silently discarded."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            plan_cwd = tmp_path / "from-plan"
+            cli_cwd = tmp_path / "from-cli"
+            plan_cwd.mkdir()
+            cli_cwd.mkdir()
+            plan_path = tmp_path / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Execution Fields",
+                        "cwd": "from-plan",
+                        "runner": "codex-direct",
+                        "tags": ["from-plan"],
+                        "max_agents": 4,
+                        "startup_delay": 9,
+                        "jobs": [{"name": "alpha", "prompt": "Alpha prompt."}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf(
+                "apply",
+                str(plan_path),
+                "--cwd",
+                str(cli_cwd),
+                "--max-agents",
+                "1",
+                "--mock",
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            decision = next(item for item in run["decisions"] if item["title"] == "Runner selected: codex-direct")
+
+            self.assertEqual(run["cwd"], str(cli_cwd.resolve()))
+            self.assertIn("from-plan", run["tags"])
+            self.assertIn("max_agents=1", decision["rationale"])
+
+    def test_wf_apply_does_not_launch_dependent_phase_after_failure(self) -> None:
+        """A failed phase should leave dependent phase jobs unlaunched."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            state_path = tmp_path / "attempts.txt"
+            plan_path = tmp_path / "multi.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Failing Phases",
+                        "phases": [
+                            {"name": "draft", "jobs": [{"name": "a", "prompt": "A"}]},
+                            {"name": "review", "jobs": [{"name": "b", "prompt": "B"}]},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CODEX_FAKE_STATE"] = str(state_path)
+            env["CODEX_FAKE_EXIT_CODE"] = "1"
+            result = self.run_wf("apply", str(plan_path), "--startup-delay", "0", env=env, check=False)
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            agents_by_name = {agent["name"]: agent for agent in run["agents"]}
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(state_path.read_text(encoding="utf-8"), "1")
+            self.assertEqual(agents_by_name["a"]["status"], "failed")
+            self.assertEqual(agents_by_name["b"]["status"], "failed")
+            self.assertIn("dependency never satisfied", agents_by_name["b"]["summary"])
+
+    def test_workflow_plan_normalizes_scalar_ccc_control_to_list(self) -> None:
+        """Plan ccc_control should not become character-by-character argv."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_plan  # pylint: disable=import-outside-toplevel
+
+        plan = workflow_plan.normalize_workflow(
+            {
+                "title": "Ccc Control",
+                "ccc_control": "@reviewer",
+                "jobs": [{"name": "a", "prompt": "A"}],
+            },
+            fallback_title="fallback",
+        )
+
+        self.assertEqual(plan["ccc_control"], ["@reviewer"])
 
     def test_wf_runner_matrix_dispatches_to_script(self) -> None:
         """Expose the reusable runner matrix through the installed shell entrypoint."""

@@ -1,20 +1,20 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 ╭─────────── Agents: Many rows ────────────╮╭───────────── ovr  run  pha  ● agt  evt  dec  art ──────────────╮
 │                                          ││ ╭────────────────────────── Agent ───────────────────────────╮ │
-│   State     Name                         ││ │ agent_id      agent-08                                     │ │
+│   State     Time       Name              ││ │ agent_id      agent-08                                     │ │
 │  ──────────────────────────────────────  ││ │ name          Agent 08                                     │ │
-│     DONE    Agent 00                     ││ │ role          review                                       │ │
-│     RUN     Agent 01                     ││ │ type          native-subagent                              │ │
-│     FAIL    Agent 02                     ││ │ model         gpt-5.5                                      │ │
-│     BLCK    Agent 03                     ││ │ phase         phase-many                                   │ │
-│     PAUS    Agent 04                     ││ ╰────────────────────────────────────────────────────────────╯ │
-│     CNCL    Agent 05                     ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
-│     PEND    Agent 06                     ││ │ tokens      unknown  tail tools 0       parse errs 0       │ │
-│     DONE    Agent 07                     ││ │ status      running  thread                                │ │
-│   ▸ RUN     Agent 08                     ││ ╰────────────────────────────────────────────────────────────╯ │
-│     FAIL    Agent 09                     ││ ╭─────────────────────── Live Output ────────────────────────╮ │
-│     BLCK    Agent 10                     ││ │ slice 08 summary                                           │ │
-│     PAUS    Agent 11                     ││ ╰────────────────────────────────────────────────────────────╯ │
+│     DONE               Agent 00          ││ │ role          review                                       │ │
+│     RUN                Agent 01          ││ │ type          native-subagent                              │ │
+│     FAIL               Agent 02          ││ │ model         gpt-5.5                                      │ │
+│     BLCK               Agent 03          ││ │ phase         phase-many                                   │ │
+│     PAUS               Agent 04          ││ ╰────────────────────────────────────────────────────────────╯ │
+│     CNCL               Agent 05          ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
+│     PEND               Agent 06          ││ │ tokens      unknown  tail tools 0       parse errs 0       │ │
+│     DONE               Agent 07          ││ │ elapsed              status     running thread             │ │
+│   ▸ RUN                Agent 08          ││ ╰────────────────────────────────────────────────────────────╯ │
+│     FAIL               Agent 09          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
+│     BLCK               Agent 10          ││ │ slice 08 summary                                           │ │
+│     PAUS               Agent 11          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │
