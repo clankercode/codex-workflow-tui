@@ -6970,13 +6970,11 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertTrue(any(
                 e.get("operation") == "merge-conflict-assist" for e in run_after["events"]
             ))
+            # merge-conflicts must not create a pending check: there is no clean
+            # way to complete it (verify appends rather than upserts), and the
+            # documented --check-id reuse would duplicate the id.
             assist_checks = [c for c in run_after["checks"] if c.get("kind") == "merge-conflict-assist"]
-            self.assertEqual(len(assist_checks), 1)
-            self.assertEqual(assist_checks[0]["status"], "pending")
-            self.assertFalse(assist_checks[0]["required"])
-            self.assertIsNone(assist_checks[0]["exit_code"])
-            self.assertEqual(assist_checks[0]["completed_at"], "")
-            self.assertIn("verify --check-id", assist_checks[0]["summary"])
+            self.assertEqual(assist_checks, [])
 
     def test_merge_conflicts_detects_conflicted_files_when_left_in_place(self) -> None:
         """merge-conflicts should list conflicted files when merge-lanes used --leave-conflicts."""
@@ -7260,6 +7258,148 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(context["agent_id"], "agent-second")
             self.assertEqual(context["merge_check_id"], "chk-second")
             self.assertIn("second merge failed", Path(output["prompt_path"]).read_text(encoding="utf-8"))
+
+    def test_merge_conflicts_prompt_does_not_claim_lane_is_skipped(self) -> None:
+        """The merger prompt must not claim the lane is auto-skipped after resolution.
+
+        After a conflict the lane stays 'conflicted' (no merged_at), so re-running
+        merge-lanes re-attempts the merge rather than skipping the lane. The prompt
+        previously asserted the lane would be skipped, which is false and misleading.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "note.txt").write_text("base\n", encoding="utf-8")
+            self.git(repo, "add", "note.txt")
+            self.git(repo, "commit", "-m", "base")
+            self.git(repo, "checkout", "-b", "workflow/conflict-lane")
+            (repo / "note.txt").write_text("lane\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "lane change")
+            self.git(repo, "checkout", "main")
+            (repo / "note.txt").write_text("main\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "main change")
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            created = self.run_wf("init", "--title", "Prompt Wording", "--prompt", "merge", "--cwd", str(repo), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            run_path = Path(json.loads(created.stdout)["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-impl", "--name", "Implementation", "--status", "completed", env=env)
+            self.run_wf("add-agent", run_id, "--phase", "phase-impl", "--agent-id", "agent-c", "--name", "lane", "--agent-type", "codex-exec", "--status", "completed", "--cwd", str(repo), env=env)
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {"branch": "workflow/conflict-lane", "path": str(tmp_path / "lane"), "merge_target": "main"}
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            self.run_wf("merge-lanes", run_id, "--leave-conflicts", env=env, check=False)
+            result = self.run_wf("merge-conflicts", run_id, env=env)
+            prompt = Path(json.loads(result.stdout)["prompt_path"]).read_text(encoding="utf-8")
+
+            self.assertNotIn("will be skipped", prompt)
+            self.assertIn("NOT auto-skipped", prompt)
+            self.assertIn("Already up to date", prompt)
+
+    def test_merge_conflicts_dirty_hint_is_actionable(self) -> None:
+        """The dirty-changes hint must not advise re-running merge-lanes, which refuses a dirty tree."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "note.txt").write_text("base\n", encoding="utf-8")
+            self.git(repo, "add", "note.txt")
+            self.git(repo, "commit", "-m", "base")
+            self.git(repo, "checkout", "-b", "workflow/conflict-lane")
+            (repo / "note.txt").write_text("lane\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "lane change")
+            self.git(repo, "checkout", "main")
+            (repo / "note.txt").write_text("main\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "main change")
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            created = self.run_wf("init", "--title", "Dirty Hint", "--prompt", "merge", "--cwd", str(repo), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            run_path = Path(json.loads(created.stdout)["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-impl", "--name", "Implementation", "--status", "completed", env=env)
+            self.run_wf("add-agent", run_id, "--phase", "phase-impl", "--agent-id", "agent-c", "--name", "lane", "--agent-type", "codex-exec", "--status", "completed", "--cwd", str(repo), env=env)
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {"branch": "workflow/conflict-lane", "path": str(tmp_path / "lane"), "merge_target": "main"}
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            self.run_wf("merge-lanes", run_id, env=env, check=False)
+            self.assertEqual(self.git(repo, "status", "--porcelain").stdout.strip(), "")
+            (repo / "unrelated.txt").write_text("user work\n", encoding="utf-8")
+
+            result = self.run_wf("merge-conflicts", run_id, env=env)
+            output = json.loads(result.stdout)
+            self.assertTrue(output["cwd_has_unrelated_changes"])
+            hint = output["hint"]
+            self.assertIn("stash", hint.lower())
+            # The hint must warn that merge-lanes refuses a dirty tree, and tell
+            # the operator to commit/stash first, rather than sending them straight
+            # to merge-lanes (which would be rejected by the clean-tree guard).
+            self.assertIn("refuses a dirty tree", hint)
+
+    def test_merge_conflicts_recovery_marks_lane_merged_without_duplicate_check_id(self) -> None:
+        """Full recovery: resolve, record a fresh passing verify, re-run merge-lanes.
+
+        Guards against two regressions:
+        - the documented verify flow must not produce a duplicate check_id;
+        - re-running merge-lanes after resolution must mark the lane merged.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "note.txt").write_text("base\n", encoding="utf-8")
+            self.git(repo, "add", "note.txt")
+            self.git(repo, "commit", "-m", "base")
+            self.git(repo, "checkout", "-b", "workflow/conflict-lane")
+            (repo / "note.txt").write_text("lane\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "lane change")
+            self.git(repo, "checkout", "main")
+            (repo / "note.txt").write_text("main\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "main change")
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            created = self.run_wf("init", "--title", "Recovery", "--prompt", "merge", "--cwd", str(repo), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+            run_path = Path(json.loads(created.stdout)["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-impl", "--name", "Implementation", "--status", "completed", env=env)
+            self.run_wf("add-agent", run_id, "--phase", "phase-impl", "--agent-id", "agent-c", "--name", "lane", "--agent-type", "codex-exec", "--status", "completed", "--cwd", str(repo), env=env)
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {"branch": "workflow/conflict-lane", "path": str(tmp_path / "lane"), "merge_target": "main"}
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            self.run_wf("merge-lanes", run_id, "--leave-conflicts", env=env, check=False)
+            self.run_wf("merge-conflicts", run_id, env=env)
+
+            # Merger agent resolves the conflict and completes the merge commit.
+            self.git(repo, "add", "note.txt")
+            self.git(repo, "commit", "--no-edit")
+            self.assertEqual(self.git(repo, "status", "--porcelain").stdout.strip(), "")
+
+            # Record a fresh passing verification (no --check-id reuse).
+            self.run_wf(
+                "verify", run_id, "--record-only", "--status", "passed",
+                "--summary", "merge resolved", "--evidence-path", str(repo / "note.txt"),
+                env=env,
+            )
+
+            # Re-running merge-lanes marks the lane merged.
+            result = self.run_wf("merge-lanes", run_id, env=env)
+            self.assertEqual(json.loads(result.stdout)["merged"], ["agent-c"])
+            run_after = json.loads(run_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_after["agents"][0]["worktree"]["merge_status"], "merged")
+            self.assertTrue(run_after["agents"][0]["worktree"]["merged_at"])
+
+            # check_id uniqueness invariant across all checks.
+            check_ids = [c["check_id"] for c in run_after.get("checks", [])]
+            self.assertEqual(len(check_ids), len(set(check_ids)))
 
 
 if __name__ == "__main__":

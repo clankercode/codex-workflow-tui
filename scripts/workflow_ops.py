@@ -656,8 +656,13 @@ def build_merger_prompt(
         "5. Do NOT force-push or rewrite history. The resolution commit should be a normal merge commit.",
         "",
         "## Verification",
-        "After resolution, the lead agent should verify the merge with `wf verify` and `wf merge-lanes` "
-        "(the lane will be skipped since it is already marked merged after a successful resolution).",
+        "After resolution, record a passing verification:",
+        f"  wf verify {run.get('run_id', '')} --record-only --status passed \\",
+        "    --summary \"merge resolved\" --evidence-path <path to resolution evidence>",
+        f"Then re-run `wf merge-lanes {run.get('run_id', '')}` so the lane is marked merged.",
+        "The lane is NOT auto-skipped after a conflict: re-running merge-lanes re-attempts the merge,",
+        "which completes cleanly (\"Already up to date\") once the resolution is committed, and then",
+        "records the lane as merged.",
         "",
         "## Safety",
         "- If you cannot resolve a conflict cleanly, leave it staged and report what is blocked.",
@@ -735,24 +740,6 @@ def cmd_merge_conflicts(args: argparse.Namespace) -> None:
             "path": str(context_path),
             "agent_id": agent_id,
         })
-        check_id = workflow_state.short_id("chk")
-        data.setdefault("checks", []).append({
-            "check_id": check_id,
-            "ts": workflow_state.now(),
-            "name": f"merge-conflict context: {agent_id}",
-            "kind": "merge-conflict-assist",
-            "status": "pending",
-            "required": False,
-            "command": "",
-            "cwd": cwd,
-            "exit_code": None,
-            "duration_seconds": 0.0,
-            "summary": f"conflict context prepared for {agent_id}; merger prompt at {prompt_path.name}; requires verification (run `wf verify --check-id {check_id} --record-only --status passed ...`)",
-            "log_path": "",
-            "completed_at": "",
-            "evidence_path": str(context_path),
-            "external_ref": "",
-        })
         workflow_state.add_event(
             data,
             "warning",
@@ -788,9 +775,9 @@ def cmd_merge_conflicts(args: argparse.Namespace) -> None:
         if cwd_has_unrelated_changes:
             result["hint"] = (
                 "No unmerged conflict markers found in the run cwd, but it has other uncommitted changes. "
-                "To let a merger agent work on conflicts, run `git merge --no-edit <branch>` (or re-run "
-                "`merge-lanes --leave-conflicts`) so the conflict markers are present, then re-run "
-                "`merge-conflicts`."
+                "`merge-lanes` refuses a dirty tree, so first commit or stash these unrelated changes, "
+                "then re-create the conflict markers with `merge-lanes --leave-conflicts` (or "
+                "`git merge --no-edit <branch>`) and re-run `merge-conflicts`."
             )
         else:
             result["hint"] = (

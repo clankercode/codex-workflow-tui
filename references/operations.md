@@ -49,23 +49,23 @@ The command finds the conflicted lane (or the named agent if `--agent` is given)
 
 - A **merger prompt** artifact (`merger-prompt-<agent-id>.md`) with bounded resolution instructions.
 - A **merger context** artifact (`merger-context-<agent-id>.json`) with structured conflict metadata (`conflict_files`, `cwd_has_conflict_markers`, `cwd_has_unrelated_changes`, `merge_in_progress`, `merge_check_id`).
-- A `merge-conflict-assist` check (status `pending`, `required: false`) and event in run state.
+- A `merge-conflict-assist` event in run state. The prompt and context artifacts are the durable record; no pending check is created (the resolution is recorded as a fresh verification below).
 
 The command distinguishes three cwd states:
 
 - **Merge in progress** (`cwd_has_conflict_markers: true`) — `merge-lanes --leave-conflicts` left the conflict in place. The context includes the conflicted files; a merger agent can work on them.
-- **Cwd has unrelated dirty changes** (`cwd_has_unrelated_changes: true`) — the previous merge was aborted but the user has uncommitted work of their own. The command prints a hint to clear unrelated changes (or re-run `merge-lanes --leave-conflicts`) before resolving the conflict.
+- **Cwd has unrelated dirty changes** (`cwd_has_unrelated_changes: true`) — the previous merge was aborted but the user has uncommitted work of their own. The command prints a hint to commit or stash those changes first (`merge-lanes` refuses a dirty tree), then re-create the conflict markers before resolving.
 - **Cwd is clean** — the previous merge was aborted and nothing else is dirty. The command prints a hint to re-create the conflict markers via `merge-lanes --leave-conflicts` (or `git merge --no-edit <branch>`) before re-running `merge-conflicts`.
 
-The merger prompt is designed to be fed to any coding-CLI worker (Codex, Kimi, OpenCode, ccc) for automated resolution. Human verification is always required before marking the workflow complete — the merger agent's output is not trusted without review. After resolution, record a passing verification check explicitly:
+The merger prompt is designed to be fed to any coding-CLI worker (Codex, Kimi, OpenCode, ccc) for automated resolution. Human verification is always required before marking the workflow complete — the merger agent's output is not trusted without review. After resolution, record a passing verification check explicitly (a fresh check; do not reuse an existing `check_id`, which would duplicate it):
 
 ```bash
-wf verify <run-id> --check-id <merge-conflict-assist check_id> \
+wf verify <run-id> \
   --record-only --status passed --summary "merge resolved" \
   --evidence-path <path to resolution evidence>
 ```
 
-The check's summary printed by `merge-conflicts` includes its own `check_id` to make this easy.
+Then re-run `wf merge-lanes <run-id>` so the resolved lane is marked merged. The lane is not auto-skipped after a conflict: re-running `merge-lanes` re-attempts the merge, which completes cleanly ("Already up to date") once the resolution is committed.
 
 ## Create A Run
 
