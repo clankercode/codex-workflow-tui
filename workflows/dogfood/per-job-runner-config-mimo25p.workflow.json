@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Dogfood per-job runner config with mimo25p",
+  "goal": "Implement per-job and per-phase runner/model configuration for workflow-plan launches.",
+  "cwd": "../..",
+  "runner": "ccc",
+  "ccc_runner": "@mimo25p",
+  "ccc_output_mode": "stream-json",
+  "permission_mode": "yolo",
+  "startup_delay": 0,
+  "max_agents": 1,
+  "failure_retries": 1,
+  "tags": ["dogfood", "per-job-runner-config", "mimo25p", "worktree-lane"],
+  "decisions": [
+    {
+      "title": "Current-tooling split review stack",
+      "rationale": "Per-job model overrides are the feature under implementation, so the implementation run uses one current runner. Review layers will run as separate saved workflows with different ccc presets against the same worktree lane."
+    },
+    {
+      "title": "Review order",
+      "rationale": "Use @mm3 for fast structural review first, @glm51 for deeper semantic review/fix second, and @mimo25p for final regression/consistency review so the run records what each model catches."
+    }
+  ],
+  "phases": [
+    {
+      "name": "implementation",
+      "title": "Implementation",
+      "goal": "Add per-job and per-phase execution override support to workflow apply/run state.",
+      "checks": [
+        {
+          "name": "red/green per-job override tests",
+          "cmd": "python3 -m unittest tests.test_workflow.WorkflowScriptTests.test_wf_apply_honors_job_runner_overrides"
+        },
+        {
+          "name": "execution metadata regression",
+          "cmd": "python3 -m unittest tests.test_workflow.WorkflowScriptTests.test_wf_apply_honors_plan_execution_fields_with_cli_overrides"
+        },
+        {
+          "name": "fast workflow tests",
+          "cmd": "WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py"
+        }
+      ],
+      "jobs": [
+        {
+          "name": "per-job-runner-config",
+          "role": "workflow implementer",
+          "prompt": "You are already running as the ccc @mimo25p implementation worker. Do not run ccc, do not spawn/delegate to another agent, and do not say you will use ccc @mimo25p. Edit files directly in this declared worktree lane. Load the pirfl skill from ~/.claude/skills/pirfl if no local copy is available.\n\nTask: implement the backlog item 'Per-job runner/model configuration' for the workflow skill. The goal is that workflow-plan jobs, and preferably phases as defaults for their jobs, may override execution settings such as runner, ccc_runner, ccc_control, ccc_output_mode, permission_mode, cli_agent, timeout_secs, quota/failure retry knobs, result_schema, kimi_max_steps_per_turn, model, sandbox, and approval. Root plan values remain defaults. Phase values override root defaults for jobs in that phase. Job values override phase/root defaults. Explicit CLI flags still override plan-provided values when the operator intentionally forces a run-wide setting.\n\nScope: focus on the workflow skill implementation and docs. Likely files: scripts/workflow_plan.py, scripts/workflow_apply.py, scripts/workflow_run_codex.py, tests/test_workflow.py, references/coding-cli-runners.md, references/operations.md, SKILL.md, references/known-gaps-and-roadmap.md. Preserve existing style. Avoid broad refactors.\n\nTDD requirement: before production code, add a failing test that demonstrates mixed job execution settings are preserved and used. Prefer a test named test_wf_apply_honors_job_runner_overrides or similar. The test should verify at least: normalized plans retain phase/job execution fields; agent records show job-specific runner/agent_type/model/sandbox or equivalent operator-visible metadata; a ccc job can use a different ccc_runner than the root default; and CLI flags can still force a run-wide override. Watch the test fail for the expected reason before implementation.\n\nImplementation guidance: current code builds one provider from global args and stores args.model on every agent. You may introduce per-agent launch options or a provider/args resolver, but keep it small and testable. Mock/dry-run behavior must not spend model calls. Existing workflow apply/run behavior must continue working.\n\nRun at minimum: the new focused test, test_wf_apply_honors_plan_execution_fields_with_cli_overrides, and WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py if practical. Commit your changes on the lane branch with message: feat(workflow): support per-job runner configuration.\n\nReturn strict JSON with keys: status (complete|partial|blocked), files_changed, tests (array of command/result), behavior (array), blockers (array), last_commit, notes.",
+          "write_scope": [
+            "scripts/workflow_plan.py",
+            "scripts/workflow_apply.py",
+            "scripts/workflow_run_codex.py",
+            "tests/test_workflow.py",
+            "references/coding-cli-runners.md",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md",
+            "SKILL.md"
+          ],
+          "worktree": {
+            "branch": "workflow/per-job-runner-config-mimo25p",
+            "base": "HEAD",
+            "merge_target": "main",
+            "owner": "ccc-@mimo25p"
+          }
+        }
+      ]
+    }
+  ]
+}
