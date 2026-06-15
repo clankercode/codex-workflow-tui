@@ -59,6 +59,16 @@ def resolve_cwd(value: Any, *, source_dir: Path) -> str:
 
 def merge_plan_options(args: argparse.Namespace, plan: dict[str, Any], source_dir: Path) -> None:
     """Apply plan execution metadata, with explicit CLI args taking precedence."""
+    _cli_explicit: dict[str, Any] = {}
+    for field in ("runner", "model", "sandbox", "approval", "ccc_runner", "permission_mode", "cli_agent"):
+        value = getattr(args, field, None)
+        if value is not None:
+            _cli_explicit[field] = value
+    for field in ("timeout_secs", "kimi_max_steps_per_turn"):
+        value = getattr(args, field, None)
+        if value is not None:
+            _cli_explicit[field] = value
+    args._cli_explicit = _cli_explicit
     args.cwd = resolve_cwd(args.cwd if args.cwd is not None else plan.get("cwd"), source_dir=source_dir)
     args.title = args.title or plan["title"]
     args.prompt = workflow_state.read_text_arg(args.prompt, args.prompt_file) or plan["goal"] or plan["summary"] or f"Run workflow plan from {args.plan_source}."
@@ -95,10 +105,13 @@ def phase_jobs(plan: dict[str, Any]) -> list[dict[str, Any]]:
     for phase in plan["phases"]:
         phase_id = phase_id_for_plan_phase(phase)
         current_phase_names: list[str] = []
+        phase_execution = {field: phase[field] for field in workflow_plan.EXECUTION_FIELDS if field in phase}
         for job in phase["jobs"]:
             flattened = dict(job)
             flattened["stage"] = flattened.get("stage") or phase["name"]
             flattened["phase_id"] = phase_id
+            if phase_execution:
+                flattened["_phase_execution"] = phase_execution
             dependencies = []
             raw_depends = flattened.get("depends_on")
             if isinstance(raw_depends, list):
@@ -112,6 +125,23 @@ def phase_jobs(plan: dict[str, Any]) -> list[dict[str, Any]]:
             current_phase_names.append(str(flattened["name"]))
         previous_phase_names = current_phase_names
     return jobs
+
+
+def resolve_job_execution_fields(
+    plan: dict[str, Any],
+    job: dict[str, Any],
+) -> dict[str, Any]:
+    """Return effective execution fields for one job: root plan < phase < job."""
+    result: dict[str, Any] = {}
+    phase_exec = job.get("_phase_execution") or {}
+    for field in workflow_plan.EXECUTION_FIELDS:
+        if field in job and job[field] not in (None, ""):
+            result[field] = job[field]
+        elif field in phase_exec and phase_exec[field] not in (None, ""):
+            result[field] = phase_exec[field]
+        elif field in plan and plan[field] not in (None, ""):
+            result[field] = plan[field]
+    return result
 
 
 def prepare_worktree_lanes(run_id: str, jobs: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -310,22 +340,27 @@ def apply_workflow(args: argparse.Namespace) -> int:
     merge_plan_options(args, plan, source.parent)
     args.result_schema_obj = workflow_run_codex._resolve_schema(args.result_schema) if args.result_schema else None
     jobs = phase_jobs(plan)
-    provider = workflow_run_codex.build_provider(args)
-    run = workflow_run_codex.create_run(args, jobs, provider)
+    default_provider = workflow_run_codex.build_provider(args)
+    run = workflow_run_codex.create_run(args, jobs, default_provider)
     install_plan_phases(run["run_id"], plan)
     record_plan_decisions(run["run_id"], plan)
     record_plan_artifact(run["run_id"], plan)
     jobs = prepare_worktree_lanes(run["run_id"], jobs, args)
     for index, job in enumerate(jobs):
+        job_fields = resolve_job_execution_fields(plan, job)
+        cli_explicit = getattr(args, "_cli_explicit", {})
+        job_provider = _build_job_provider(args, job_fields, default_provider)
+        effective_model = cli_explicit.get("model", job_fields.get("model"))
         run = workflow_run_codex.add_agent(
             run,
             job,
             args,
-            provider,
+            job_provider,
             index,
             stage=job.get("stage", ""),
             depends_on=job.get("depends_on", ""),
             phase_id=job.get("phase_id"),
+            model_override=effective_model,
         )
     print(json.dumps({"run_id": run["run_id"], "path": run["paths"]["run_json"], "jobs": len(jobs)}, indent=2))
     if args.dry_run:
@@ -335,8 +370,36 @@ def apply_workflow(args: argparse.Namespace) -> int:
         if args.runner == "ccc" and args.ccc_runner:
             replay.extend(["--ccc-runner", args.ccc_runner])
         print("command:", shlex.join(replay))
-    status = asyncio.run(workflow_run_codex.run_all(workflow_state.load_run(run["run_id"]), args, provider))
+    status = asyncio.run(workflow_run_codex.run_all(workflow_state.load_run(run["run_id"]), args, default_provider))
     return 0 if status == "completed" else 1
+
+
+def _build_job_provider(
+    args: argparse.Namespace,
+    job_fields: dict[str, Any],
+    default_provider: workflow_run_codex.RunnerProvider,
+) -> workflow_run_codex.RunnerProvider:
+    """Build a provider for one job if its runner differs from the run default."""
+    cli_explicit = getattr(args, "_cli_explicit", {})
+    job_runner = job_fields.get("runner")
+    if not job_runner or (job_runner == args.runner and "runner" not in cli_explicit):
+        return default_provider
+    effective_runner = cli_explicit.get("runner", job_runner)
+    if effective_runner == args.runner:
+        return default_provider
+    job_args = argparse.Namespace(**vars(args))
+    job_args.runner = effective_runner
+    job_args.ccc_runner = cli_explicit.get("ccc_runner", job_fields.get("ccc_runner") or args.ccc_runner)
+    job_args.ccc_control = job_fields.get("ccc_control") if job_fields.get("ccc_control") is not None else args.ccc_control
+    job_args.ccc_output_mode = job_fields.get("ccc_output_mode") or args.ccc_output_mode
+    job_args.permission_mode = cli_explicit.get("permission_mode", job_fields.get("permission_mode") or args.permission_mode)
+    job_args.cli_agent = cli_explicit.get("cli_agent", job_fields.get("cli_agent") or args.cli_agent)
+    job_args.timeout_secs = cli_explicit.get("timeout_secs", job_fields.get("timeout_secs") if job_fields.get("timeout_secs") is not None else args.timeout_secs)
+    job_args.kimi_max_steps_per_turn = cli_explicit.get("kimi_max_steps_per_turn", job_fields.get("kimi_max_steps_per_turn") if job_fields.get("kimi_max_steps_per_turn") is not None else args.kimi_max_steps_per_turn)
+    job_args.model = cli_explicit.get("model", job_fields.get("model") or args.model)
+    job_args.sandbox = cli_explicit.get("sandbox", job_fields.get("sandbox") or args.sandbox)
+    job_args.approval = cli_explicit.get("approval", job_fields.get("approval") or args.approval)
+    return workflow_run_codex.build_provider(job_args)
 
 
 def build_parser() -> argparse.ArgumentParser:

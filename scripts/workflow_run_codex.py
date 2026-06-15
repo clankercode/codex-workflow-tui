@@ -568,6 +568,7 @@ def add_agent(
     stage: str = "",
     depends_on: str = "",
     phase_id: str | None = None,
+    model_override: str | None = None,
 ) -> dict[str, Any]:
     prefix = workflow_state.slugify(provider.name, fallback="worker")
     agent_id = f"{prefix}-{index + 1:02d}-{workflow_state.slugify(job['name'])}"
@@ -578,6 +579,7 @@ def add_agent(
     stderr_path = logs / f"{agent_id}.stderr.log"
     output_path = artifacts / f"{agent_id}.final.md"
     prompt_path.write_text(job["prompt"] + "\n", encoding="utf-8")
+    effective_model = model_override or args.model or ""
 
     agent_args = argparse.Namespace(
         run=run["run_id"],
@@ -590,7 +592,7 @@ def add_agent(
         prompt=None,
         prompt_file=str(prompt_path),
         cwd=str(job.get("cwd") or args.cwd),
-        model=args.model or "",
+        model=effective_model,
         thread_id=None,
         process_id=None,
         write_scope=job.get("write_scope") or [],

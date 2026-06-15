@@ -53,8 +53,7 @@ def normalize_workflow(raw: dict[str, Any], *, fallback_title: str) -> dict[str,
         if not isinstance(jobs_raw, list) or not jobs_raw:
             raise SystemExit("each workflow phase must contain a non-empty jobs array")
         jobs = [normalize_job(item, index) for index, item in enumerate(jobs_raw)]
-        phases.append(
-            {
+        phase = {
                 "name": phase_name,
                 "title": str(phase_raw.get("title") or phase_raw.get("name") or phase_name).strip(),
                 "summary": str(phase_raw.get("summary") or "").strip(),
@@ -64,7 +63,10 @@ def normalize_workflow(raw: dict[str, Any], *, fallback_title: str) -> dict[str,
                 "decisions": normalize_object_list(phase_raw.get("decisions"), "phase decisions"),
                 "jobs": jobs,
             }
-        )
+        for field in EXECUTION_FIELDS:
+            if field in phase_raw:
+                phase[field] = phase_raw[field]
+        phases.append(phase)
     plan = {
         "schema_version": int(raw.get("schema_version") or 1),
         "kind": str(raw.get("kind") or "workflow-plan"),
@@ -101,6 +103,9 @@ def normalize_job(item: Any, index: int) -> dict[str, Any]:
     job = {"name": name, "role": str(item.get("role") or name).strip() or name, "prompt": prompt}
     for field in ("stage", "depends_on", "schema", "cwd", "write_scope", "worktree"):
         if item.get(field):
+            job[field] = item[field]
+    for field in EXECUTION_FIELDS:
+        if field in item:
             job[field] = item[field]
     return job
 

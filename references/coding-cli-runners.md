@@ -33,6 +33,37 @@ workflow apply workflows/review.workflow.json \
 Plans may also use `phases[].jobs`. `workflow apply` records the normalized plan as a `workflow-plan` artifact, preserves execution metadata such as `cwd`, `runner`, `ccc_runner`, `tags`, sandbox/approval settings, and caps, and lets CLI flags override plan defaults.
 Job `name` values are dependency keys, so keep them unique and stable across the whole plan when using `depends_on` or phase staging.
 
+### Per-Job Runner Configuration
+
+Jobs and phases may override execution settings such as `runner`, `ccc_runner`, `model`, `sandbox`, `approval`, `permission_mode`, `cli_agent`, `timeout_secs`, `kimi_max_steps_per_turn`, and `result_schema`. The precedence is: root plan defaults < phase values < job values. Explicit CLI flags still override all plan-provided values when the operator forces a run-wide setting.
+
+```json
+{
+  "title": "Mixed runners",
+  "runner": "codex-direct",
+  "model": "default-model",
+  "phases": [
+    {
+      "name": "research",
+      "runner": "ccc",
+      "ccc_runner": "@mm",
+      "jobs": [
+        {"name": "deep", "prompt": "Research deeply.", "model": "special-model"},
+        {"name": "quick", "prompt": "Quick scan."}
+      ]
+    },
+    {
+      "name": "implement",
+      "jobs": [
+        {"name": "impl", "prompt": "Implement.", "runner": "ccc", "ccc_runner": "@kimi"}
+      ]
+    }
+  ]
+}
+```
+
+In this example: `deep` uses `ccc @mm` with `special-model`; `quick` uses `ccc @mm` with the root `default-model`; `impl` uses `ccc @kimi`; and any future jobs without overrides would use `codex-direct`.
+
 Jobs may declare `worktree: true` or a `worktree` object with `path`, `branch`, `base`, `merge_target`, `owner`, or `label`. `workflow apply` creates the lane before launch, stores the normalized lane metadata on the agent, and runs that worker with the lane as its cwd. Omitted paths default under the workflow run state directory. `--dry-run` records planned lanes without creating them.
 
 Multi-phase plans are flattened into staged jobs with dependency edges and declared phase/gate/check records. This gives ordered execution, failure propagation, and visible phase status in the run state.

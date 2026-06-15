@@ -6207,6 +6207,156 @@ class WorkflowScriptTests(unittest.TestCase):
 
         self.assertEqual(plan["ccc_control"], ["@reviewer"])
 
+    def test_wf_apply_honors_job_runner_overrides(self) -> None:
+        """Per-job execution fields must override phase/root defaults and be visible in agent state."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            self.install_timed_fake_ccc(fake_bin)
+            plan_path = tmp_path / "mixed.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Mixed Runners",
+                        "runner": "codex-direct",
+                        "model": "root-model",
+                        "sandbox": "read-only",
+                        "phases": [
+                            {
+                                "name": "research",
+                                "runner": "ccc",
+                                "ccc_runner": "@mm",
+                                "model": "phase-model",
+                                "jobs": [
+                                    {"name": "deep-research", "prompt": "Research deeply.", "model": "job-model"},
+                                    {"name": "quick-scan", "prompt": "Quick scan."},
+                                ],
+                            },
+                            {
+                                "name": "implement",
+                                "jobs": [
+                                    {"name": "impl-a", "prompt": "Implement A.", "runner": "ccc", "ccc_runner": "@kimi"},
+                                    {"name": "impl-b", "prompt": "Implement B."},
+                                ],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_EVENTS"] = str(tmp_path / "ccc-events.jsonl")
+            env["CCC_FAKE_ACTIVE"] = str(tmp_path / "ccc-active.txt")
+            env["CCC_FAKE_MAX"] = str(tmp_path / "ccc-max.txt")
+            env["CCC_FAKE_LOCK"] = str(tmp_path / "ccc.lock")
+            env["CCC_FAKE_RUN_ROOT"] = str(tmp_path / "ccc-runs")
+            result = self.run_wf(
+                "apply",
+                str(plan_path),
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            agents_by_name = {agent["name"]: agent for agent in run["agents"]}
+
+            self.assertEqual(run["status"], "completed")
+
+            # deep-research: job overrides model, phase overrides runner
+            deep = agents_by_name["deep-research"]
+            self.assertEqual(deep["model"], "job-model")
+            self.assertIn("ccc", deep["agent_type"])
+            self.assertIn("mm", deep["agent_type"])
+
+            # quick-scan: inherits phase runner/model
+            quick = agents_by_name["quick-scan"]
+            self.assertEqual(quick["model"], "phase-model")
+            self.assertIn("ccc", quick["agent_type"])
+            self.assertIn("mm", quick["agent_type"])
+
+            # impl-a: job overrides runner within a root-runner phase
+            impl_a = agents_by_name["impl-a"]
+            self.assertIn("ccc", impl_a["agent_type"])
+            self.assertIn("kimi", impl_a["agent_type"])
+
+            # impl-b: inherits root runner (codex-direct)
+            impl_b = agents_by_name["impl-b"]
+            self.assertEqual(impl_b["agent_type"], "codex-exec")
+
+            # Verify the normalized plan artifact preserves execution fields
+            plan_artifact = next(a for a in run["artifacts"] if a["kind"] == "workflow-plan")
+            saved_plan = json.loads(Path(plan_artifact["path"]).read_text(encoding="utf-8"))
+            research_phase = saved_plan["phases"][0]
+            self.assertEqual(research_phase["runner"], "ccc")
+            self.assertEqual(research_phase["ccc_runner"], "@mm")
+            self.assertEqual(research_phase["model"], "phase-model")
+            deep_job = research_phase["jobs"][0]
+            self.assertEqual(deep_job["model"], "job-model")
+            impl_a_job = saved_plan["phases"][1]["jobs"][0]
+            self.assertEqual(impl_a_job["runner"], "ccc")
+            self.assertEqual(impl_a_job["ccc_runner"], "@kimi")
+
+    def test_wf_apply_honors_plan_execution_fields_with_cli_overrides(self) -> None:
+        """CLI flags must still override plan-provided per-job execution fields."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            self.install_timed_fake_ccc(fake_bin)
+            plan_path = tmp_path / "cli-override.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "CLI Override",
+                        "phases": [
+                            {
+                                "name": "work",
+                                "runner": "ccc",
+                                "ccc_runner": "@mm",
+                                "model": "phase-model",
+                                "jobs": [
+                                    {"name": "job-a", "prompt": "Job A.", "runner": "codex-direct", "model": "job-model"},
+                                ],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_FAKE_EVENTS"] = str(tmp_path / "ccc-events.jsonl")
+            env["CCC_FAKE_ACTIVE"] = str(tmp_path / "ccc-active.txt")
+            env["CCC_FAKE_MAX"] = str(tmp_path / "ccc-max.txt")
+            env["CCC_FAKE_LOCK"] = str(tmp_path / "ccc.lock")
+            env["CCC_FAKE_RUN_ROOT"] = str(tmp_path / "ccc-runs")
+            # CLI --model overrides the job's model; --runner overrides the job's runner
+            result = self.run_wf(
+                "apply",
+                str(plan_path),
+                "--runner",
+                "ccc-opencode",
+                "--model",
+                "cli-model",
+                "--startup-delay",
+                "0",
+                env=env,
+            )
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            agent = run["agents"][0]
+
+            self.assertEqual(run["status"], "completed")
+            # CLI model overrides job model
+            self.assertEqual(agent["model"], "cli-model")
+            # CLI runner overrides job runner
+            self.assertEqual(agent["agent_type"], "ccc-opencode")
+
     @slow_test
     def test_wf_runner_matrix_dispatches_to_script(self) -> None:
         """Expose the reusable runner matrix through the installed shell entrypoint."""
