@@ -348,6 +348,204 @@ def cmd_verify(args: argparse.Namespace) -> None:
         raise SystemExit(exit_code or 1)
 
 
+def completed_worktree_lane_agents(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return completed agents with unmerged worktree branch metadata."""
+    lanes = []
+    for agent in run.get("agents", []):
+        worktree = agent.get("worktree")
+        if agent.get("status") != "completed" or not isinstance(worktree, dict):
+            continue
+        if not worktree.get("enabled", True) or not str(worktree.get("branch") or "").strip() or worktree.get("merged_at"):
+            continue
+        lanes.append(agent)
+    return lanes
+
+
+def git_checked(cwd: str, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run git and return captured output without raising."""
+    return subprocess.run(["git", "-C", cwd, *args], text=True, capture_output=True, check=False)
+
+
+def ensure_clean_git_tree(cwd: str) -> None:
+    """Abort before merging lanes into a dirty checkout."""
+    result = git_checked(cwd, "status", "--porcelain")
+    if result.returncode != 0:
+        raise SystemExit(result.stderr.strip() or result.stdout.strip() or "failed to inspect git status")
+    if result.stdout.strip():
+        raise SystemExit("run cwd has uncommitted changes; commit/stash them before merge-lanes")
+
+
+def current_git_branch(cwd: str) -> str:
+    """Return the current branch for a checkout."""
+    result = git_checked(cwd, "branch", "--show-current")
+    if result.returncode != 0:
+        raise SystemExit(result.stderr.strip() or result.stdout.strip() or "failed to inspect git branch")
+    return result.stdout.strip()
+
+
+def merge_output(result: subprocess.CompletedProcess[str], *, status_output: str = "") -> str:
+    """Return a durable merge log body."""
+    parts = []
+    if result.stdout:
+        parts.append(result.stdout)
+    if result.stderr:
+        parts.append(result.stderr)
+    if status_output:
+        parts.append("git status --porcelain:\n" + status_output)
+    return "\n".join(part.strip() for part in parts if part.strip())
+
+
+def record_merge_check(
+    run_id: str,
+    agent_id: str,
+    branch: str,
+    *,
+    cwd: str,
+    status: str,
+    exit_code: int,
+    output: str,
+    merge_commit: str = "",
+) -> str:
+    """Record one lane merge as a check and return its id."""
+    check_id = workflow_state.short_id("chk")
+
+    def mutator(data: dict[str, Any]) -> str:
+        logs_dir = Path(data.get("paths", {}).get("logs_dir") or Path(data.get("paths", {}).get("run_dir", ".")) / "logs")
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / f"{check_id}.log"
+        log_path.write_text(output or status, encoding="utf-8")
+        check = {
+            "check_id": check_id,
+            "ts": workflow_state.now(),
+            "name": f"merge lane {agent_id}",
+            "kind": "merge",
+            "status": status,
+            "required": True,
+            "command": f"git merge --no-edit {branch}",
+            "cwd": cwd,
+            "exit_code": exit_code,
+            "duration_seconds": 0.0,
+            "summary": first_line(output) or status,
+            "log_path": str(log_path),
+            "completed_at": workflow_state.now(),
+            "evidence_path": "",
+            "external_ref": merge_commit,
+        }
+        data.setdefault("checks", []).append(check)
+        return check_id
+
+    _, recorded_id, _ = workflow_state.mutate_run(run_id, mutator)
+    return recorded_id
+
+
+def cmd_merge_lanes(args: argparse.Namespace) -> None:
+    """Merge completed workflow worktree branches back into the run cwd."""
+    run = workflow_state.load_run(args.run)
+    cwd = str(run.get("cwd") or "")
+    if not cwd:
+        raise SystemExit("run has no cwd; cannot merge worktree lanes")
+    lanes = completed_worktree_lane_agents(run)
+    if args.agent:
+        selected = set(args.agent)
+        lanes = [agent for agent in lanes if agent.get("agent_id") in selected or agent.get("name") in selected]
+    if not lanes:
+        print_json({"run_id": args.run, "merged": [], "skipped": [], "conflicts": []})
+        return
+
+    ensure_clean_git_tree(cwd)
+    target_branch = args.target or current_git_branch(cwd)
+    merged: list[str] = []
+    conflicts: list[dict[str, str]] = []
+    skipped: list[str] = []
+    for agent in lanes:
+        agent_id = str(agent.get("agent_id") or "")
+        worktree = agent.get("worktree", {})
+        branch = str(worktree.get("branch") or "").strip()
+        merge_target = str(worktree.get("merge_target") or target_branch).strip()
+        if current_git_branch(cwd) != target_branch:
+            raise SystemExit(f"run cwd is not on target branch {target_branch!r}")
+        if merge_target and target_branch != merge_target:
+            raise SystemExit(f"lane {agent_id} targets {merge_target!r}; current target is {target_branch!r}")
+        if args.dry_run:
+            skipped.append(agent_id)
+            continue
+        workflow_state.mutate_run(
+            args.run,
+            lambda data, agent_id=agent_id, branch=branch: workflow_state.add_event(
+                data,
+                "info",
+                f"worktree lane merge started: {agent_id}",
+                kind="worktree",
+                operation="merge-started",
+                source="workflow_ops.merge_lanes",
+                agent_id=agent_id,
+                data={"branch": branch, "target": target_branch},
+            ),
+        )
+        result = git_checked(cwd, "merge", "--no-edit", branch)
+        if result.returncode != 0:
+            status_result = git_checked(cwd, "status", "--porcelain")
+            output = merge_output(result, status_output=status_result.stdout)
+            if not args.leave_conflicts:
+                git_checked(cwd, "merge", "--abort")
+            check_id = record_merge_check(args.run, agent_id, branch, cwd=cwd, status="failed", exit_code=result.returncode, output=output)
+            conflicts.append({"agent_id": agent_id, "branch": branch, "message": first_line(output), "check_id": check_id})
+            break
+        merge_commit = git_checked(cwd, "rev-parse", "HEAD").stdout.strip()
+        check_id = record_merge_check(
+            args.run,
+            agent_id,
+            branch,
+            cwd=cwd,
+            status="passed",
+            exit_code=0,
+            output=merge_output(result) or f"merged {branch}",
+            merge_commit=merge_commit,
+        )
+        merged.append(agent_id)
+
+        def mutator(data: dict[str, Any]) -> None:
+            state_agent = workflow_state.find_item(data.setdefault("agents", []), "agent_id", agent_id)
+            worktree = state_agent.setdefault("worktree", {})
+            worktree["merged_at"] = workflow_state.now()
+            worktree["merge_status"] = "merged"
+            worktree["merge_commit"] = merge_commit
+            worktree["merge_check_id"] = check_id
+            workflow_state.add_event(
+                data,
+                "info",
+                f"worktree lane merge succeeded: {state_agent.get('name', agent_id)}",
+                kind="worktree",
+                operation="merge-succeeded",
+                source="workflow_ops.merge_lanes",
+                agent_id=agent_id,
+                phase_id=state_agent.get("phase_id"),
+                data={"branch": branch, "merge_target": worktree.get("merge_target", ""), "check_id": check_id, "merge_commit": merge_commit},
+            )
+
+        workflow_state.mutate_run(args.run, mutator)
+
+    if conflicts:
+        conflict = conflicts[0]
+
+        def conflict_mutator(data: dict[str, Any]) -> None:
+            workflow_state.add_event(
+                data,
+                "warning",
+                f"worktree lane merge conflict: {conflict['agent_id']}",
+                kind="worktree",
+                operation="merge-conflicted",
+                source="workflow_ops.merge_lanes",
+                agent_id=conflict["agent_id"],
+                data={"branch": conflict["branch"], "message": conflict["message"], "check_id": conflict["check_id"]},
+            )
+
+        workflow_state.mutate_run(args.run, conflict_mutator)
+    print_json({"run_id": args.run, "merged": merged, "skipped": skipped, "conflicts": conflicts})
+    if conflicts:
+        raise SystemExit(1)
+
+
 def cmd_done(args: argparse.Namespace) -> None:
     """Safely mark a workflow run completed."""
     def mutator(data: dict[str, Any]) -> dict[str, Any]:
@@ -520,6 +718,14 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--evidence-path", help="path to external evidence for record-only verification")
     verify.add_argument("--external-ref", help="external reference URI or ticket for record-only verification")
     verify.set_defaults(func=cmd_verify)
+
+    merge_lanes = sub.add_parser("merge-lanes", help="merge completed worktree lane branches into the run cwd")
+    merge_lanes.add_argument("run")
+    merge_lanes.add_argument("--agent", action="append", help="agent id or name to merge; repeat to select several")
+    merge_lanes.add_argument("--target", help="target branch to require instead of the current branch")
+    merge_lanes.add_argument("--leave-conflicts", action="store_true", help="leave conflicted merge state in place instead of aborting")
+    merge_lanes.add_argument("--dry-run", action="store_true")
+    merge_lanes.set_defaults(func=cmd_merge_lanes)
 
     done = sub.add_parser("done", help="complete a workflow after safety checks")
     done.add_argument("run")

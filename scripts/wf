@@ -57,6 +57,7 @@ Usage:
   $PROG doctor [workflow_ops.py doctor args...]
   $PROG check <run-id> [workflow_ops.py check args...]
   $PROG verify <run-id> [workflow_ops.py verify args...]
+  $PROG merge-lanes <run-id> [workflow_ops.py merge-lanes args...]
   $PROG done <run-id> [workflow_ops.py done args...]
   $PROG block <run-id> <reason>
   $PROG preview [workflow_ops.py preview args...]
@@ -103,7 +104,7 @@ case "$cmd" in
   runner-matrix|matrix|runner-smoke)
     exec python3 "$SCRIPT_DIR/workflow_runner_matrix.py" "$@"
     ;;
-  status|last|doctor|check|verify|done|block|preview|pause|resume|stop)
+  status|last|doctor|check|verify|merge-lanes|done|block|preview|pause|resume|stop)
     exec python3 "$SCRIPT_DIR/workflow_ops.py" "$cmd" "$@"
     ;;
   open)

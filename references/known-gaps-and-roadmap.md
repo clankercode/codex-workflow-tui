@@ -111,7 +111,8 @@ pause, resume, and stop.
   status / `--allow-partial`.
 - `workflow apply` now supports first-class per-job worktree lanes
   (`worktree: true` or a worktree object) and launches workers inside the lane.
-  Automated merge-back/merger-agent orchestration remains future work.
+  `workflow merge-lanes` can merge completed lane branches back into the run cwd;
+  conflict-solving merger agents remain future work.
 - Running managed agents without a liveness source now produce a health warning;
   provide `process_id`, `jsonl_path`, native `thread_id`, or `unmanaged: true`.
 - `ccc --ccc-runner claude` isn't in the selector cwd-forwarding sets, so the
@@ -121,6 +122,6 @@ pause, resume, and stop.
 
 ## Prioritization
 1. **A7** (remaining lock boundary documentation / init locking story).
-2. Automated merge-back/merger-agent orchestration for worktree lanes.
+2. Conflict-solving merger agents for worktree lanes.
 3. Process identity display for running agents.
 4. Everything else as polish.

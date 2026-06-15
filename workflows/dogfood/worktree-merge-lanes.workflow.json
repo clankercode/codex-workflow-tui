@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "Dogfood worktree merge lanes",
+  "goal": "Implement a bounded v1 command for merging completed workflow worktree lanes back into the run cwd.",
+  "cwd": "../..",
+  "runner": "codex-direct",
+  "mock": true,
+  "startup_delay": 0,
+  "max_agents": 1,
+  "tags": ["dogfood", "worktree-lane", "merge-back"],
+  "phases": [
+    {
+      "name": "implementation",
+      "title": "Implementation",
+      "goal": "Implement and test a bounded merge-lanes command for worktree lanes.",
+      "checks": [
+        {
+          "name": "targeted merge-lanes tests",
+          "cmd": "python3 -m unittest tests.test_workflow.WorkflowScriptTests.test_merge_lanes_merges_completed_worktree_branch"
+        },
+        {
+          "name": "fast workflow tests",
+          "cmd": "WORKFLOW_TEST_MODE=fast python3 tests/test_workflow.py"
+        }
+      ],
+      "jobs": [
+        {
+          "name": "merge-lanes",
+          "role": "workflow implementer",
+          "prompt": "Implement a small v1 merge-lanes command for completed workflow worktree lanes. Preserve state/event conventions and add focused tests.",
+          "write_scope": [
+            "scripts/workflow_ops.py",
+            "scripts/wf",
+            "tests/test_workflow.py",
+            "references/operations.md",
+            "references/known-gaps-and-roadmap.md"
+          ],
+          "worktree": {
+            "branch": "workflow/worktree-merge-lanes",
+            "base": "HEAD",
+            "merge_target": "main",
+            "owner": "lead-local"
+          }
+        }
+      ]
+    },
+    {
+      "name": "review",
+      "title": "Review",
+      "goal": "Review merge-lanes behavior for safety and conflicts.",
+      "jobs": [
+        {
+          "name": "review",
+          "role": "reviewer",
+          "prompt": "Review the merge-lanes implementation and tests. Return concrete findings only.",
+          "depends_on": ["merge-lanes"]
+        }
+      ]
+    }
+  ]
+}

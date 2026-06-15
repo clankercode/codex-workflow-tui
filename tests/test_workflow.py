@@ -5901,6 +5901,115 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(codex_args[codex_args.index("--cd") + 1], str(lane_path))
             self.assertTrue(any(event.get("kind") == "worktree" and event.get("operation") == "created" for event in run["events"]))
 
+    def test_merge_lanes_merges_completed_worktree_branch(self) -> None:
+        """Merge completed worktree lane branches back into the workflow run cwd."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "note.txt").write_text("base\n", encoding="utf-8")
+            self.git(repo, "add", "note.txt")
+            self.git(repo, "commit", "-m", "base")
+            self.git(repo, "checkout", "-b", "workflow/test-lane")
+            (repo / "note.txt").write_text("lane\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "lane change")
+            self.git(repo, "checkout", "main")
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            created = self.run_wf("init", "--title", "Merge Lanes", "--prompt", "merge", "--cwd", str(repo), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-impl", "--name", "Implementation", "--status", "completed", env=env)
+            self.run_wf(
+                "add-agent",
+                run_id,
+                "--phase",
+                "phase-impl",
+                "--agent-id",
+                "agent-lane",
+                "--name",
+                "lane",
+                "--agent-type",
+                "codex-exec",
+                "--status",
+                "completed",
+                "--cwd",
+                str(repo),
+                env=env,
+            )
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {"branch": "workflow/test-lane", "path": str(tmp_path / "lane"), "merge_target": "main"}
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            result = self.run_wf("merge-lanes", run_id, env=env)
+            merged = json.loads(result.stdout)
+            run_after = json.loads(run_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(merged["merged"], ["agent-lane"])
+            self.assertEqual((repo / "note.txt").read_text(encoding="utf-8"), "lane\n")
+            self.assertEqual(self.git(repo, "branch", "--show-current").stdout.strip(), "main")
+            self.assertTrue(run_after["agents"][0]["worktree"]["merged_at"])
+            self.assertTrue(run_after["agents"][0]["worktree"]["merge_commit"])
+            self.assertTrue(any(check.get("kind") == "merge" and check.get("status") == "passed" for check in run_after["checks"]))
+            self.assertTrue(any(event.get("kind") == "worktree" and event.get("operation") == "merge-succeeded" for event in run_after["events"]))
+
+    def test_merge_lanes_records_conflict_and_aborts_by_default(self) -> None:
+        """Conflicted lane merges should leave a failed check and clean target checkout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "note.txt").write_text("base\n", encoding="utf-8")
+            self.git(repo, "add", "note.txt")
+            self.git(repo, "commit", "-m", "base")
+            self.git(repo, "checkout", "-b", "workflow/conflict-lane")
+            (repo / "note.txt").write_text("lane\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "lane change")
+            self.git(repo, "checkout", "main")
+            (repo / "note.txt").write_text("main\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "main change")
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            created = self.run_wf("init", "--title", "Conflict Lanes", "--prompt", "merge", "--cwd", str(repo), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-impl", "--name", "Implementation", "--status", "completed", env=env)
+            self.run_wf(
+                "add-agent",
+                run_id,
+                "--phase",
+                "phase-impl",
+                "--agent-id",
+                "agent-conflict",
+                "--name",
+                "lane",
+                "--agent-type",
+                "codex-exec",
+                "--status",
+                "completed",
+                "--cwd",
+                str(repo),
+                env=env,
+            )
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {"branch": "workflow/conflict-lane", "path": str(tmp_path / "lane"), "merge_target": "main"}
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            result = self.run_wf("merge-lanes", run_id, env=env, check=False)
+            run_after = json.loads(run_path.read_text(encoding="utf-8"))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.git(repo, "status", "--porcelain").stdout.strip(), "")
+            self.assertEqual((repo / "note.txt").read_text(encoding="utf-8"), "main\n")
+            self.assertTrue(any(check.get("kind") == "merge" and check.get("status") == "failed" for check in run_after["checks"]))
+            self.assertTrue(any(event.get("kind") == "worktree" and event.get("operation") == "merge-conflicted" for event in run_after["events"]))
+
     def test_wf_apply_honors_plan_execution_fields_with_cli_overrides(self) -> None:
         """Workflow-plan execution metadata should not be silently discarded."""
         with tempfile.TemporaryDirectory() as tmp:

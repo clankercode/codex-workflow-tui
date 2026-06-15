@@ -25,7 +25,15 @@ Job `name` values are dependency keys. Keep them unique and stable across the wh
 
 The launcher records the normalized plan as a `workflow-plan` artifact, preserves execution fields such as `cwd`, `runner`, `ccc_runner`, `tags`, model, sandbox/approval settings, and caps, and lets explicit CLI flags override plan defaults.
 
-Multi-phase apply is currently an execution lift over one normal worker run: it preserves stage order with dependencies, but it does not yet create rich declared phase/gate records.
+Multi-phase apply preserves stage order with dependencies and records declared phases, gates, and planned checks.
+
+Jobs can declare `worktree: true` or a `worktree` object. `workflow apply` creates each lane before launch and runs that worker in the lane cwd. After lane workers complete, merge completed lane branches back into the run cwd:
+
+```bash
+workflow merge-lanes <run-id>
+```
+
+`merge-lanes` only considers completed agents with `worktree.branch` metadata, skips lanes already marked merged, aborts if the run cwd is dirty, and records `worktree` events for successful merges or conflicts. Use `--agent <id-or-name>` to merge selected lanes.
 
 ## Create A Run
 
