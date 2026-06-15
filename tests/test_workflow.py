@@ -7662,6 +7662,132 @@ class StateTruthfulnessTests(unittest.TestCase):
 
         self.assertEqual(violations, ["src/other.py"])
 
+    def test_lane_scope_violations_does_not_match_prefix_collisions(self) -> None:
+        """write_scope must not match path strings that share a prefix without a directory separator."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_ops  # pylint: disable=import-outside-toplevel
+
+        agent = {
+            "agent_id": "agent-prefix",
+            "write_scope": ["src", "tests"],
+            "worktree": {"branch": "workflow/lane", "base": "HEAD"},
+        }
+
+        def fake_git_checked(cwd: str, *args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout="src/main.py\nsrcs/sibling.py\nsrc_test.py\nsrc.md\ntests/ok.py\ntests_old/legacy.py\n",
+                stderr="",
+            )
+
+        original = workflow_ops.git_checked
+        workflow_ops.git_checked = fake_git_checked  # type: ignore[assignment]
+        try:
+            violations = workflow_ops.lane_scope_violations(agent, "/tmp")
+        finally:
+            workflow_ops.git_checked = original  # type: ignore[assignment]
+
+        self.assertEqual(violations, ["srcs/sibling.py", "src_test.py", "src.md", "tests_old/legacy.py"])
+
+    def test_lane_scope_violations_handles_blank_scope_entries(self) -> None:
+        """Blank scope strings should not match every file path."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_ops  # pylint: disable=import-outside-toplevel
+
+        agent = {
+            "agent_id": "agent-blank-scope",
+            "write_scope": ["", "src"],
+            "worktree": {"branch": "workflow/lane", "base": "HEAD"},
+        }
+
+        def fake_git_checked(cwd: str, *args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args, 0, stdout="src/main.py\nother/foo.py\n", stderr="")
+
+        original = workflow_ops.git_checked
+        workflow_ops.git_checked = fake_git_checked  # type: ignore[assignment]
+        try:
+            violations = workflow_ops.lane_scope_violations(agent, "/tmp")
+        finally:
+            workflow_ops.git_checked = original  # type: ignore[assignment]
+
+        self.assertEqual(violations, ["other/foo.py"])
+
+    def test_merge_lanes_dry_run_does_not_mutate_state_with_scope_warnings(self) -> None:
+        """merge-lanes --dry-run must surface scope_warnings without writing scope-violation events."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "src").mkdir()
+            (repo / "src" / "main.py").write_text("print('hello')\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True, text=True, capture_output=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=t@t", "commit", "-m", "base"],
+                check=True, text=True, capture_output=True,
+            )
+            subprocess.run(["git", "-C", str(repo), "checkout", "-b", "workflow/lane"], check=True, text=True, capture_output=True)
+            (repo / "tests").mkdir()
+            (repo / "tests" / "test_main.py").write_text("assert True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True, text=True, capture_output=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=t@t", "commit", "-m", "lane change"],
+                check=True, text=True, capture_output=True,
+            )
+            subprocess.run(["git", "-C", str(repo), "checkout", "main"], check=True, text=True, capture_output=True)
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            wf = str(SCRIPTS / "wf")
+
+            created = subprocess.run(
+                [wf, "init", "--title", "Dry Run Scope", "--prompt", "scope", "--cwd", str(repo)],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            subprocess.run(
+                [wf, "add-phase", run_id, "--phase-id", "phase-impl", "--name", "Impl", "--status", "completed"],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            subprocess.run(
+                [wf, "add-agent", run_id, "--phase", "phase-impl", "--agent-id", "agent-scope",
+                 "--name", "scoped", "--agent-type", "codex-exec", "--status", "completed",
+                 "--write-scope", "src", "--cwd", str(repo)],
+                check=True, text=True, capture_output=True, env=env,
+            )
+
+            run_path = Path(json.loads(created.stdout)["path"])
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {
+                "branch": "workflow/lane",
+                "path": str(tmp_path / "lane"),
+                "merge_target": "main",
+                "base": "HEAD",
+            }
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+            events_before = list(json.loads(run_path.read_text(encoding="utf-8")).get("events", []))
+
+            for _ in range(3):
+                result = subprocess.run(
+                    [wf, "merge-lanes", run_id, "--dry-run"],
+                    check=False, text=True, capture_output=True, env=env,
+                )
+                payload = json.loads(result.stdout)
+                self.assertIn("scope_warnings", payload)
+                self.assertEqual(payload["skipped"], ["agent-scope"])
+                self.assertEqual(payload["merged"], [])
+
+            events_after = json.loads(run_path.read_text(encoding="utf-8")).get("events", [])
+            scope_events = [e for e in events_after if e.get("operation") == "scope-violation"]
+            self.assertEqual(
+                scope_events, [], msg=f"dry-run must not write scope-violation events; got {len(scope_events)}",
+            )
+            self.assertEqual(
+                len(events_after), len(events_before),
+                msg="dry-run must not mutate the run event log",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

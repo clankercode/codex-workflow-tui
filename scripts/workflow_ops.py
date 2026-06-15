@@ -384,7 +384,9 @@ def lane_scope_violations(agent: dict[str, Any], cwd: str) -> list[str]:
         covered = False
         for scope in write_scope:
             scope_str = str(scope).strip().rstrip("/")
-            if file_path == scope_str or file_path.startswith(scope_str + "/") or file_path.startswith(scope_str):
+            if not scope_str:
+                continue
+            if file_path == scope_str or file_path.startswith(scope_str + "/"):
                 covered = True
                 break
         if not covered:
@@ -501,19 +503,20 @@ def cmd_merge_lanes(args: argparse.Namespace) -> None:
         violations = lane_scope_violations(agent, cwd)
         if violations:
             scope_warnings.append({"agent_id": agent_id, "violations": violations})
-            workflow_state.mutate_run(
-                args.run,
-                lambda data, agent_id=agent_id, violations=violations: workflow_state.add_event(
-                    data,
-                    "warning",
-                    f"lane scope violation: {agent_id} changed {len(violations)} file(s) outside write_scope",
-                    kind="worktree",
-                    operation="scope-violation",
-                    source="workflow_ops.merge_lanes",
-                    agent_id=agent_id,
-                    data={"violations": violations[:20]},
-                ),
-            )
+            if not args.dry_run:
+                workflow_state.mutate_run(
+                    args.run,
+                    lambda data, agent_id=agent_id, violations=violations: workflow_state.add_event(
+                        data,
+                        "warning",
+                        f"lane scope violation: {agent_id} changed {len(violations)} file(s) outside write_scope",
+                        kind="worktree",
+                        operation="scope-violation",
+                        source="workflow_ops.merge_lanes",
+                        agent_id=agent_id,
+                        data={"violations": violations[:20]},
+                    ),
+                )
         if args.dry_run:
             skipped.append(agent_id)
             continue
