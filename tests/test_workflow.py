@@ -6110,7 +6110,7 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertTrue(any(check.get("kind") == "merge" and check.get("status") == "failed" for check in run_after["checks"]))
             self.assertTrue(any(event.get("kind") == "worktree" and event.get("operation") == "merge-conflicted" for event in run_after["events"]))
 
-    def test_wf_apply_honors_plan_execution_fields_with_cli_overrides(self) -> None:
+    def test_wf_apply_cli_overrides_plan_cwd_tags_and_caps(self) -> None:
         """Workflow-plan execution metadata should not be silently discarded."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
