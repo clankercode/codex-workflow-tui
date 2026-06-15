@@ -37,7 +37,7 @@ workflow merge-lanes <run-id>
 
 `merge-lanes` only considers completed agents with `worktree.branch` metadata, skips lanes already marked merged, aborts if the run cwd is dirty, and records `worktree` events for successful merges or conflicts. Use `--agent <id-or-name>` to merge selected lanes.
 
-When a lane has a declared `write_scope`, `merge-lanes` checks whether changed files fall outside that scope and records a `scope-violation` warning event and includes `scope_warnings` in the merge result. This catches workers that edited files beyond their owned lane before integration.
+When a lane has a declared `write_scope`, `merge-lanes` checks whether changed files fall outside that scope and records a `scope-violation` warning event and includes `scope_warnings` in the merge result. This catches workers that edited files beyond their owned lane before integration. If the scope check itself cannot run (e.g. an unresolvable base ref), `merge-lanes` records a `scope-check-error` warning instead of silently reporting a clean pass.
 
 ### Conflict Assist
 

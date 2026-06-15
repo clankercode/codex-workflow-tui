@@ -361,11 +361,23 @@ def completed_worktree_lane_agents(run: dict[str, Any]) -> list[dict[str, Any]]:
     return lanes
 
 
+class ScopeCheckError(RuntimeError):
+    """Raised when lane write_scope verification cannot be computed.
+
+    A failed ``git diff`` (e.g. an unresolvable base ref) must not look like a
+    clean "no violations" pass; the caller surfaces it as a visible warning.
+    """
+
+
 def lane_scope_violations(agent: dict[str, Any], cwd: str) -> list[str]:
     """Return files changed in a lane that fall outside declared write_scope.
 
     Returns a list of changed file paths that are not covered by any
     write_scope entry.  An empty write_scope means no scope restriction.
+
+    Raises :class:`ScopeCheckError` when the underlying ``git diff`` cannot
+    run, so the caller can record a visible "check skipped" warning instead of
+    silently treating the failure as a clean pass.
     """
     write_scope = agent.get("write_scope") or []
     if not write_scope:
@@ -377,7 +389,8 @@ def lane_scope_violations(agent: dict[str, Any], cwd: str) -> list[str]:
         return []
     result = git_checked(cwd, "diff", "--name-only", f"{base}...{branch}")
     if result.returncode != 0:
-        return []
+        detail = (result.stderr or result.stdout).strip()
+        raise ScopeCheckError(detail or f"git diff {base}...{branch} failed (exit {result.returncode})")
     changed_files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     violations: list[str] = []
     for file_path in changed_files:
@@ -500,23 +513,46 @@ def cmd_merge_lanes(args: argparse.Namespace) -> None:
             raise SystemExit(f"run cwd is not on target branch {target_branch!r}")
         if merge_target and target_branch != merge_target:
             raise SystemExit(f"lane {agent_id} targets {merge_target!r}; current target is {target_branch!r}")
-        violations = lane_scope_violations(agent, cwd)
-        if violations:
-            scope_warnings.append({"agent_id": agent_id, "violations": violations})
+        violations: list[str] = []
+        scope_error = ""
+        try:
+            violations = lane_scope_violations(agent, cwd)
+        except ScopeCheckError as exc:
+            scope_error = str(exc)
+        if violations or scope_error:
+            scope_entry: dict[str, Any] = {"agent_id": agent_id, "violations": violations}
+            if scope_error:
+                scope_entry["error"] = scope_error
+            scope_warnings.append(scope_entry)
             if not args.dry_run:
-                workflow_state.mutate_run(
-                    args.run,
-                    lambda data, agent_id=agent_id, violations=violations: workflow_state.add_event(
-                        data,
-                        "warning",
-                        f"lane scope violation: {agent_id} changed {len(violations)} file(s) outside write_scope",
-                        kind="worktree",
-                        operation="scope-violation",
-                        source="workflow_ops.merge_lanes",
-                        agent_id=agent_id,
-                        data={"violations": violations[:20]},
-                    ),
-                )
+                if scope_error:
+                    workflow_state.mutate_run(
+                        args.run,
+                        lambda data, agent_id=agent_id, msg=scope_error: workflow_state.add_event(
+                            data,
+                            "warning",
+                            f"lane scope check could not run for {agent_id}: {msg}",
+                            kind="worktree",
+                            operation="scope-check-error",
+                            source="workflow_ops.merge_lanes",
+                            agent_id=agent_id,
+                            data={"error": msg[:500]},
+                        ),
+                    )
+                else:
+                    workflow_state.mutate_run(
+                        args.run,
+                        lambda data, agent_id=agent_id, violations=violations: workflow_state.add_event(
+                            data,
+                            "warning",
+                            f"lane scope violation: {agent_id} changed {len(violations)} file(s) outside write_scope",
+                            kind="worktree",
+                            operation="scope-violation",
+                            source="workflow_ops.merge_lanes",
+                            agent_id=agent_id,
+                            data={"violations": violations[:20]},
+                        ),
+                    )
         if args.dry_run:
             skipped.append(agent_id)
             continue

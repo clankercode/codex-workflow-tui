@@ -7788,6 +7788,163 @@ class StateTruthfulnessTests(unittest.TestCase):
                 msg="dry-run must not mutate the run event log",
             )
 
+    def test_empty_output_file_is_treated_as_no_output(self) -> None:
+        """A zero-byte final-output artifact must not count as having output."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            empty_out = Path(tmp) / "empty.md"
+            empty_out.write_text("", encoding="utf-8")
+            agent = {
+                "agent_id": "agent-empty-file",
+                "name": "Empty File Agent",
+                "status": "completed",
+                "phase_id": "phase-impl",
+                "result": "",
+                "summary": "",
+                "jsonl_path": str(Path(tmp) / "worker.jsonl"),
+                "output_path": str(empty_out),
+                "exit_code": 0,
+            }
+            run = {
+                "run_id": "wf-test",
+                "status": "running",
+                "phases": [{"phase_id": "phase-impl", "status": "running"}],
+                "agents": [agent],
+                "artifacts": [],
+                "paths": {"run_dir": tmp},
+            }
+            findings = workflow_health.analyze_run(run)
+            self.assertTrue(any(item["kind"] == "agent-output-empty" for item in findings))
+
+    def test_missing_output_file_does_not_double_report_empty(self) -> None:
+        """A missing output file reports agent-output-missing, not also agent-output-empty."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = {
+                "agent_id": "agent-missing-file",
+                "name": "Missing File Agent",
+                "status": "completed",
+                "phase_id": "phase-impl",
+                "result": "",
+                "summary": "",
+                "jsonl_path": str(Path(tmp) / "worker.jsonl"),
+                "output_path": str(Path(tmp) / "absent.md"),
+                "exit_code": 0,
+            }
+            run = {
+                "run_id": "wf-test",
+                "status": "running",
+                "phases": [{"phase_id": "phase-impl", "status": "running"}],
+                "agents": [agent],
+                "artifacts": [],
+                "paths": {"run_dir": tmp},
+            }
+            findings = workflow_health.analyze_run(run)
+            kinds = {item["kind"] for item in findings if item.get("agent_id") == "agent-missing-file"}
+            self.assertIn("agent-output-missing", kinds)
+            self.assertNotIn("agent-output-empty", kinds)
+
+    def test_stop_result_without_reason_is_not_promised_as_fallback(self) -> None:
+        """A stop_result dict without a reason must not be advertised as a termination fallback."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        agent = {
+            "agent_id": "agent-no-reason",
+            "name": "No Reason Agent",
+            "status": "cancelled",
+            "phase_id": "phase-impl",
+            "result": "",
+            "summary": "",
+            "jsonl_path": "logs/worker.jsonl",
+            "output_path": "",
+            "exit_code": None,
+            "stop_result": {"sent": False},
+        }
+        run = {
+            "run_id": "wf-test",
+            "status": "running",
+            "phases": [{"phase_id": "phase-impl", "status": "running"}],
+            "agents": [agent],
+            "artifacts": [],
+        }
+        findings = workflow_health.analyze_run(run)
+        empty_warning = [item for item in findings if item["kind"] == "agent-output-empty"]
+        self.assertEqual(len(empty_warning), 1)
+        self.assertNotIn("termination result", empty_warning[0]["message"])
+        self.assertIn("transcript", empty_warning[0]["message"])
+
+    def test_lane_scope_violations_raises_on_unresolvable_diff(self) -> None:
+        """A failed git diff must surface as a ScopeCheckError, not a silent clean pass."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_ops  # pylint: disable=import-outside-toplevel
+
+        agent = {
+            "agent_id": "agent-bad-base",
+            "write_scope": ["src"],
+            "worktree": {"branch": "workflow/lane", "base": "nonexistent-ref-xyz"},
+        }
+        with self.assertRaises(workflow_ops.ScopeCheckError):
+            workflow_ops.lane_scope_violations(agent, "/tmp")
+
+    def test_merge_lanes_surfaces_scope_check_error_instead_of_silent_pass(self) -> None:
+        """merge-lanes must record a scope-check-error warning when the diff ref is unresolvable."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "src").mkdir()
+            (repo / "src" / "main.py").write_text("print('hello')\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True, text=True, capture_output=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=t@t", "commit", "-m", "base"],
+                check=True, text=True, capture_output=True,
+            )
+
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            wf = str(SCRIPTS / "wf")
+
+            created = subprocess.run(
+                [wf, "init", "--title", "Bad Base", "--prompt", "scope", "--cwd", str(repo)],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            subprocess.run(
+                [wf, "add-phase", run_id, "--phase-id", "phase-impl", "--name", "Impl", "--status", "completed"],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            subprocess.run(
+                [wf, "add-agent", run_id, "--phase", "phase-impl", "--agent-id", "agent-bad",
+                 "--name", "badbase", "--agent-type", "codex-exec", "--status", "completed",
+                 "--write-scope", "src", "--cwd", str(repo)],
+                check=True, text=True, capture_output=True, env=env,
+            )
+
+            run_path = Path(json.loads(created.stdout)["path"])
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {
+                "branch": "workflow/missing-lane",
+                "path": str(tmp_path / "lane"),
+                "merge_target": "main",
+                "base": "HEAD",
+            }
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            result = subprocess.run(
+                [wf, "merge-lanes", run_id, "--dry-run"],
+                check=False, text=True, capture_output=True, env=env,
+            )
+            payload = json.loads(result.stdout)
+            self.assertIn("scope_warnings", payload)
+            warning = next(w for w in payload["scope_warnings"] if w["agent_id"] == "agent-bad")
+            self.assertIn("error", warning)
+
 
 if __name__ == "__main__":
     unittest.main()

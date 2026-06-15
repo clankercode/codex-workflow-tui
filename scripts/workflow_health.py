@@ -68,6 +68,18 @@ def resolve_run_path(run: dict[str, Any], path_value: Any, fallback_dir: str | N
     return run_dir / path
 
 
+def path_has_content(path: Path | None) -> bool:
+    """Return true when a path exists and is a non-empty file.
+
+    An empty (zero-byte) final-output artifact is not useful output; treating
+    it as "has output" would hide agents that finished with a blank artifact.
+    """
+    try:
+        return path is not None and path.exists() and path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def agent_has_liveness_source(agent: dict[str, Any]) -> bool:
     """Return true when a running agent has enough metadata to inspect liveness."""
     if agent.get("unmanaged") is True:
@@ -323,7 +335,8 @@ def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SEC
                     )
                 )
         output_path = resolve_run_path(run, agent.get("output_path"), "artifacts")
-        if status == "completed" and output_path is not None and not output_path.exists():
+        output_missing = status == "completed" and output_path is not None and not output_path.exists()
+        if output_missing:
             findings.append(
                 issue(
                     run=run,
@@ -342,10 +355,12 @@ def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SEC
         if status in {"completed", "failed", "cancelled"}:
             has_output_text = bool(str(agent.get("result") or "").strip())
             has_summary = bool(str(agent.get("summary") or "").strip())
-            has_output_file = output_path is not None and output_path.exists()
+            has_output_file = path_has_content(output_path)
             has_jsonl = bool(str(agent.get("jsonl_path") or "").strip())
             has_latest_output = bool(str(agent.get("latest_output") or "").strip())
-            if not has_output_text and not has_summary and not has_output_file and not has_latest_output:
+            # When the declared output file is missing, agent-output-missing already
+            # covers the root cause; don't double-report it as an empty-output warning.
+            if not output_missing and not has_output_text and not has_summary and not has_output_file and not has_latest_output:
                 fallback_sources = []
                 if has_jsonl:
                     fallback_sources.append("transcript")
@@ -353,7 +368,8 @@ def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SEC
                     fallback_sources.append("tool calls")
                 if agent.get("exit_code") is not None:
                     fallback_sources.append("exit code")
-                if agent.get("stop_result"):
+                stop_result = agent.get("stop_result")
+                if isinstance(stop_result, dict) and stop_result.get("reason"):
                     fallback_sources.append("termination result")
                 if fallback_sources:
                     findings.append(
