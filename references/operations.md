@@ -25,6 +25,8 @@ Job `name` values are dependency keys. Keep them unique and stable across the wh
 
 The launcher records the normalized plan as a `workflow-plan` artifact, preserves execution fields such as `cwd`, `runner`, `ccc_runner`, `tags`, model, sandbox/approval settings, and caps, and lets explicit CLI flags override plan defaults.
 
+Jobs and phases may override execution settings (`runner`, `ccc_runner`, `model`, `sandbox`, `approval`, etc.) with root < phase < job precedence. CLI flags override all plan-provided values.
+
 Multi-phase apply preserves stage order with dependencies and records declared phases, gates, and planned checks.
 
 Jobs can declare `worktree: true` or a `worktree` object. `workflow apply` creates each lane before launch and runs that worker in the lane cwd. After lane workers complete, merge completed lane branches back into the run cwd:

@@ -113,6 +113,13 @@ pause, resume, and stop.
   (`worktree: true` or a worktree object) and launches workers inside the lane.
   `workflow merge-lanes` can merge completed lane branches back into the run cwd;
   conflict-solving merger agents remain future work.
+- Per-job runner/model configuration is implemented: jobs and phases may override
+  `runner`, `ccc_runner`, `model`, `sandbox`, `approval`, and other execution
+  fields with root < phase < job precedence. CLI flags still override all
+  plan-provided values. `workflow_run_codex.add_agent` accepts `model_override`
+  and `_build_job_provider` resolves per-job providers.
+  **Tests:** `test_wf_apply_honors_job_runner_overrides`,
+  `test_wf_apply_honors_plan_execution_fields_with_cli_overrides`.
 - Running managed agents without a liveness source now produce a health warning;
   provide `process_id`, `jsonl_path`, native `thread_id`, or `unmanaged: true`.
 - `ccc --ccc-runner claude` isn't in the selector cwd-forwarding sets, so the
