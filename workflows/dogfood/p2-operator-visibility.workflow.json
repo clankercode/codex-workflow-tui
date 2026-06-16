@@ -20,22 +20,22 @@
   "decisions": [
     {
       "title": "Per-task worktree isolation",
-      "rationale": "Each task (#10 and #11) runs in its own git worktree branch so implementation and review edits never conflict across tasks. The worktree merges back after both reviewers pass."
+      "rationale": "Each task (#10 and #11) runs in its own git worktree branch so implementation and review edits never conflict across tasks."
     },
     {
       "title": "Two sequential review-and-fix passes per task",
-      "rationale": "Each task gets two reviewers who independently review AND fix issues. Reviewer A uses @glm51 for semantic/logic depth. Reviewer B uses @cx-reviewer for standards/coverage breadth. Both loop until their review returns PASS. Sequential within a worktree to avoid edit conflicts."
+      "rationale": "Each task gets two reviewers who independently review AND fix issues. Reviewer A uses @glm51 for semantic/logic depth. Reviewer B uses @cx-reviewer for standards/coverage breadth. Both loop until their review returns PASS."
     },
     {
-      "title": "Pipeline across tasks, chain within tasks",
-      "rationale": "Tasks #10 and #11 are independent and launch in parallel worktrees. Within each task, impl -> review-A -> review-B is sequential because they share a worktree and review-and-fix implies edits."
+      "title": "Parallel impls, sequential reviews",
+      "rationale": "Both impls run in parallel (same phase, no deps). Reviews run after their impl completes (explicit depends_on). Phase boundary between impl and review ensures impls finish before reviews start."
     }
   ],
   "phases": [
     {
-      "name": "task-10-live-output",
-      "title": "Task #10: Run-level Merged Live Output",
-      "goal": "Add run-level live output that merges all agent streams with stable colored agent-name prefixes.",
+      "name": "impl-phase",
+      "title": "Implementation",
+      "goal": "Implement both features in parallel worktree lanes.",
       "jobs": [
         {
           "name": "impl-10",
@@ -56,11 +56,36 @@
           ]
         },
         {
+          "name": "impl-11",
+          "role": "implementer",
+          "prompt": "You are already running as a ccc worker. Do not run ccc or spawn/delegate to another agent. Work in the current cwd.\n\nImplement dogfood backlog item #11: Compact live monitor/status command.\n\nWhat to build:\n- Add a low-noise `workflow status` / `workflow watch` view for lead agents and humans.\n- One compact row per run/agent with: status, PID, elapsed time, last event, latest output excerpt, tool-call count, token delta.\n- Optional --json output.\n- Avoid direct run.json dumps and broad log tails during active runs.\n- Avoid printing full process command lines by default (worker prompts are huge); show only PID/process group, runner type, elapsed time, and safe command basename unless --verbose.\n- Support long quiet waits without repeatedly opening helper sessions.\n- Add to the wf CLI wrapper (scripts/wf).\n- Add tests in tests/test_workflow.py.\n\nCode standards:\n- No file over 2000 LOC (hard), flag over 1000 (soft).\n- No duplicated logic.\n- Meaningful names, no magic numbers.\n- One module, one responsibility.\n\nAfter implementing, run: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\n\nCommit with message: feat(workflow): add compact live monitor/status command (#11)\n\nReturn strict JSON with keys: status (pass|blocked), summary (string), files_changed (array), tests_passed (bool), commit (string or null).",
+          "worktree": {
+            "branch": "workflow/p2/impl-11",
+            "base": "HEAD",
+            "merge_target": "main"
+          },
+          "write_scope": [
+            "scripts/workflow_ops.py",
+            "scripts/workflow_health.py",
+            "scripts/workflow_state.py",
+            "scripts/workflow_tui.py",
+            "scripts/wf",
+            "tests/test_workflow.py"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "review-phase",
+      "title": "Review",
+      "goal": "Two-pass review for each task: semantic then standards.",
+      "jobs": [
+        {
           "name": "review-10a",
           "role": "semantic reviewer + fixer",
-          "depends_on": ["impl-10"],
+          "depends_on": "impl-10",
           "ccc_runner": "@glm51",
-          "prompt": "You are already running as a ccc @glm51 review worker. Do not run ccc, do not spawn/delegate to another agent. Work in the current cwd.\n\nReview-and-fix pass for Task #10 (run-level merged live output). The implementation was just committed in this worktree.\n\nReview focus:\n1. Semantic correctness -- does the merged output correctly interleave streams? Are agent-name prefixes stable? Are colors distinct?\n2. Edge cases -- what happens with 0 agents? 1 agent? Agent that produces no output? Agent that fails mid-stream?\n3. State lifecycle -- does the merged view update correctly as agents start/stop/complete?\n4. Test coverage -- are the new features tested? Are edge cases covered?\n5. No behavioral regression in existing tests.\n\nReview-and-fix loop:\n- Review the code and run tests.\n- If you find concrete bugs, fix them narrowly and commit: fix(workflow): address glm51 review for #10\n- If no bugs, do not commit.\n- Re-run tests after any fix.\n- Repeat until your review returns PASS.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\n\nReturn strict JSON with keys: status (pass|fixed|blocked), findings (array of {severity, file, line, issue, fix}), tests_passed (bool), commits (array), notes.",
+          "prompt": "You are already running as a ccc @glm51 review worker. Do not run ccc, do not spawn/delegate to another agent. Work in the current cwd.\n\nReview-and-fix pass for Task #10 (run-level merged live output). The implementation was just committed in this worktree.\n\nReview focus:\n1. Semantic correctness\n2. Edge cases (0/1/N agents, failures)\n3. State lifecycle\n4. Test coverage\n5. No behavioral regression\n\nReview-and-fix loop: fix and commit until PASS.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\n\nReturn strict JSON: status, findings, tests_passed, commits, notes.",
           "worktree": {
             "branch": "workflow/p2/impl-10",
             "base": "HEAD",
@@ -78,9 +103,9 @@
         {
           "name": "review-10b",
           "role": "standards reviewer + fixer",
-          "depends_on": ["review-10a"],
+          "depends_on": "review-10a",
           "ccc_runner": "@cx-reviewer",
-          "prompt": "You are already running as a ccc @cx-reviewer review worker. Do not run ccc, do not spawn/delegate to another agent. Work in the current cwd.\n\nReview-and-fix pass for Task #10 (run-level merged live output). A previous semantic review has already been applied in this worktree.\n\nReview focus:\n1. Code standards -- no file over 2000 LOC, no duplication, meaningful names, consistent error handling.\n2. Test quality -- are tests deterministic? Do they use fixtures? Are snapshot tests up to date?\n3. Re-export completeness -- are all new public symbols re-exported from workflow_tui.py?\n4. Integration -- does the merged live output work with the existing TUI app (workflow_tui_app.py)?\n5. Check the previous reviewer's fixes -- are they correct? Do they introduce new issues?\n\nReview-and-fix loop:\n- Review the code and run tests.\n- If you find concrete issues, fix them narrowly and commit: fix(workflow): address cx-reviewer review for #10\n- If no issues, do not commit.\n- Re-run tests after any fix.\n- Repeat until your review returns PASS.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\n\nReturn strict JSON with keys: status (pass|fixed|blocked), findings (array of {severity, file, line, issue, fix}), tests_passed (bool), commits (array), notes.",
+          "prompt": "You are already running as a ccc @cx-reviewer review worker. Do not run ccc, do not spawn/delegate to another agent. Work in the current cwd.\n\nReview-and-fix pass for Task #10. Previous semantic review already applied.\n\nReview focus:\n1. Code standards (LOC, duplication, naming)\n2. Test quality\n3. Re-export completeness\n4. Previous reviewer's fixes\n\nReview-and-fix loop: fix and commit until PASS.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\n\nReturn strict JSON: status, findings, tests_passed, commits, notes.",
           "worktree": {
             "branch": "workflow/p2/impl-10",
             "base": "HEAD",
@@ -94,38 +119,13 @@
             "tests/test_workflow.py",
             "tests/snapshots/"
           ]
-        }
-      ]
-    },
-    {
-      "name": "task-11-compact-status",
-      "title": "Task #11: Compact Live Monitor/Status Command",
-      "goal": "Add a low-noise workflow status/watch view with one compact row per run/agent.",
-      "jobs": [
-        {
-          "name": "impl-11",
-          "role": "implementer",
-          "prompt": "You are already running as a ccc worker. Do not run ccc or spawn/delegate to another agent. Work in the current cwd.\n\nImplement dogfood backlog item #11: Compact live monitor/status command.\n\nWhat to build:\n- Add a low-noise `workflow status` / `workflow watch` view for lead agents and humans.\n- One compact row per run/agent with: status, PID, elapsed time, last event, latest output excerpt, tool-call count, token delta.\n- Optional --json output.\n- Avoid direct run.json dumps and broad log tails during active runs.\n- Avoid printing full process command lines by default (worker prompts are huge); show only PID/process group, runner type, elapsed time, and safe command basename unless --verbose.\n- Support long quiet waits without repeatedly opening helper sessions.\n- Add to the wf CLI wrapper (scripts/wf).\n- Add tests in tests/test_workflow.py.\n\nCode standards:\n- No file over 2000 LOC (hard), flag over 1000 (soft).\n- No duplicated logic.\n- Meaningful names, no magic numbers.\n- One module, one responsibility.\n\nAfter implementing, run: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\n\nCommit with message: feat(workflow): add compact live monitor/status command (#11)\n\nReturn strict JSON with keys: status (pass|blocked), summary (string), files_changed (array), tests_passed (bool), commit (string or null).",
-          "worktree": {
-            "branch": "workflow/p2/impl-11",
-            "base": "HEAD",
-            "merge_target": "main"
-          },
-          "write_scope": [
-            "scripts/workflow_ops.py",
-            "scripts/workflow_health.py",
-            "scripts/workflow_state.py",
-            "scripts/workflow_tui.py",
-            "scripts/wf",
-            "tests/test_workflow.py"
-          ]
         },
         {
           "name": "review-11a",
           "role": "semantic reviewer + fixer",
-          "depends_on": ["impl-11"],
+          "depends_on": "impl-11",
           "ccc_runner": "@glm51",
-          "prompt": "You are already running as a ccc @glm51 review worker. Do not run ccc, do not spawn/delegate to another agent. Work in the current cwd.\n\nReview-and-fix pass for Task #11 (compact live monitor/status command). The implementation was just committed in this worktree.\n\nReview focus:\n1. Semantic correctness -- does the status command show accurate, current data? Is the compact format readable?\n2. Edge cases -- what happens with no runs? Paused runs? Runs with no agents? Very long prompts?\n3. Output discipline -- does --json produce valid JSON? Does --verbose actually expand the right fields?\n4. CLI integration -- does the wf wrapper correctly route to the new command?\n5. Test coverage -- are the new features tested? Edge cases?\n\nReview-and-fix loop:\n- Review the code and run tests.\n- If you find concrete bugs, fix them narrowly and commit: fix(workflow): address glm51 review for #11\n- If no bugs, do not commit.\n- Re-run tests after any fix.\n- Repeat until your review returns PASS.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\n\nReturn strict JSON with keys: status (pass|fixed|blocked), findings (array of {severity, file, line, issue, fix}), tests_passed (bool), commits (array), notes.",
+          "prompt": "You are already running as a ccc @glm51 review worker. Do not run ccc, do not spawn/delegate to another agent. Work in the current cwd.\n\nReview-and-fix pass for Task #11 (compact live monitor/status command). The implementation was just committed in this worktree.\n\nReview focus:\n1. Semantic correctness\n2. Edge cases (no runs, paused, no agents)\n3. Output discipline (--json validity)\n4. CLI integration\n5. Test coverage\n\nReview-and-fix loop: fix and commit until PASS.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\n\nReturn strict JSON: status, findings, tests_passed, commits, notes.",
           "worktree": {
             "branch": "workflow/p2/impl-11",
             "base": "HEAD",
@@ -143,9 +143,9 @@
         {
           "name": "review-11b",
           "role": "standards reviewer + fixer",
-          "depends_on": ["review-11a"],
+          "depends_on": "review-11a",
           "ccc_runner": "@cx-reviewer",
-          "prompt": "You are already running as a ccc @cx-reviewer review worker. Do not run ccc, do not spawn/delegate to another agent. Work in the current cwd.\n\nReview-and-fix pass for Task #11 (compact live monitor/status command). A previous semantic review has already been applied in this worktree.\n\nReview focus:\n1. Code standards -- no file over 2000 LOC, no duplication, meaningful names, consistent error handling.\n2. Test quality -- are tests deterministic? Do they avoid flakiness?\n3. CLI ergonomics -- is the command discoverable? Does --help document the new flags?\n4. Check the previous reviewer's fixes -- are they correct? Do they introduce new issues?\n5. Does the status command avoid opening helper sessions or spawning subprocesses during long waits?\n\nReview-and-fix loop:\n- Review the code and run tests.\n- If you find concrete issues, fix them narrowly and commit: fix(workflow): address cx-reviewer review for #11\n- If no issues, do not commit.\n- Re-run tests after any fix.\n- Repeat until your review returns PASS.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\n\nReturn strict JSON with keys: status (pass|fixed|blocked), findings (array of {severity, file, line, issue, fix}), tests_passed (bool), commits (array), notes.",
+          "prompt": "You are already running as a ccc @cx-reviewer review worker. Do not run ccc, do not spawn/delegate to another agent. Work in the current cwd.\n\nReview-and-fix pass for Task #11. Previous semantic review already applied.\n\nReview focus:\n1. Code standards (LOC, duplication, naming)\n2. Test quality\n3. CLI ergonomics\n4. Previous reviewer's fixes\n\nReview-and-fix loop: fix and commit until PASS.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\n\nReturn strict JSON: status, findings, tests_passed, commits, notes.",
           "worktree": {
             "branch": "workflow/p2/impl-11",
             "base": "HEAD",
