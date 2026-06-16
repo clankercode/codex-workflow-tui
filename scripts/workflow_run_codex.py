@@ -734,6 +734,40 @@ def _ensure_worktree_lane(run_id: str, agent: dict[str, Any], cwd: str) -> str:
     return str(path)
 
 
+def _commit_worktree_changes(agent: dict[str, Any]) -> None:
+    """Commit uncommitted changes in a worktree lane after a successful worker run.
+
+    Strict no-op unless the agent has a worktree lane whose path exists on disk.
+    Never runs git in the run-level cwd for a non-worktree agent.
+    """
+    lane = agent.get("worktree")
+    if not lane:
+        return
+    wt_path = lane.get("path")
+    if not wt_path:
+        return
+    path = Path(wt_path)
+    if not path.exists():
+        return
+    cwd = agent.get("cwd") or str(path)
+    result = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain"],
+        text=True, capture_output=True, check=False,
+    )
+    if not result.stdout.strip():
+        return
+    subprocess.run(["git", "-C", cwd, "add", "-A"], capture_output=True, check=False)
+    commit_result = subprocess.run(
+        ["git", "-C", cwd, "commit", "-m", f"wip: {agent.get('name', 'worker')} implementation"],
+        text=True, capture_output=True, check=False,
+    )
+    if commit_result.returncode == 0:
+        agent_name = agent.get("name", "worker")
+        existing = agent.get("summary") or ""
+        note = f"worktree changes committed for {agent_name}"
+        agent["summary"] = f"{existing}; {note}" if existing else note
+
+
 async def run_worker(
     run_id: str,
     agent: dict[str, Any],
@@ -961,6 +995,8 @@ async def run_worker(
                 return
 
             status = "completed" if exit_code == 0 else "failed"
+            if exit_code == 0:
+                _commit_worktree_changes(agent)
             summary = extracted.summary
             result = extracted.result
             if last_validation_error and status == "failed":
@@ -1407,6 +1443,8 @@ async def run_all(run: dict[str, Any], args: argparse.Namespace, provider: Runne
                 queue.task_done()
 
     for agent in run.get("agents", []):
+        if getattr(args, 'attach_run', None) and agent.get('started_at'):
+            continue
         total_jobs += 1
         enqueue_agent(agent, 0)
     release_pending()
