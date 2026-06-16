@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭──────── Agents: Review ────────╮╭─ overview  runs  ● graph  phases  agents  events  decisions  artifacts ──╮
+╭──────── Agents: Review ────────╮╭─      overview  runs  ● graph  phases  agents  events  decisions  artifa─╮
 │    Workflow                    ││ ╭────────────────────────── Dependency Graph ──────────────────────────╮ │
 │ ▸  Fixture Workflow With Para… ││ │                                    ┌────────────────────────┐        │ │
 │      > RUN > 6m 00s > Securit… ││ │                                    │                        │        │ │

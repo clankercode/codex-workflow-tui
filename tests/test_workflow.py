@@ -9322,6 +9322,102 @@ n        This documents a known gap: merge_token_max does not handle ccc's
         rate = activity.compute_tokens_per_second(1000, "2026-06-11T00:00:00Z", 1781136002.0)
         self.assertIsNotNone(rate, "rate should appear once elapsed time crosses one second")
 
+    def test_token_direction_split_shows_upstream_and_downstream(self) -> None:
+        """When input/output token fields are present, show split upstream/downstream rates."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        tokens = {
+            "known": True,
+            "total": 1234,
+            "total_source": "reported_total",
+            "input": 1000,
+            "cached_input": 0,
+            "output": 200,
+            "reasoning": 34,
+        }
+        result = activity.format_token_total_with_throughput(
+            tokens, started_at="2026-06-11T00:00:00Z", is_live=True, now_epoch=1781136060.0
+        )
+        self.assertIn("up ", result)
+        self.assertIn("down ", result)
+        self.assertIn("/s)", result)
+        self.assertIn("1234", result)
+
+    def test_token_direction_split_falls_back_to_total_when_no_directional_fields(self) -> None:
+        """When only total is present (no input/output), show the old single-rate format."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        tokens = {"known": True, "total": 1000, "total_source": "reported_total"}
+        result = activity.format_token_total_with_throughput(
+            tokens, started_at="2026-06-11T00:00:00Z", is_live=True, now_epoch=1781136060.0
+        )
+        self.assertIn("/s)", result)
+        self.assertNotIn("up ", result)
+        self.assertNotIn("down ", result)
+
+    def test_graph_tab_title_is_padded_for_alignment(self) -> None:
+        """Graph tab detail panel title should have leading spaces to align with other tabs."""
+        rendered = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "graph",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            "--row-index",
+            "0",
+            env=self.snapshot_env(),
+        ).stdout
+        # The graph tab title should have leading spaces before "overview"
+        lines = rendered.splitlines()
+        detail_line = lines[1] if len(lines) > 1 else ""
+        # Find the detail panel border and check title padding
+        self.assertIn("      overview", detail_line)
+
+    @unittest.skipUnless(_phart_available(), "phart not installed")
+    def test_graph_status_icons_present_for_all_agents(self) -> None:
+        """Every agent node in the graph should have a status icon, not a bare name."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_render as render  # pylint: disable=import-outside-toplevel
+
+        run = {
+            "run_id": "wf-graph-icons",
+            "title": "Icon Test",
+            "agents": [
+                {"name": "completed-agent", "status": "completed"},
+                {"name": "running-agent", "status": "running"},
+                {"name": "pending-agent", "status": "pending"},
+                {"name": "failed-agent", "status": "failed"},
+                {"name": "empty-status-agent", "status": ""},
+                {"name": "none-status-agent", "status": None},
+            ],
+            "phases": [],
+        }
+        G = render.build_run_graph(run)
+        self.assertIsNotNone(G)
+        for agent in run["agents"]:
+            name = agent["name"]
+            self.assertIn(name, G.nodes, f"agent {name!r} missing from graph")
+            label = G.nodes[name].get("label", "")
+            self.assertNotEqual(label.strip(), name, f"agent {name!r} has no status icon in label")
+
+    @unittest.skipUnless(_phart_available(), "phart not installed")
+    def test_graph_module_extraction_preserves_imports(self) -> None:
+        """Graph functions should be importable from both workflow_tui_graph and workflow_tui_render."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_graph as graph_mod  # pylint: disable=import-outside-toplevel
+        import workflow_tui_render as render_mod  # pylint: disable=import-outside-toplevel
+
+        for name in ("STATUS_ICONS", "STATUS_COLORS", "_RUNNING_CYCLE", "HAS_PHART", "build_run_graph", "make_run_graph_panel"):
+            self.assertTrue(hasattr(graph_mod, name), f"workflow_tui_graph missing {name}")
+            self.assertTrue(hasattr(render_mod, name), f"workflow_tui_render missing re-exported {name}")
+
 
 class StateTruthfulnessTests(unittest.TestCase):
     """Focused tests for P1 state truthfulness improvements."""
