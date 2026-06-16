@@ -17,6 +17,7 @@ from typing import Any
 sys.dont_write_bytecode = True
 
 import workflow_health
+import workflow_monitor
 import workflow_state
 
 
@@ -1110,6 +1111,25 @@ def build_parser() -> argparse.ArgumentParser:
     open_cmd = sub.add_parser("open", help="open the live workflow TUI")
     open_cmd.add_argument("tui_args", nargs=argparse.REMAINDER)
     open_cmd.set_defaults(func=cmd_open)
+
+    monitor_cmd = sub.add_parser("monitor", help="compact one-shot status view")
+    monitor_cmd.add_argument("--limit", type=workflow_monitor.positive_int, default=12)
+    monitor_cmd.add_argument("--cwd", action="store_true", help="only show runs for the current cwd")
+    monitor_cmd.add_argument("--all", action="store_true", help="include completed runs")
+    monitor_cmd.add_argument("--json", action="store_true")
+    monitor_cmd.add_argument("--no-color", action="store_true")
+    monitor_cmd.add_argument("--agents", action="store_true", help="show per-agent detail rows")
+    monitor_cmd.set_defaults(func=workflow_monitor.cmd_monitor)
+
+    watch_cmd = sub.add_parser("watch", help="continuously refresh compact status")
+    watch_cmd.add_argument("--limit", type=workflow_monitor.positive_int, default=12)
+    watch_cmd.add_argument("--cwd", action="store_true", help="only show runs for the current cwd")
+    watch_cmd.add_argument("--all", action="store_true", help="include completed runs")
+    watch_cmd.add_argument("--json", action="store_true")
+    watch_cmd.add_argument("--no-color", action="store_true")
+    watch_cmd.add_argument("--agents", action="store_true", help="show per-agent detail rows")
+    watch_cmd.add_argument("--interval", type=workflow_monitor.nonnegative_float, default=5.0, help="refresh interval in seconds")
+    watch_cmd.set_defaults(func=workflow_monitor.cmd_watch)
 
     return parser
 

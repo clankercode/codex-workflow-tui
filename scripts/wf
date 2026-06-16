@@ -52,6 +52,8 @@ Usage:
   $PROG resume <run-id> [--reason ...]
   $PROG stop <run-id> [--reason ...] [--no-terminate]
   $PROG status [workflow_ops.py status args...]
+  $PROG monitor [workflow_ops.py monitor args...]
+  $PROG watch [workflow_ops.py watch args...]
   $PROG last [workflow_ops.py last args...]
   $PROG open [workflow_tui.py args...]
   $PROG doctor [workflow_ops.py doctor args...]
@@ -105,7 +107,7 @@ case "$cmd" in
   runner-matrix|matrix|runner-smoke)
     exec python3 "$SCRIPT_DIR/workflow_runner_matrix.py" "$@"
     ;;
-  status|last|doctor|check|verify|merge-lanes|merge-conflicts|done|block|preview|pause|resume|stop)
+  status|last|doctor|check|verify|merge-lanes|merge-conflicts|done|block|preview|pause|resume|stop|monitor|watch)
     exec python3 "$SCRIPT_DIR/workflow_ops.py" "$cmd" "$@"
     ;;
   open)
