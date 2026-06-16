@@ -485,6 +485,72 @@ def record_merge_check(
     return recorded_id
 
 
+def backlog_path(run: dict[str, Any]) -> Path:
+    """Return the durable backlog file path for a run."""
+    run_dir = Path(run.get("paths", {}).get("run_dir") or ".")
+    return run_dir / "artifacts" / "backlog.md"
+
+
+def ensure_backlog_artifact(run_data: dict[str, Any], path: Path) -> bool:
+    """Register the backlog file as an artifact if not already present. Returns True if newly added."""
+    artifacts = run_data.setdefault("artifacts", [])
+    for artifact in artifacts:
+        if artifact.get("kind") == "backlog":
+            return False
+    artifact = {
+        "artifact_id": workflow_state.short_id("art"),
+        "ts": workflow_state.now(),
+        "kind": "backlog",
+        "title": "workflow backlog",
+        "path": str(path),
+    }
+    artifacts.append(artifact)
+    workflow_state.add_event(
+        run_data,
+        "info",
+        "backlog artifact registered",
+        kind="backlog",
+        operation="registered",
+        source="workflow_ops.backlog",
+        data={"path": str(path)},
+    )
+    return True
+
+
+def cmd_backlog(args: argparse.Namespace) -> None:
+    """Create, register, and append to a durable workflow backlog."""
+    finding = args.append or ""
+
+    def mutator(data: dict[str, Any]) -> dict[str, Any]:
+        path = backlog_path(data)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        is_new_artifact = ensure_backlog_artifact(data, path)
+        existed = path.exists()
+        if finding:
+            timestamp = workflow_state.now()
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(f"\n## [{timestamp}] finding\n\n{finding}\n")
+            workflow_state.add_event(
+                data,
+                "info",
+                "backlog entry appended",
+                kind="backlog",
+                operation="appended",
+                source="workflow_ops.backlog",
+                data={"finding": finding[:500]},
+            )
+        elif not existed:
+            path.write_text("# Workflow Backlog\n\nDurable findings and discoveries for this run.\n", encoding="utf-8")
+        return {
+            "path": str(path),
+            "is_new_artifact": is_new_artifact,
+            "appended": bool(finding),
+        }
+
+    _, result, _ = workflow_state.mutate_run(args.run, mutator)
+    print_json(result)
+
+
 def cmd_merge_lanes(args: argparse.Namespace) -> None:
     """Merge completed workflow worktree branches back into the run cwd."""
     run = workflow_state.load_run(args.run)
@@ -1150,6 +1216,11 @@ def build_parser() -> argparse.ArgumentParser:
     preview.add_argument("--max-agents", type=positive_int, default=4)
     preview.add_argument("--startup-delay", type=nonnegative_float, default=1.0)
     preview.set_defaults(func=cmd_preview)
+
+    backlog_cmd = sub.add_parser("backlog", help="create, register, and append to a durable workflow backlog")
+    backlog_cmd.add_argument("run")
+    backlog_cmd.add_argument("--append", help="finding text to append to the backlog")
+    backlog_cmd.set_defaults(func=cmd_backlog)
 
     open_cmd = sub.add_parser("open", help="open the live workflow TUI")
     open_cmd.add_argument("tui_args", nargs=argparse.REMAINDER)
