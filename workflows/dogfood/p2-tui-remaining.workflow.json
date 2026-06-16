@@ -1,0 +1,70 @@
+{
+  "kind": "workflow-plan",
+  "title": "P2 TUI Remaining: #18, #20, #12, #22",
+  "prompt": "Complete remaining P2 TUI/operator-visibility backlog items for the workflow skill.",
+  "cwd": "/home/xertrov/.llm-general/ai-coding/codex/skills/workflow",
+  "runner": "ccc",
+  "ccc_runner": "@mimo25p",
+  "max_agents": 3,
+  "phases": [
+    {
+      "phase_id": "phase-tui-layout",
+      "name": "TUI layout improvements",
+      "jobs": [
+        {
+          "name": "impl-18-runs-detail-layout",
+          "prompt": "Implement #18: Runs detail layout for live output and running agents. In scripts/workflow_tui_render.py and scripts/workflow_tui.py: move live output above the prompt in the runs detail panel, and render running agents as a compact multi-column table instead of a single line so more active agents fit without pushing run metadata away. Update tests/snapshots and tests/test_workflow.py as needed. Run WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow and fix until PASS. Do not launch ccc or other runners; work directly.",
+          "write_scope": ["scripts/workflow_tui.py", "scripts/workflow_tui_render.py", "tests/test_workflow.py", "tests/snapshots/"]
+        },
+        {
+          "name": "impl-20-finished-ago",
+          "prompt": "Implement #20: finished-ago field for completed runs and agents. In scripts/workflow_tui_render.py, agent detail and run detail views should show 'finished Nm ago' once status is terminal, alongside duration. Live runs/agents keep showing elapsed duration. Update tests/snapshots and tests/test_workflow.py. Run WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow and fix until PASS. Do not launch ccc or other runners; work directly.",
+          "write_scope": ["scripts/workflow_tui_render.py", "tests/test_workflow.py", "tests/snapshots/"]
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-events-backlog",
+      "name": "Events and backlog",
+      "depends_on": ["impl-18-runs-detail-layout", "impl-20-finished-ago"],
+      "jobs": [
+        {
+          "name": "impl-12-event-rollover",
+          "prompt": "Implement #12: event rollover visibility in the TUI. When a run has lost old events due to the bounded history, show a clear warning in the TUI (e.g., in the events tab or overview) and point users to durable artifacts/logs for complete history. Update scripts/workflow_tui_render.py, scripts/workflow_tui_activity.py if needed, and tests/test_workflow.py. Run WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow and fix until PASS. Do not launch ccc or other runners; work directly.",
+          "write_scope": ["scripts/workflow_tui_render.py", "scripts/workflow_tui_activity.py", "tests/test_workflow.py", "tests/snapshots/"]
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-tests",
+      "name": "Integration tests",
+      "depends_on": ["impl-18-runs-detail-layout", "impl-20-finished-ago"],
+      "jobs": [
+        {
+          "name": "impl-22-merge-lanes-test",
+          "prompt": "Add a dedicated integration test for merge-lanes auto-resolve (#22). It should create a workflow run with two worktree lanes that both edit the same file, call merge-lanes without WORKFLOW_NO_RESOLVE=1, and verify the resolver agent is dispatched and the merge eventually succeeds. Use mocks/fake ccc if needed; tests should not require real model calls. Update tests/test_workflow.py. Run WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow and fix until PASS. Do not launch ccc or other runners; work directly.",
+          "write_scope": ["tests/test_workflow.py"]
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-review",
+      "name": "Review",
+      "depends_on": ["impl-12-event-rollover", "impl-22-merge-lanes-test"],
+      "jobs": [
+        {
+          "name": "review-semantic",
+          "prompt": "Semantic review of the implementation. Check that #18, #20, #12, and #22 are correctly implemented and that tests cover the new behavior. Run WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow. Fix any issues or file review findings. Return strict JSON: status, findings, tests_passed.",
+          "ccc_runner": "@glm51",
+          "write_scope": ["scripts/workflow_tui.py", "scripts/workflow_tui_render.py", "scripts/workflow_tui_activity.py", "tests/test_workflow.py", "tests/snapshots/"]
+        },
+        {
+          "name": "review-standards",
+          "prompt": "Standards review. Check LOC limits, no duplication, meaningful names, test quality, snapshot freshness. Run WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow. Fix any issues. Return strict JSON: status, findings, tests_passed.",
+          "ccc_runner": "@cx-reviewer",
+          "write_scope": ["scripts/workflow_tui.py", "scripts/workflow_tui_render.py", "scripts/workflow_tui_activity.py", "tests/test_workflow.py", "tests/snapshots/"]
+        }
+      ]
+    }
+  ]
+}
