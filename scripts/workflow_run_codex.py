@@ -1405,6 +1405,8 @@ def nonnegative_float(value: str) -> float:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--_worker-run", help=argparse.SUPPRESS)
+    parser.add_argument("--no-detach", action="store_true", help="run workers in foreground (for testing)")
     parser.add_argument("--title")
     parser.add_argument("--run", "--attach-run", dest="attach_run", help="attach workers to an existing workflow run")
     parser.add_argument("--parent-run", help="record a newly created run as a child of this existing workflow run")
@@ -1445,6 +1447,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    # Hidden flag: detached child runs workers to completion
+    if args._worker_run:
+        run_id = args._worker_run
+        provider = build_provider(args)
+        status = asyncio.run(run_all(workflow_state.load_run(run_id), args, provider))
+        sys.exit(0 if status == "completed" else 1)
     if not args.attach_run and not args.title:
         raise SystemExit("--title is required unless --run/--attach-run is supplied")
     if args.attach_run and args.parent_run:
@@ -1462,15 +1470,24 @@ def main() -> None:
     print(json.dumps({"run_id": run["run_id"], "path": run["paths"]["run_json"], "jobs": len(jobs)}, indent=2))
     if args.dry_run:
         print("dry run: workers were recorded but not launched")
+        def mark_dry_run(run: dict) -> None:
+            run["status"] = "completed"
+            for phase in run.get("phases", []):
+                phase["status"] = "completed"
+            for agent in run.get("agents", []):
+                agent["status"] = "completed"
+                agent["summary"] = "dry run; worker not launched"
+                agent["exit_code"] = 0
+        workflow_state.mutate_run(run["run_id"], mark_dry_run)
+        return
+    replay = ["python3", __file__, "--runner", args.runner]
+    if args.runner == "ccc" and args.ccc_runner:
+        replay.extend(["--ccc-runner", args.ccc_runner])
+    if args.attach_run:
+        replay.extend(["--attach-run", args.attach_run, "..."])
     else:
-        replay = ["python3", __file__, "--runner", args.runner]
-        if args.runner == "ccc" and args.ccc_runner:
-            replay.extend(["--ccc-runner", args.ccc_runner])
-        if args.attach_run:
-            replay.extend(["--attach-run", args.attach_run, "..."])
-        else:
-            replay.extend(["--title", args.title, "..."])
-        print("command:", shlex.join(replay))
+        replay.extend(["--title", args.title, "..."])
+    print("command:", shlex.join(replay))
     status = asyncio.run(run_all(workflow_state.load_run(run["run_id"]), args, provider))
     if status != "completed":
         raise SystemExit(1)

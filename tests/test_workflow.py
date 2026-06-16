@@ -14,6 +14,9 @@ import unittest
 from pathlib import Path
 from typing import Any
 from unittest import mock
+
+# Force workflow apply to block in tests (no detached subprocess)
+os.environ.setdefault("WORKFLOW_DETACH", "0")
 import argparse
 import contextlib
 import io
@@ -2646,6 +2649,7 @@ class WorkflowScriptTests(unittest.TestCase):
                     "Missing Codex",
                     "--cwd",
                     str(ROOT),
+                    "--no-detach",
                     "--job",
                     "alpha::Alpha prompt",
                 ],

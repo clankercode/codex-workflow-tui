@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import io
 import json
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -388,8 +389,17 @@ def apply_workflow(args: argparse.Namespace) -> int:
         if args.runner == "ccc" and args.ccc_runner:
             replay.extend(["--ccc-runner", args.ccc_runner])
         print("command:", shlex.join(replay))
-    status = asyncio.run(workflow_run_codex.run_all(workflow_state.load_run(run["run_id"]), args, default_provider))
-    return 0 if status == "completed" else 1
+    # Detach by default so apply returns immediately. Set WORKFLOW_DETACH=0 to block.
+    should_detach = os.environ.get("WORKFLOW_DETACH", "1") != "0" and not args.no_detach
+    if not should_detach:
+        status = asyncio.run(workflow_run_codex.run_all(workflow_state.load_run(run["run_id"]), args, default_provider))
+        return 0 if status == "completed" else 1
+    else:
+        worker_cmd = [sys.executable, str(Path(__file__).parent / "workflow_run_codex.py"), "--_worker-run", run["run_id"], "--runner", args.runner]
+        if args.ccc_runner:
+            worker_cmd.extend(["--ccc-runner", args.ccc_runner])
+        subprocess.Popen(worker_cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return 0
 
 
 JOB_EXECUTION_OVERRIDE_FIELDS = (
@@ -473,6 +483,7 @@ def _build_job_provider(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plan_source", help="JSON workflow plan, or executable/Python script that prints one")
+    parser.add_argument("--no-detach", action="store_true", help="run workers in foreground (for testing)")
     parser.add_argument("--title")
     parser.add_argument("--prompt")
     parser.add_argument("--prompt-file")

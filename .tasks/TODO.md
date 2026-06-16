@@ -32,3 +32,6 @@
 2. Worktree creation should be lazy — upfront creation can't support dependency chains → fixed
 3. Dependent worktrees need to branch from dependency's branch, not HEAD → fixed
 4. Existing branch from prior run causes create failure → fallback to checkout → fixed
+5. Don't cancel running workflows without asking — let progressing agents finish first
+6. `workflow apply` blocks until completion — should launch and return immediately
+7. Phase boundary adds unnecessary cross-task deps (review-10a waits for impl-11 too)
