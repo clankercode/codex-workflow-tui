@@ -959,6 +959,15 @@ def make_run_graph_panel(run: dict[str, Any], detail_width: int | None = None) -
     )
     renderer = ASCIIRenderer(G, options=opts)
     graph_text = renderer.render()
+    # Center each line horizontally within the available width.
+    import re as _re
+    _ansi_re = _re.compile(r"\x1b\[[0-9;]*m")
+    centered_lines = []
+    for line in graph_text.splitlines():
+        visible = _ansi_re.sub("", line)
+        pad = max(0, (target_width - len(visible)) // 2)
+        centered_lines.append(" " * pad + line)
+    graph_text = "\n".join(centered_lines)
     return Panel(
         Text.from_ansi(graph_text, overflow="crop", no_wrap=True),
         title="Dependency Graph",

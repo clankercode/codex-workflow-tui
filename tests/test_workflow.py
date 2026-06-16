@@ -3486,6 +3486,9 @@ class WorkflowScriptTests(unittest.TestCase):
 
     def test_graph_tab_shows_fallback_when_phart_missing(self) -> None:
         """Graph tab renders gracefully when phart is not installed."""
+        env = dict(self.snapshot_env())
+        # Simulate the missing-phart path by hiding the modules from import.
+        env["PYTHONPATH"] = str(ROOT / "tests" / "stubs") + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         rendered = self.run_script(
             "workflow_tui.py",
             "--snapshot",
@@ -3499,7 +3502,7 @@ class WorkflowScriptTests(unittest.TestCase):
             "30",
             "--row-index",
             "0",
-            env=self.snapshot_env(),
+            env=env,
         ).stdout
         self.assertIn("Dependency Graph", rendered)
         self.assertIn("Install phart for graph view", rendered)
