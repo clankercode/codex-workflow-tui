@@ -24,16 +24,17 @@ import workflow_watch_emit
 
 def _make_args(
     run_id: str | None = None,
-    interval: float = 30.0,
-    loop: bool = False,
+    interval: float = 1.0,
     state_dir: str | None = None,
+    max_iters: int = 1,
 ) -> Any:
-    return workflow_watch_emit.build_parser().parse_args(
+    args = workflow_watch_emit.build_parser().parse_args(
         [*( [run_id] if run_id else [] ),
-         *( ["--interval", str(interval)] if interval != 30.0 else [] ),
-         *( ["--loop"] if loop else [] ),
+         *( ["--interval", str(interval)] if interval != 1.0 else [] ),
          *( ["--state-dir", state_dir] if state_dir else [] )]
     )
+    args._max_iters = max_iters
+    return args
 
 
 class WatchEmitTests(unittest.TestCase):
@@ -88,7 +89,8 @@ class WatchEmitTests(unittest.TestCase):
             return None
 
     def _capture_emit(self, run_id: str | None = None, **kwargs: Any) -> str:
-        """Run cmd_watch_emit in one-shot mode and return captured stdout."""
+        """Run cmd_watch_emit for one iteration and return captured stdout."""
+        kwargs.setdefault("max_iters", 1)
         args = _make_args(run_id=run_id, state_dir=str(self.state_dir), **kwargs)
         buf = io.StringIO()
         with redirect_stdout(buf):
@@ -232,16 +234,14 @@ class WatchEmitTests(unittest.TestCase):
         self.assertNotIn("AGENT", output)
 
     def test_loop_mode_emits_on_change_then_silent(self) -> None:
-        """--loop mode emits on change, then nothing when state is same."""
+        """Always-loop mode emits on change, then nothing when state is same."""
         run_id = self._init_run()
         run = self._load_run(run_id)
         run["agents"] = [{"agent_id": "a1", "name": "w", "status": "running", "exit_code": None, "phase_id": None}]
         self._save_run(run_id, run)
 
         # First call: no snapshot → baseline
-        args = _make_args(run_id=run_id, loop=True, state_dir=str(self.state_dir))
-        # Inject max_iters=2 so it loops once then stops
-        args._max_iters = 2
+        args = _make_args(run_id=run_id, state_dir=str(self.state_dir), max_iters=2)
 
         buf = io.StringIO()
         with mock.patch("workflow_watch_emit.time.sleep"):

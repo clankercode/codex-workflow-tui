@@ -5,7 +5,7 @@ Pairs with the Monitor tool: instead of a heartbeat ping, emits structured
 state-transition lines so an idle lead agent wakes with full context.
 
 Usage:
-  workflow_watch_emit.py [<run-id>] [--interval 30s] [--loop] [--state-dir PATH]
+  workflow_watch_emit.py [<run-id>] [--interval 1s] [--state-dir PATH]
 """
 
 from __future__ import annotations
@@ -160,7 +160,6 @@ def _is_terminal(run: dict[str, Any]) -> bool:
 def cmd_watch_emit(args: argparse.Namespace) -> None:
     state_dir = Path(args.state_dir).expanduser() if args.state_dir else workflow_state.state_root()
     interval = args.interval
-    loop = args.loop
     max_iters = getattr(args, "_max_iters", None)
     if max_iters is None:
         env_max = os.environ.get("WORKFLOW_WATCH_EMIT_MAX_ITERS")
@@ -168,16 +167,15 @@ def cmd_watch_emit(args: argparse.Namespace) -> None:
             max_iters = int(env_max)
 
     if args.run_id:
-        _watch_single(args.run_id, state_dir, interval, loop, max_iters)
+        _watch_single(args.run_id, state_dir, interval, max_iters)
     else:
-        _watch_all(state_dir, interval, loop, max_iters)
+        _watch_all(state_dir, interval, max_iters)
 
 
 def _watch_single(
     run_id: str,
     state_dir: Path,
     interval: float,
-    loop: bool,
     max_iters: int | None,
 ) -> None:
     runs_dir = state_dir / "runs"
@@ -198,9 +196,6 @@ def _watch_single(
 
         _save_snapshot(run_dir, _build_snapshot(run))
 
-        if not loop:
-            return
-
         iteration += 1
         if max_iters is not None and iteration >= max_iters:
             return
@@ -214,7 +209,6 @@ def _watch_single(
 def _watch_all(
     state_dir: Path,
     interval: float,
-    loop: bool,
     max_iters: int | None,
 ) -> None:
     runs_dir = state_dir / "runs"
@@ -245,7 +239,7 @@ def _watch_all(
                     if prev_snap_for_check is None:
                         continue
 
-                if loop and rid not in known_run_ids and known_run_ids:
+                if rid not in known_run_ids and known_run_ids:
                     sr = short_run_id(rid)
                     status = run.get("status", "unknown")
                     all_lines.append(f"{sr} RUN: \u2192 {status} [new]")
@@ -260,9 +254,6 @@ def _watch_all(
         for line in all_lines:
             print(line, flush=True)
 
-        if not loop:
-            return
-
         iteration += 1
         if max_iters is not None and iteration >= max_iters:
             return
@@ -276,8 +267,7 @@ def _watch_all(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_id", nargs="?", default=None, help="watch a specific run (omit to watch all active)")
-    parser.add_argument("--interval", type=_parse_interval, default=30.0, help="poll interval in seconds (default: 30; accepts a trailing 's')")
-    parser.add_argument("--loop", action="store_true", help="poll repeatedly; emit only on change")
+    parser.add_argument("--interval", type=_parse_interval, default=1.0, help="poll interval in seconds (default: 1)")
     parser.add_argument("--state-dir", default=None, help="override state directory")
     return parser
 

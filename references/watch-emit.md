@@ -9,25 +9,26 @@
 workflow watch-emit [<run-id>] [--state-dir PATH]
 
 # Loop: poll repeatedly, emit only when something changes
-workflow watch-emit [<run-id>] --loop [--interval 30s] [--state-dir PATH]
+workflow watch-emit [<run-id>] [--interval 1s] [--state-dir PATH]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `run-id` | *(omit)* | Watch a specific run. When omitted, watch all active (non-terminal) runs. |
-| `--loop` | off | Poll repeatedly instead of one-shot. Silent when nothing changes. |
-| `--interval` | `30` | Seconds between polls in `--loop` mode. |
+| `--interval` | `1` | Seconds between polls. |
+
+watch-emit always loops; there is no one-shot mode.
 | `--state-dir` | `$WORKFLOW_STATE_DIR` or `~/.agents/workflow-system/state` | Override the state root. |
 
 ### One-shot vs Loop
 
 - **One-shot** (default): load state, diff against the snapshot, print changed lines, update snapshot, exit 0. Composable in pipelines and scripts.
-- **`--loop`**: poll at `--interval`, emit transition lines only when state actually changes, stay silent otherwise. This is the Monitor-pairing form.
+- watch-emit always loops: it polls at `--interval` (default 1s), emits transition lines only when state changes, and stays silent otherwise.
 
 ### Single run vs All runs
 
 - **`workflow watch-emit <run-id>`**: watch one run. Works even if the run is already terminal (useful for catching late status updates).
-- **`workflow watch-emit`** (no run-id): watch all non-terminal runs in the state directory. In `--loop` mode, newly created runs are detected automatically and announced with a `[new]` suffix.
+- **`workflow watch-emit`** (no run-id): watch all non-terminal runs in the state directory. Newly created runs are detected automatically and announced with a `[new]` suffix.
 
 ## Output Line Formats
 
@@ -62,12 +63,12 @@ No historical state is replayed — only the current snapshot is announced.
 Use `watch-emit` as the Monitor command with `triggerTurn=true`:
 
 ```
-Monitor command="workflow watch-emit <run-id> --loop --interval 30s" triggerTurn=true
+Monitor command="workflow watch-emit <run-id>" triggerTurn=true
 ```
 
 How this works:
 
-1. The Monitor tool starts `watch-emit --loop` as a background process.
+1. The Monitor tool starts `watch-emit` as a background process.
 2. While nothing changes, the process is silent — the agent sleeps.
 3. When a real state transition occurs, `watch-emit` prints a line and the Monitor tool wakes the agent with the transition context.
 4. The agent reads the transition line(s) and decides what to do — no extra tool call needed to discover what changed.
@@ -76,8 +77,8 @@ This is fundamentally different from a fixed-interval heartbeat:
 
 | Pattern | Behavior |
 |---------|----------|
-| Heartbeat (`sleep 30 && echo ping`) | Wakes every 30s regardless; agent must query state to find changes. |
-| `watch-emit --loop` | Wakes only on real transitions; full context is in the wake signal. |
+| Heartbeat (fixed ping every 30s) | Wakes every 30s regardless; agent must query state to find changes. |
+| `watch-emit` | Wakes only on real transitions; full context is in the wake signal. |
 
 The pattern mirrors how GitHub CI status watchers work: emit on state change, not on a fixed schedule.
 
@@ -86,10 +87,10 @@ The pattern mirrors how GitHub CI status watchers work: emit on state change, no
 To watch every active workflow without specifying a run id:
 
 ```
-Monitor command="workflow watch-emit --loop --interval 30s" triggerTurn=true
+Monitor command="workflow watch-emit" triggerTurn=true
 ```
 
-New runs are detected automatically in `--loop` mode and announced with `[new]`.
+New runs are detected automatically and announced with `[new]`.
 
 ## Sidecar Snapshot
 
