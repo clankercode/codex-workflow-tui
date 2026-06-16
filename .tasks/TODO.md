@@ -26,12 +26,15 @@
 - [ ] #13: First-class dogfood/backlog support
 - [ ] #14: Ergonomic layered review workflows
 - [ ] #15: Real multi-agent phase dogfood
-- [ ] #16: Runs overview graph + attention notifications
-- [ ] #17: TUI pane scrolling + run-list bounds
+- [x] #16: Runs overview graph + attention notifications (graph tab done; attention notifications not done)
+- [x] #17: TUI pane scrolling + run-list bounds (impl-tui worktree claims done)
 - [ ] #18: Runs detail layout for live output/running agents
-- [ ] #19: Live throughput stats + smoothed counters
+- [x] #19: Live throughput stats + smoothed counters (impl-tui worktree claims done)
 - [ ] #20: Finished-ago field for completed runs/agents
-- [ ] #21: Add pi coding CLI as runner
+- [x] #21: Add pi coding CLI as runner
+
+## IN PROGRESS / UNTESTED
+- [ ] Integration test for merge-lanes auto-resolve (#22)
 
 ## DOGFOOD FINDINGS (this session)
 1. Worktree lane deduplication — prepare_worktree_lanes created same branch N times → fixed
