@@ -763,6 +763,80 @@ class WorkflowScriptTests(unittest.TestCase):
             stop = json.loads(self.run_script("workflow_ops.py", "stop", run_id, "--no-terminate", env=env).stdout)
             self.assertEqual(stop["status"], "cancelled")
 
+    def test_replace_agent_clones_failed_agent_with_scope_and_deps(self) -> None:
+        """replace-agent creates a clone preserving prompt/scope/deps and cancels original."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_script(
+                "workflow_state.py",
+                "init",
+                "--title",
+                "Replace Test",
+                "--prompt",
+                "test",
+                "--cwd",
+                str(ROOT),
+                env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            run_path = Path(json.loads(created.stdout)["path"])
+            self.run_script("workflow_state.py", "add-phase", run_id, "--name", "impl", env=env)
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            phase_id = run["phases"][0]["phase_id"]
+            run["agents"].append({
+                "agent_id": "agent-original",
+                "phase_id": phase_id,
+                "name": "worker-a",
+                "role": "impl",
+                "agent_type": "ccc-glm51",
+                "status": "failed",
+                "prompt": "do the work",
+                "depends_on": "worker-x, worker-y",
+                "write_scope": ["src/a", "src/b"],
+                "model": "",
+                "cwd": str(ROOT),
+                "summary": "quota exceeded",
+                "result": "",
+                "exit_code": 1,
+                "created_at": "2026-06-16T00:00:00Z",
+                "started_at": "2026-06-16T00:00:00Z",
+                "completed_at": "2026-06-16T00:01:00Z",
+                "updated_at": "2026-06-16T00:01:00Z",
+            })
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            result = self.run_script(
+                "workflow_ops.py",
+                "replace-agent",
+                run_id,
+                "worker-a",
+                "--model",
+                "glm-5.2",
+                "--reason",
+                "quota limit",
+                env=env,
+            )
+            replaced = json.loads(result.stdout)
+            self.assertEqual(replaced["status"], "pending")
+            self.assertIn("retry", replaced["new_name"])
+
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            agents = {a["name"]: a for a in run["agents"]}
+            # Original is cancelled
+            self.assertEqual(agents["worker-a"]["status"], "cancelled")
+            # Clone preserves critical fields
+            clone = agents[replaced["new_name"]]
+            self.assertEqual(clone["prompt"], "do the work")
+            self.assertEqual(clone["write_scope"], ["src/a", "src/b"])
+            self.assertEqual(clone["depends_on"], "worker-x, worker-y")
+            self.assertEqual(clone["model"], "glm-5.2")
+            self.assertEqual(clone["phase_id"], phase_id)
+            self.assertEqual(clone["status"], "pending")
+            # Replacement event recorded
+            replace_events = [e for e in run.get("events", []) if e.get("operation") == "replaced"]
+            self.assertEqual(len(replace_events), 1)
+
     @slow_test
     def test_mock_worker_waits_while_run_is_paused(self) -> None:
         """Paused cooperative runs should not launch pending workers until resumed."""

@@ -62,6 +62,7 @@ Usage:
   $PROG merge-lanes <run-id> [workflow_ops.py merge-lanes args...]
   $PROG merge-conflicts <run-id> [workflow_ops.py merge-conflicts args...]
   $PROG done <run-id> [workflow_ops.py done args...]
+  $PROG replace-agent <run-id> <agent-id-or-name> [workflow_ops.py replace-agent args...]
   $PROG block <run-id> <reason>
   $PROG backlog <run-id> [--append '<finding>']
   $PROG preview [workflow_ops.py preview args...]
@@ -108,7 +109,7 @@ case "$cmd" in
   runner-matrix|matrix|runner-smoke)
     exec python3 "$SCRIPT_DIR/workflow_runner_matrix.py" "$@"
     ;;
-  status|last|doctor|check|verify|merge-lanes|merge-conflicts|done|block|preview|pause|resume|stop|monitor|watch|backlog)
+  status|last|doctor|check|verify|merge-lanes|merge-conflicts|done|block|preview|pause|resume|stop|monitor|watch|backlog|replace-agent)
     exec python3 "$SCRIPT_DIR/workflow_ops.py" "$cmd" "$@"
     ;;
   open)

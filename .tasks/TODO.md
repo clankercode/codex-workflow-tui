@@ -47,14 +47,15 @@
 8. Stale worker detection — dead processes shown as running forever → fixed with retry + 30s grace
 9. TUI shows `RUN!` in red for stale workers → fixed
 10. Tool call gap: ccc `cache.read` tokens not captured (documented in test_codex_jsonl_cache_read_tokens_gap)
-11. Merge conflict auto-resolution — `merge-lanes` should dispatch an agent to resolve conflicts instead of failing
-12. Agent replacement/recovery — when a worker hits usage limits or crashes, should be able to add a replacement agent with same scope and have it auto-start (currently requires manual `workflow run --attach-run`)
+11. Merge conflict auto-resolution — `merge-lanes` should dispatch an agent to resolve conflicts instead of failing → implemented
+12. Agent replacement/recovery — when a worker hits usage limits or crashes, should be able to add a replacement agent with same scope and have it auto-start → FIXED: `workflow replace-agent` command clones failed agents
 13. `workflow run --attach-run` re-launches ALL jobs from the run, not just the specified `--job`. When retrying a single agent, it re-launches impl agents too, causing duplicate work and stale-worker confusion. Should only launch the specified jobs.
-14. Replacement agents created via `workflow run --attach-run` lose the original agent's `depends_on` edges, so the dependency graph shows them under the root instead of their real upstreams. Should inherit or allow specifying dependencies.
+14. Replacement agents created via `workflow run --attach-run` lose the original agent's `depends_on` edges → FIXED: `replace-agent` preserves depends_on
 15. TUI tab bar jumps when switching to graph tab because detail panel width differs and title was centered → fixed: use full-terminal compact threshold and left-align panel title.
-16. Pi coding CLI runner support: pi can now be used via `ccc` but we should add direct `pi-direct` runner support alongside codex-direct/kimi-direct.
-17. Graph status icons not rendered for all agents — some agents lack the status circle/half-circle icon. The status icon mapping or animation logic may be skipping agents with unexpected status values or missing color attributes.
-18. Tokens/s measurement in agents live view is wrong: it conflates input/output/reasoning tokens. We need to separate upstream tokens (input/cache reads/files sent) from downstream tokens (output/reasoning) because we can push more data than we receive.
+16. Pi coding CLI runner support: pi can now be used via `ccc` but we should add direct `pi-direct` runner support alongside codex-direct/kimi-direct. → implemented + tests added
+17. Graph status icons not rendered for all agents — some agents lack the status circle/half-circle icon. The status icon mapping or animation logic may be skipping agents with unexpected status values or missing color attributes. → fixed in tui-fixes (default to pending icon)
+18. Tokens/s measurement in agents live view is wrong: it conflates input/output/reasoning tokens. We need to separate upstream tokens (input/cache reads/files sent) from downstream tokens (output/reasoning) because we can push more data than we receive. → token direction split implemented in tui-fixes
 19. Graph tab bar placement still visually inconsistent compared to other tabs — title alignment/padding makes the tabs row look offset even after the left-align fix.
-20. Runner should detect provider quota errors and fail the agent/runner instead of retrying indefinitely in :00/:30 windows. `review-standards` on @cx-reviewer repeatedly hits quota limits and stalls; this wastes time and blocks review phases.
+20. Runner should detect provider quota errors and fail the agent/runner instead of retrying indefinitely in :00/:30 windows → implemented: --quota-fail-fast flag and WORKFLOW_QUOTA_FAIL_FAST=1
 21. Workers complete implementation but don't commit to their worktree branch — changes left uncommitted in working tree, so merge-lanes found empty branches. The semantic reviewer caught this (all branches HEAD==base). Workers MUST `git add -A && git commit` before reporting done. Need either: (a) enforce commit in worker wrapper, or (b) detect uncommitted changes at completion and auto-commit.
+22. Phase dependency bug: phase_jobs only used last job of prior phase as dependency for next phase, so parallel jobs in a phase were invisible to the dependency graph → fixed: all jobs in prior phase now become deps

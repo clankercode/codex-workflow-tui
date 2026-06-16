@@ -508,6 +508,112 @@ def cmd_pause(args: argparse.Namespace) -> None:
     workflow_state.cmd_pause(args)
 
 
+def cmd_replace_agent(args: argparse.Namespace) -> None:
+    """Replace a failed/cancelled agent with a fresh clone in the same phase.
+
+    Copies prompt, write_scope, depends_on, worktree, and agent_type from the
+    original. The original is marked cancelled. The replacement starts as
+    ``pending`` unless ``--launch`` is given (which marks it ``running`` but
+    does not actually start a process — use ``workflow run --attach-run`` or
+    ``workflow apply`` for that).
+    """
+    import workflow_state as _ws
+
+    def mutator(data: dict[str, Any]) -> dict[str, Any]:
+        agents = data.setdefault("agents", [])
+        original = None
+        for candidate in agents:
+            if candidate.get("agent_id") == args.agent or candidate.get("name") == args.agent:
+                original = candidate
+                break
+        if original is None:
+            raise SystemExit(f"agent not found: {args.agent!r} (by id or name)")
+        original_status = str(original.get("status", ""))
+        if args.allow_active is False and original_status not in ("failed", "cancelled", "running", "blocked"):
+            raise SystemExit(
+                f"agent {original.get('name', original.get('agent_id', ''))!r} is {original_status!r}; "
+                "only failed/cancelled/running/blocked agents can be replaced "
+                "(use --allow-active to override)"
+            )
+        original["status"] = "cancelled"
+        original["summary"] = args.reason or "cancelled: replaced by retry agent"
+        original["exit_code"] = original.get("exit_code")
+        ts = workflow_state.now()
+        original["completed_at"] = ts
+        original["updated_at"] = ts
+
+        new_id = args.new_agent_id or workflow_state.short_id("agent")
+        workflow_state.ensure_unique(agents, "agent_id", new_id)
+        suffix = args.suffix or "retry"
+        new_name = args.name or f"{original.get('name', 'agent')}-{suffix}"
+        clone: dict[str, Any] = {
+            "agent_id": new_id,
+            "phase_id": original.get("phase_id", args.phase or ""),
+            "name": new_name,
+            "role": original.get("role", ""),
+            "agent_type": args.agent_type or original.get("agent_type", ""),
+            "status": "running" if args.launch else "pending",
+            "prompt": original.get("prompt", ""),
+            "cwd": original.get("cwd", data.get("cwd")),
+            "model": args.model or original.get("model", ""),
+            "thread_id": "",
+            "process_id": None,
+            "process_group_id": None,
+            "native_id": "",
+            "write_scope": list(original.get("write_scope", [])),
+            "jsonl_path": "",
+            "log_path": "",
+            "output_path": "",
+            "summary": "replacement agent for " + str(original.get("name", original.get("agent_id", ""))),
+            "result": "",
+            "exit_code": None,
+            "created_at": ts,
+            "started_at": ts if args.launch else None,
+            "completed_at": None,
+            "updated_at": ts,
+        }
+        # Preserve dependency edges and worktree lane metadata
+        if original.get("depends_on"):
+            clone["depends_on"] = original["depends_on"]
+        if original.get("worktree"):
+            clone["worktree"] = dict(original["worktree"])
+            clone["worktree"]["branch"] = clone["worktree"].get("branch", "") + f"-{suffix}"
+        agents.append(clone)
+        phase_id = clone.get("phase_id")
+        if phase_id:
+            phase = workflow_state.find_item(data.setdefault("phases", []), "phase_id", phase_id)
+            if phase:
+                phase.setdefault("agent_ids", []).append(clone["agent_id"])
+        workflow_state.add_event(
+            data,
+            "info",
+            f"agent replaced: {original.get('name', original.get('agent_id', ''))} → {new_name}",
+            kind="agent",
+            operation="replaced",
+            source="workflow_ops.replace_agent",
+            phase_id=phase_id,
+            agent_id=clone["agent_id"],
+            data={
+                "original_agent_id": original.get("agent_id", ""),
+                "original_name": original.get("name", ""),
+                "new_agent_id": clone["agent_id"],
+                "new_name": new_name,
+                "reason": args.reason or "",
+            },
+        )
+        return clone
+
+    _, clone, path = workflow_state.mutate_run(args.run, mutator)
+    print_json({
+        "original_reference": args.agent,
+        "new_agent_id": clone["agent_id"],
+        "new_name": clone["name"],
+        "status": clone["status"],
+        "depends_on": clone.get("depends_on", ""),
+        "path": str(path),
+    })
+
+
 def cmd_resume(args: argparse.Namespace) -> None:
     """Resume a paused run through the operator interface."""
     workflow_state.cmd_resume(args)
@@ -625,7 +731,7 @@ def _add_merge_parsers(sub: Any) -> None:
 
 
 def _add_lifecycle_parsers(sub: Any) -> None:
-    """Add done, block, pause, resume, and stop subparsers."""
+    """Add done, block, pause, resume, stop, and replace-agent subparsers."""
     done = sub.add_parser("done", help="complete a workflow after safety checks")
     done.add_argument("run")
     done.add_argument("--allow-unverified", action="store_true")
@@ -657,6 +763,20 @@ def _add_lifecycle_parsers(sub: Any) -> None:
     stop.add_argument("--reason")
     stop.add_argument("--no-terminate", dest="terminate", action="store_false", help="only update state; do not signal processes")
     stop.set_defaults(func=cmd_stop, terminate=True)
+
+    replace = sub.add_parser("replace-agent", help="replace a failed/cancelled agent with a clone (same prompt/scope/deps)")
+    replace.add_argument("run")
+    replace.add_argument("agent", help="agent id or name to replace")
+    replace.add_argument("--name", help="name for the replacement agent (default: <original>-retry)")
+    replace.add_argument("--suffix", default="retry", help="suffix for auto-generated name and worktree branch (default: retry)")
+    replace.add_argument("--agent-type", help="override agent_type for the replacement")
+    replace.add_argument("--model", help="override model for the replacement")
+    replace.add_argument("--phase", help="override phase_id for the replacement")
+    replace.add_argument("--new-agent-id", help="explicit agent_id for the replacement (default: auto-generated)")
+    replace.add_argument("--reason", help="reason for replacement (recorded in events)")
+    replace.add_argument("--launch", action="store_true", help="mark the replacement as 'running' (does not start a process; use workflow run --attach-run or workflow apply)")
+    replace.add_argument("--allow-active", action="store_true", help="allow replacing a running agent without cancelling first")
+    replace.set_defaults(func=cmd_replace_agent)
 
 
 def _add_utility_parsers(sub: Any) -> None:
