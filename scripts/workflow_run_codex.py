@@ -22,6 +22,7 @@ from typing import Any
 
 sys.dont_write_bytecode = True
 
+import workflow_health
 import workflow_state
 
 try:
@@ -987,6 +988,62 @@ async def run_worker(
 
 
 
+def _sweep_stale_workers(run_id: str, *, max_stale_retries: int = 3, stale_grace_seconds: float = 30.0) -> list[dict[str, Any]]:
+    """Detect running agents with dead processes and retry or fail them.
+
+    Returns a list of agent dicts that should be re-enqueued for retry.
+    Agents that have exceeded ``max_stale_retries`` are marked failed.
+    A grace period prevents false positives from race conditions where
+    the process exited but ``run_worker`` hasn't updated state yet.
+    """
+    try:
+        run = workflow_state.load_run(run_id)
+    except (OSError, json.JSONDecodeError):
+        return []
+    now = time.time()
+    retry_agents: list[dict[str, Any]] = []
+    for agent in run.get("agents", []):
+        if agent.get("status") != "running":
+            continue
+        if not workflow_health.agent_process_is_dead(agent):
+            continue
+        # Grace period: skip agents that were recently updated
+        updated_at = agent.get("updated_at", "")
+        if updated_at:
+            try:
+                updated_epoch = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).timestamp()
+                if now - updated_epoch < stale_grace_seconds:
+                    continue
+            except (ValueError, TypeError):
+                pass
+        retries = int(agent.get("stale_retries", 0))
+        if retries >= max_stale_retries:
+            update_agent(
+                run_id,
+                agent["agent_id"],
+                status="failed",
+                summary=f"process died after {retries} stale retries",
+                exit_code=1,
+                emit_event=True,
+            )
+        else:
+            update_agent(
+                run_id,
+                agent["agent_id"],
+                status="pending",
+                stale_retries=retries + 1,
+                emit_event=True,
+                summary=f"stale worker detected, retry {retries + 1}/{max_stale_retries}",
+            )
+            refreshed = workflow_state.find_item(
+                workflow_state.load_run(run_id)["agents"],
+                "agent_id", agent["agent_id"],
+            )
+            if refreshed:
+                retry_agents.append(refreshed)
+    return retry_agents
+
+
 def _depends_on_names(agent: dict[str, Any]) -> set[str]:
     """Return the set of dependency names an agent is waiting for."""
     raw = agent.get("depends_on") or ""
@@ -1293,6 +1350,9 @@ async def run_all(run: dict[str, Any], args: argparse.Namespace, provider: Runne
                             added += 1
                         if added:
                             _record_expansion(run_id, updated_agent, added, round_num + 1)
+                    stale_retries = _sweep_stale_workers(run_id)
+                    for retry_agent in stale_retries:
+                        enqueue_agent(retry_agent, round_num)
                     release_pending()
             except Exception as exc:
                 run_snapshot = workflow_state.load_run(run_id)
@@ -1308,6 +1368,9 @@ async def run_all(run: dict[str, Any], args: argparse.Namespace, provider: Runne
                             summary=message,
                             exit_code=1,
                         )
+                    stale_retries = _sweep_stale_workers(run_id)
+                    for retry_agent in stale_retries:
+                        enqueue_agent(retry_agent, round_num)
                     release_pending()
             finally:
                 async with state_lock:

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -110,6 +111,42 @@ def agent_is_effectively_unmanaged(agent: dict[str, Any]) -> bool:
     has_process = bool(agent.get("process_id") or agent.get("process_group_id"))
     has_jsonl = bool(str(agent.get("jsonl_path") or "").strip())
     return not has_process and not has_jsonl
+
+
+def process_is_alive(pid: int) -> bool:
+    """Return true when a process with *pid* is still running.
+
+    Uses ``os.kill(pid, 0)`` — a POSIX-standard liveness probe that does not
+    actually send a signal.  Returns ``False`` when the process does not exist
+    or when the caller lacks permission to signal it.
+    """
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+
+def agent_process_is_dead(agent: dict[str, Any]) -> bool:
+    """Return true when a running agent has a recorded PID that is no longer alive.
+
+    Checks ``process_group_id`` first (the primary handle used by the runner),
+    then falls back to ``process_id``.  Returns ``False`` when the agent has
+    no recorded PID (the caller must handle opaque-running separately) or when
+    the process is still alive.
+    """
+    if agent.get("status") != "running":
+        return False
+    pgid = agent.get("process_group_id")
+    pid = agent.get("process_id")
+    target = pgid or pid
+    if not target:
+        return False
+    try:
+        target_int = int(target)
+    except (TypeError, ValueError):
+        return False
+    return not process_is_alive(target_int)
 
 
 def issue(
@@ -300,6 +337,22 @@ def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SEC
                 )
             )
         if status == "running":
+            if agent_process_is_dead(agent):
+                findings.append(
+                    issue(
+                        run=run,
+                        severity=CRITICAL,
+                        kind="agent-process-dead",
+                        title=f"Process dead: {name}",
+                        message=f"Running agent has a recorded PID ({agent.get('process_group_id') or agent.get('process_id')}) but the process is no longer alive.",
+                        suggestion="The worker was likely killed externally. Mark as failed and retry if needed.",
+                        entity_type="agent",
+                        entity_id=agent_id,
+                        phase_id=phase_id,
+                        agent_id=agent_id,
+                        ts=str(agent.get("updated_at") or agent.get("started_at") or run.get("updated_at") or ""),
+                    )
+                )
             if not agent_has_liveness_source(agent) and not agent_is_effectively_unmanaged(agent):
                 findings.append(
                     issue(

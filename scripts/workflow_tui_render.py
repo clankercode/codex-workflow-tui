@@ -14,6 +14,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
+import workflow_health
 import workflow_state
 import workflow_tui_live
 from workflow_tui_activity import (
@@ -157,9 +158,16 @@ def status_text(status: str) -> Text:
     return Text(label, style=f"bold {style}")
 
 
-def marked_status_text(active: bool, status: str) -> Text:
-    """Render status with a durable inline selection marker."""
+def marked_status_text(active: bool, status: str, *, stale: bool = False) -> Text:
+    """Render status with a durable inline selection marker.
+
+    When *stale* is true and the status is ``running``, the label is shown as
+    ``RUN!`` with a red style to indicate the worker process has died.
+    """
     label, style = STATUS_META.get(status, ("UNKN", "white"))
+    if stale and status == "running":
+        label = "RUN!"
+        style = "red"
     text = Text("\u25b8 " if active else "  ", style="bold bright_white")
     text.append(label, style=f"bold {style}")
     return text
@@ -561,8 +569,9 @@ def make_agent_table(agents: list[dict[str, Any]], selected: int, visible: int, 
     start = window_start(selected, len(agents), visible)
     for index, agent in enumerate(agents[start : start + visible], start=start):
         style = "reverse" if index == selected else ""
+        stale = workflow_health.agent_process_is_dead(agent)
         table.add_row(
-            marked_status_text(index == selected, agent.get("status", "")),
+            marked_status_text(index == selected, agent.get("status", ""), stale=stale),
             Text(agent_duration_text(agent), style="bright_black"),
             str(agent.get("name", "")),
             style=style,

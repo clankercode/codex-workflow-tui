@@ -8908,6 +8908,212 @@ class StateTruthfulnessTests(unittest.TestCase):
             warning = next(w for w in payload["scope_warnings"] if w["agent_id"] == "agent-bad")
             self.assertIn("error", warning)
 
+    def test_dead_pid_detected_as_stale_in_health_check(self) -> None:
+        """A running agent with a dead PID should produce an agent-process-dead finding."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        # Use PID 999999 which is extremely unlikely to exist.
+        agent = {
+            "agent_id": "agent-dead-pid",
+            "name": "Dead Worker",
+            "status": "running",
+            "phase_id": "phase-impl",
+            "process_id": 999999,
+            "process_group_id": 999999,
+        }
+        run = {
+            "run_id": "wf-test",
+            "status": "running",
+            "phases": [{"phase_id": "phase-impl", "status": "running"}],
+            "agents": [agent],
+            "artifacts": [],
+        }
+
+        findings = workflow_health.analyze_run(run)
+        dead_findings = [item for item in findings if item["kind"] == "agent-process-dead"]
+        self.assertEqual(len(dead_findings), 1, msg=f"expected agent-process-dead, got: {dead_findings}")
+        self.assertEqual(dead_findings[0]["severity"], workflow_health.CRITICAL)
+        self.assertIn("Dead Worker", dead_findings[0]["title"])
+        self.assertIn("no longer alive", dead_findings[0]["message"])
+
+    def test_live_pid_not_flagged_as_stale(self) -> None:
+        """A running agent with a live PID should not produce an agent-process-dead finding."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        # Use the current process PID — always alive and accessible.
+        agent = {
+            "agent_id": "agent-live-pid",
+            "name": "Live Worker",
+            "status": "running",
+            "phase_id": "phase-impl",
+            "process_id": os.getpid(),
+            "process_group_id": os.getpid(),
+        }
+        run = {
+            "run_id": "wf-test",
+            "status": "running",
+            "phases": [{"phase_id": "phase-impl", "status": "running"}],
+            "agents": [agent],
+            "artifacts": [],
+        }
+
+        findings = workflow_health.analyze_run(run)
+        self.assertFalse(any(item["kind"] == "agent-process-dead" for item in findings))
+
+    def test_agent_process_is_dead_returns_false_without_pid(self) -> None:
+        """A running agent without a PID should not be detected as dead."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        agent = {"agent_id": "a1", "status": "running"}
+        self.assertFalse(workflow_health.agent_process_is_dead(agent))
+
+    def test_agent_process_is_dead_returns_false_for_non_running(self) -> None:
+        """A completed agent with a dead PID should not be detected as stale."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        agent = {"agent_id": "a1", "status": "completed", "process_id": 999999}
+        self.assertFalse(workflow_health.agent_process_is_dead(agent))
+
+    def test_sweep_stale_workers_marks_dead_agents_as_failed(self) -> None:
+        """_sweep_stale_workers should mark running agents with dead PIDs as failed."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_run_codex  # pylint: disable=import-outside-toplevel
+
+        wf = str(SCRIPTS / "wf")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = str(Path(tmp) / "state")
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = state_dir
+            created = subprocess.run(
+                [wf, "init", "--title", "Sweep Test", "--prompt", "sweep", "--cwd", str(ROOT)],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            subprocess.run(
+                [wf, "add-phase", run_id, "--phase-id", "phase-impl", "--name", "Impl", "--status", "running"],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            subprocess.run(
+                [wf, "add-agent", run_id, "--phase", "phase-impl", "--agent-id", "agent-stale",
+                 "--name", "stale-worker", "--agent-type", "codex-exec", "--status", "running"],
+                check=True, text=True, capture_output=True, env=env,
+            )
+
+            # Inject a dead PID into the agent.
+            run_path = Path(json.loads(created.stdout)["path"])
+            run_data = json.loads(run_path.read_text(encoding="utf-8"))
+            run_data["agents"][0]["process_id"] = 999999
+            run_data["agents"][0]["process_group_id"] = 999999
+            run_data["agents"][0]["updated_at"] = "2020-01-01T00:00:00Z"
+            run_path.write_text(json.dumps(run_data, indent=2), encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"WORKFLOW_STATE_DIR": state_dir}):
+                # First sweep: retry 1/3 (pending)
+                workflow_run_codex._sweep_stale_workers(run_id)
+                updated = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertEqual(updated["agents"][0]["status"], "pending")
+                self.assertIn("retry 1/3", updated["agents"][0]["summary"])
+                # Re-inject running status + dead PID for next sweep
+                updated["agents"][0]["status"] = "running"
+                updated["agents"][0]["process_id"] = 999999
+                updated["agents"][0]["process_group_id"] = 999999
+                updated["agents"][0]["updated_at"] = "2020-01-01T00:00:00Z"
+                run_path.write_text(json.dumps(updated, indent=2), encoding="utf-8")
+                # Second sweep: retry 2/3
+                workflow_run_codex._sweep_stale_workers(run_id)
+                updated = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertEqual(updated["agents"][0]["status"], "pending")
+                self.assertIn("retry 2/3", updated["agents"][0]["summary"])
+                updated["agents"][0]["status"] = "running"
+                updated["agents"][0]["process_id"] = 999999
+                updated["agents"][0]["process_group_id"] = 999999
+                updated["agents"][0]["updated_at"] = "2020-01-01T00:00:00Z"
+                run_path.write_text(json.dumps(updated, indent=2), encoding="utf-8")
+                # Third sweep: retry 3/3
+                workflow_run_codex._sweep_stale_workers(run_id)
+                updated = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertEqual(updated["agents"][0]["status"], "pending")
+                self.assertIn("retry 3/3", updated["agents"][0]["summary"])
+                updated["agents"][0]["status"] = "running"
+                updated["agents"][0]["process_id"] = 999999
+                updated["agents"][0]["process_group_id"] = 999999
+                updated["agents"][0]["updated_at"] = "2020-01-01T00:00:00Z"
+                run_path.write_text(json.dumps(updated, indent=2), encoding="utf-8")
+                # Fourth sweep: exhausted retries, marked failed
+                workflow_run_codex._sweep_stale_workers(run_id)
+
+            updated = json.loads(run_path.read_text(encoding="utf-8"))
+            agent = updated["agents"][0]
+            self.assertEqual(agent["status"], "failed")
+            self.assertIn("stale retries", agent["summary"])
+
+    def test_dependent_unblocks_after_stale_detection(self) -> None:
+        """Dependent agents should unblock after stale workers are swept."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_run_codex  # pylint: disable=import-outside-toplevel
+
+        wf = str(SCRIPTS / "wf")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = str(Path(tmp) / "state")
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = state_dir
+            created = subprocess.run(
+                [wf, "init", "--title", "Dep Test", "--prompt", "dep", "--cwd", str(ROOT)],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            subprocess.run(
+                [wf, "add-phase", run_id, "--phase-id", "phase-impl", "--name", "Impl", "--status", "running"],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            # Add the stale worker.
+            subprocess.run(
+                [wf, "add-agent", run_id, "--phase", "phase-impl", "--agent-id", "agent-stale",
+                 "--name", "stale-worker", "--agent-type", "codex-exec", "--status", "running"],
+                check=True, text=True, capture_output=True, env=env,
+            )
+            # Add a dependent agent.
+            subprocess.run(
+                [wf, "add-agent", run_id, "--phase", "phase-impl", "--agent-id", "agent-dependent",
+                 "--name", "dependent-worker", "--agent-type", "codex-exec", "--status", "pending"],
+                check=True, text=True, capture_output=True, env=env,
+            )
+
+            # Inject dead PID and depends_on.
+            run_path = Path(json.loads(created.stdout)["path"])
+            run_data = json.loads(run_path.read_text(encoding="utf-8"))
+            run_data["agents"][0]["process_id"] = 999999
+            run_data["agents"][0]["process_group_id"] = 999999
+            run_data["agents"][0]["updated_at"] = "2020-01-01T00:00:00Z"
+            run_data["agents"][1]["depends_on"] = "stale-worker"
+            run_path.write_text(json.dumps(run_data, indent=2), encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"WORKFLOW_STATE_DIR": state_dir}):
+                # Sweep 4 times to exhaust retries (3 retries + final fail)
+                for i in range(4):
+                    workflow_run_codex._sweep_stale_workers(run_id)
+                    updated = json.loads(run_path.read_text(encoding="utf-8"))
+                    stale = next(a for a in updated["agents"] if a["agent_id"] == "agent-stale")
+                    if i < 3:
+                        # Re-inject running + dead PID for next sweep
+                        stale["status"] = "running"
+                        stale["process_id"] = 999999
+                        stale["process_group_id"] = 999999
+                        stale["updated_at"] = "2020-01-01T00:00:00Z"
+                        run_path.write_text(json.dumps(updated, indent=2), encoding="utf-8")
+
+            updated = json.loads(run_path.read_text(encoding="utf-8"))
+            stale = next(a for a in updated["agents"] if a["agent_id"] == "agent-stale")
+            self.assertEqual(stale["status"], "failed")
+            dependent = next(a for a in updated["agents"] if a["agent_id"] == "agent-dependent")
+            self.assertEqual(dependent["status"], "pending")
+
 
 if __name__ == "__main__":
     unittest.main()
