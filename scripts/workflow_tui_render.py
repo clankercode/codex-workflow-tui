@@ -55,6 +55,7 @@ MIN_WIDTH = 80
 MIN_HEIGHT = 12
 DISPLAY_TIMESTAMP_WIDTH = 18
 COMPACT_TIMESTAMP_WIDTH = 14
+RUN_ROW_HEIGHT = 2
 TIMESTAMP_KEYS = {"ts", "created_at", "updated_at", "started_at", "completed_at"}
 SNAPSHOT_NOW_ENV = "WORKFLOW_TUI_SNAPSHOT_NOW"
 
@@ -443,7 +444,7 @@ def make_attention_detail(item: dict[str, Any]) -> Group:
 def make_runs_table(runs: list[dict[str, Any]], selected: int, visible: int) -> Table:
     table = Table(box=None, expand=True, show_header=True, header_style="bold bright_black", pad_edge=False)
     table.add_column("", width=1, no_wrap=True)
-    table.add_column("Workflow", ratio=1, overflow="ellipsis", no_wrap=False)
+    table.add_column("Workflow", ratio=1, overflow="ellipsis", no_wrap=True)
     if not runs:
         table.add_row("", "No workflow runs found.")
         return table
@@ -453,7 +454,7 @@ def make_runs_table(runs: list[dict[str, Any]], selected: int, visible: int) -> 
         style = "reverse" if index == selected else ""
         run_status_label = STATUS_META.get(str(run.get("status", "")), (str(run.get("status", "")).upper()[:4], ""))[0]
         duration = run_duration_text(run)
-        summary = Text(str(run.get("title", "")) or "(untitled)")
+        summary = Text(str(run.get("title", "")) or "(untitled)", no_wrap=True, overflow="ellipsis")
         summary.append("\n  > ", style="dim")
         summary.append(run_status_label, style=status_text(run.get("status", "")).style)
         if duration:

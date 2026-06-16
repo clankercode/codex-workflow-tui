@@ -97,6 +97,7 @@ from workflow_tui_render import (  # noqa: F401
     COMPACT_TIMESTAMP_WIDTH,
     TIMESTAMP_KEYS,
     SNAPSHOT_NOW_ENV,
+    RUN_ROW_HEIGHT,
     parse_local_datetime,
     display_timestamp,
     snapshot_reference_time,
@@ -350,6 +351,20 @@ def title_with_filter(title: str, filter_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _clip_content_to_height(content: Any, pane_height: int, scroll_offset: int = 0) -> str:
+    """Render content and clip to a fixed number of visible lines with scroll offset."""
+    sink = io.StringIO()
+    console = Console(file=sink, force_terminal=False, color_system=None, width=200)
+    console.print(content)
+    all_lines = sink.getvalue().splitlines()
+    start = max(0, scroll_offset)
+    end = start + max(1, pane_height)
+    visible_lines = all_lines[start:end]
+    while len(visible_lines) < pane_height:
+        visible_lines.append("")
+    return "\n".join(visible_lines[:pane_height])
+
+
 def render_dashboard(
     runs: list[dict[str, Any]],
     *,
@@ -364,6 +379,7 @@ def render_dashboard(
     agent_view: str = "live",
     filter_text: str = "",
     focus: bool = False,
+    scroll_offset: int = 0,
 ) -> Any:
     if tab not in TABS:
         raise SystemExit(f"invalid tab {tab!r}; expected one of {TABS}")
@@ -378,6 +394,8 @@ def render_dashboard(
     left_width = max(40, min(46, (width * 2) // 5))
     right_width = max(20, width - left_width)
     visible = max(1, pane_height - 5)
+    if tab == "runs":
+        visible = max(1, visible // RUN_ROW_HEIGHT)
     rows = apply_row_filter(rows_for_tab(base_run, tab, runs, selected_phase_id=selected_phase_id, agent_scope=agent_scope), filter_text)
     if tab == "runs" and not active_filter(filter_text):
         selected_row_index = selected_run_index
@@ -395,14 +413,24 @@ def render_dashboard(
         agent_scope=agent_scope,
         filter_text=filter_text,
     )
+    use_scroll = scroll_offset > 0
     if focus:
-        focused = Panel(
-            detail,
-            title=make_panel_title(tab, compact=width < 100, filter_text=filter_text),
-            border_style="green",
-            box=box.ROUNDED,
-            height=pane_height,
-        )
+        if use_scroll:
+            clipped = _clip_content_to_height(detail, pane_height, scroll_offset)
+            focused = Panel(
+                Text(clipped),
+                title=make_panel_title(tab, compact=width < 100, filter_text=filter_text),
+                border_style="green",
+                box=box.ROUNDED,
+            )
+        else:
+            focused = Panel(
+                detail,
+                title=make_panel_title(tab, compact=width < 100, filter_text=filter_text),
+                border_style="green",
+                box=box.ROUNDED,
+                height=pane_height,
+            )
         if not chrome:
             return focused
         return Group(make_header(tab), focused, make_footer(run, width))
@@ -410,6 +438,11 @@ def render_dashboard(
     layout = Table.grid(expand=True)
     layout.add_column(width=left_width)
     layout.add_column(width=right_width)
+    if use_scroll:
+        clipped_detail = _clip_content_to_height(detail, pane_height, scroll_offset)
+        detail_widget = Text(clipped_detail)
+    else:
+        detail_widget = detail
     layout.add_row(
         Panel(
             make_sidebar(tab, rows, selected_row_index, visible, filter_text=filter_text),
@@ -419,7 +452,7 @@ def render_dashboard(
             height=pane_height,
         ),
         Panel(
-            detail,
+            detail_widget,
             title=make_panel_title(tab, compact=right_width < 72, filter_text=""),
             border_style="green",
             box=box.ROUNDED,
@@ -458,6 +491,7 @@ def render_snapshot(
     agent_view: str = "live",
     filter_text: str = "",
     focus: bool = False,
+    detail_scroll: int = 0,
 ) -> str:
     """Render the TUI as deterministic text for snapshot tests."""
     if height < MIN_HEIGHT or width < MIN_WIDTH:
@@ -485,6 +519,7 @@ def render_snapshot(
             agent_view=agent_view,
             filter_text=filter_text,
             focus=focus,
+            scroll_offset=detail_scroll,
         )
     )
     return normalize_snapshot(console.export_text(styles=False), width, height)
@@ -533,6 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-view", choices=AGENT_VIEWS, default="live")
     parser.add_argument("--filter", default="", help="filter rows by text")
     parser.add_argument("--focus", action="store_true", help="render selected detail full-width")
+    parser.add_argument("--detail-scroll", type=int, default=0, help="scroll offset for detail pane")
     return parser
 
 
@@ -555,6 +591,7 @@ def main() -> None:
                 agent_view=args.agent_view,
                 filter_text=args.filter,
                 focus=args.focus,
+                detail_scroll=args.detail_scroll,
             )
         )
         return
