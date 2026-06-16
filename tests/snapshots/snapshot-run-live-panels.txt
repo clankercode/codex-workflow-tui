@@ -14,7 +14,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ │ longest     Live test… agents     1          phases     1          │ │
 │                                            ││ │ checks      0                                                      │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││ ╭─────────────────────────── Live Output ────────────────────────────╮ │
+│                                            ││ ╭───────────────────────── Merged Live Output ──────────────────────╮ │
 │                                            ││ │ F(20) = 6765                                                       │ │
 │                                            ││ │                                                                    │ │
 │                                            ││ │ Worker is still streaming context, but the current artifact        │ │

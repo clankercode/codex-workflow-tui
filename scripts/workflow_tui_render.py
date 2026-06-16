@@ -58,6 +58,19 @@ COMPACT_TIMESTAMP_WIDTH = 14
 TIMESTAMP_KEYS = {"ts", "created_at", "updated_at", "started_at", "completed_at"}
 SNAPSHOT_NOW_ENV = "WORKFLOW_TUI_SNAPSHOT_NOW"
 
+AGENT_COLORS = (
+    "cyan",
+    "magenta",
+    "green",
+    "yellow",
+    "blue",
+    "red",
+    "bright_cyan",
+    "bright_magenta",
+    "bright_green",
+    "bright_yellow",
+)
+
 
 # ---------------------------------------------------------------------------
 # Timestamp utilities (used by render functions)
@@ -485,6 +498,54 @@ def make_facts_grid(rows: list[tuple[str, Any]], columns: int = 3) -> Table:
     return table
 
 
+def merged_live_output_text(
+    activities: list[dict[str, Any]],
+    agents: list[dict[str, Any]],
+    *,
+    max_lines: int = 80,
+) -> Text:
+    """Merge live output from multiple agents with colored name prefixes.
+
+    Each output line is prefixed with ``[agent-name]`` in a color assigned
+    per agent, producing a stable interleaved view.  When only one agent has
+    output, the prefix is omitted so single-agent runs remain clean.
+    """
+    entries: list[tuple[str, str, str]] = []
+    agent_names: dict[str, str] = {
+        str(agent.get("agent_id", "")): str(agent.get("name") or agent.get("agent_id") or "agent")
+        for agent in agents
+    }
+    color_map: dict[str, str] = {}
+    color_index = 0
+    for activity in activities:
+        output = str(activity.get("latest_output") or "").strip()
+        if not output:
+            continue
+        agent_id = str(activity.get("agent_id", ""))
+        agent_name = agent_names.get(agent_id, agent_id or "agent")
+        if agent_id not in color_map:
+            color_map[agent_id] = AGENT_COLORS[color_index % len(AGENT_COLORS)]
+            color_index += 1
+        entries.append((agent_name, color_map[agent_id], output))
+
+    if not entries:
+        return Text("No live output yet.", style="dim")
+    if len(entries) == 1:
+        return Text(entries[0][2], overflow="fold")
+
+    result = Text()
+    first_line = True
+    for agent_name, color, output in entries:
+        prefix = f"[{agent_name}] "
+        for line in output.splitlines()[:max_lines]:
+            if not first_line:
+                result.append("\n")
+            result.append(prefix, style=f"bold {color}")
+            result.append(line)
+            first_line = False
+    return result
+
+
 def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) -> Group:
     live = collect_run_activity(run)
     metrics = run.get("metrics", {})
@@ -519,7 +580,10 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
     ]
     live_stats = Panel(make_facts_grid(live_rows), title="Live Stats", border_style="magenta", box=box.ROUNDED)
     tool_text = "\n".join(live.get("latest_tool_calls", [])[-8:]) or "No tool calls recorded yet."
-    latest = Panel(Text(live.get("latest_output") or "No live output yet.", overflow="fold"), title="Live Output", border_style="yellow", box=box.ROUNDED)
+    merged_output = merged_live_output_text(
+        live.get("activities", []), run.get("agents", [])
+    )
+    latest = Panel(merged_output, title="Merged Live Output", border_style="yellow", box=box.ROUNDED)
     panels: list[Any] = [facts, live_stats, latest]
     if detail_height is None or detail_height >= 28:
         running_text = workflow_tui_live.running_agents_text(live, format_duration_seconds)
