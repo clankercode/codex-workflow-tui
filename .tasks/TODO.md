@@ -56,3 +56,4 @@
 17. Graph status icons not rendered for all agents — some agents lack the status circle/half-circle icon. The status icon mapping or animation logic may be skipping agents with unexpected status values or missing color attributes.
 18. Tokens/s measurement in agents live view is wrong: it conflates input/output/reasoning tokens. We need to separate upstream tokens (input/cache reads/files sent) from downstream tokens (output/reasoning) because we can push more data than we receive.
 19. Graph tab bar placement still visually inconsistent compared to other tabs — title alignment/padding makes the tabs row look offset even after the left-align fix.
+20. Runner should detect provider quota errors and fail the agent/runner instead of retrying indefinitely in :00/:30 windows. `review-standards` on @cx-reviewer repeatedly hits quota limits and stalls; this wastes time and blocks review phases.
