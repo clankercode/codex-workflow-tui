@@ -323,6 +323,7 @@ wf preview --title "review" --job "security::Review this branch."
 wf tui
 wf run --runner ccc-opencode --title "..." --job "name::prompt"
 wf run-codex --title "..." --job "name::prompt"
+wf watch-emit [<run-id>] [--interval 30s] [--loop]
 workflow-state list
 workflow-state show <run-id> --detail
 workflow-tui
@@ -407,3 +408,20 @@ workflow check <run-id>
 ```
 
 `status` summarizes active and recent runs with derived health. `doctor` checks state writability, command availability, and TUI dependencies. `check` validates one run for failed/blocked/stale work, missing artifacts, invalid links, failed checks, and other operator-facing issues.
+
+## Watch-Emit: State-Transition Emitter
+
+Emit structured state-transition lines for the Monitor tool. Unlike `wf watch` (which refreshes a compact panel), `watch-emit` is silent when nothing changes and prints one line per transition:
+
+```bash
+# One-shot check for a single run
+workflow watch-emit <run-id>
+
+# Poll all active runs, emit only on change
+workflow watch-emit --loop --interval 30s
+
+# Pair with the Monitor tool
+Monitor command="workflow watch-emit <run-id> --loop --interval 30s" triggerTurn=true
+```
+
+Output lines use the format `<short-id> RUN|PHASE|AGENT|EVENT: <old> → <new>`. A sidecar snapshot at `<run-dir>/watch-state.json` tracks emitted state. Read `references/watch-emit.md` for full details.

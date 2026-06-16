@@ -77,6 +77,16 @@ or, without the installed alias:
 python3 ~/.agents/skills/workflow/scripts/workflow_tui.py
 ```
 
+## Monitoring Active Workflows
+
+Use `workflow watch-emit` to pair an idle lead agent with the Monitor tool. Unlike `wf watch` / `wf monitor` (which refresh a compact status panel for humans), `watch-emit` emits append-only transition deltas — one line per state change — and stays silent when nothing has changed. This lets the agent sleep until real progress occurs, waking with full context instead of a blind ping.
+
+```
+Monitor command="workflow watch-emit <run-id> --loop --interval 30s" triggerTurn=true
+```
+
+To watch all active runs without specifying an id, omit the run-id argument. Read `references/watch-emit.md` for output line formats, one-shot vs loop semantics, sidecar snapshot details, and the comparison to fixed-interval heartbeats.
+
 ## Delegation Rules
 
 - Use native subagents first for small to medium parallel tasks inside the current turn. They are best for research, review, test triage, and disjoint code lanes.
