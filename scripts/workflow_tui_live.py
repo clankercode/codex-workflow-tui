@@ -117,6 +117,21 @@ def finished_ago_text(
     return f"{duration} ago"
 
 
+def agent_identity_text(agent: dict[str, Any]) -> str:
+    """Return process identity string for an agent.
+
+    External workers (has process_id):  "pid:12345" or "pgid:12345"
+    Native subagents (has thread_id and agent_type == "native-subagent"): "thread:subagent-security"
+    """
+    if agent.get("process_id") is not None:
+        return f"pid:{agent['process_id']}"
+    if agent.get("process_group_id") is not None:
+        return f"pgid:{agent['process_group_id']}"
+    if agent.get("agent_type") == "native-subagent" and agent.get("thread_id"):
+        return f"thread:{agent['thread_id']}"
+    return ""
+
+
 def running_agent_summaries(run: dict[str, Any], now_epoch: float) -> list[dict[str, Any]]:
     """Return compact state-derived summaries for active agents."""
     summaries: list[dict[str, Any]] = []
@@ -128,6 +143,9 @@ def running_agent_summaries(run: dict[str, Any], now_epoch: float) -> list[dict[
             except ValueError:
                 started = None
         summary = {"name": agent.get("name", ""), "agent_id": agent.get("agent_id", "")}
+        identity = agent_identity_text(agent)
+        if identity:
+            summary["identity_text"] = identity
         if started is not None:
             summary["elapsed_seconds"] = round(max(0.0, now_epoch - float(started)), 1)
         summaries.append(summary)
@@ -137,7 +155,14 @@ def running_agent_summaries(run: dict[str, Any], now_epoch: float) -> list[dict[
 def running_agents_inline_text(run: dict[str, Any], limit: int = 3) -> str:
     """Return a one-line active-worker preview for the runs overview."""
     agents = [item for item in run.get("agents", []) if item.get("status") == "running"]
-    labels = [str(agent.get("name") or agent.get("agent_id") or "agent") for agent in agents[:limit]]
+    labels = []
+    for agent in agents[:limit]:
+        name = str(agent.get("name") or agent.get("agent_id") or "agent")
+        identity = agent_identity_text(agent)
+        if identity:
+            labels.append(f"{name} ({identity})")
+        else:
+            labels.append(name)
     if len(agents) > limit:
         labels.append(f"+{len(agents) - limit}")
     return ", ".join(labels)
