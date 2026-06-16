@@ -9528,6 +9528,7 @@ class StateTruthfulnessTests(unittest.TestCase):
         """write_scope entries should cover files in subdirectories."""
         sys.path.insert(0, str(SCRIPTS))
         import workflow_ops  # pylint: disable=import-outside-toplevel
+        import workflow_ops_merge  # pylint: disable=import-outside-toplevel
 
         agent = {
             "agent_id": "agent-nested",
@@ -9538,12 +9539,12 @@ class StateTruthfulnessTests(unittest.TestCase):
         def fake_git_checked(cwd: str, *args: str) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(args, 0, stdout="src/module/deep/file.py\nsrc/other.py\n", stderr="")
 
-        original = workflow_ops.git_checked
-        workflow_ops.git_checked = fake_git_checked  # type: ignore[assignment]
+        original = workflow_ops_merge.git_checked
+        workflow_ops_merge.git_checked = fake_git_checked  # type: ignore[assignment]
         try:
             violations = workflow_ops.lane_scope_violations(agent, "/tmp")
         finally:
-            workflow_ops.git_checked = original  # type: ignore[assignment]
+            workflow_ops_merge.git_checked = original  # type: ignore[assignment]
 
         self.assertEqual(violations, ["src/other.py"])
 
@@ -9551,6 +9552,7 @@ class StateTruthfulnessTests(unittest.TestCase):
         """write_scope must not match path strings that share a prefix without a directory separator."""
         sys.path.insert(0, str(SCRIPTS))
         import workflow_ops  # pylint: disable=import-outside-toplevel
+        import workflow_ops_merge  # pylint: disable=import-outside-toplevel
 
         agent = {
             "agent_id": "agent-prefix",
@@ -9566,12 +9568,12 @@ class StateTruthfulnessTests(unittest.TestCase):
                 stderr="",
             )
 
-        original = workflow_ops.git_checked
-        workflow_ops.git_checked = fake_git_checked  # type: ignore[assignment]
+        original = workflow_ops_merge.git_checked
+        workflow_ops_merge.git_checked = fake_git_checked  # type: ignore[assignment]
         try:
             violations = workflow_ops.lane_scope_violations(agent, "/tmp")
         finally:
-            workflow_ops.git_checked = original  # type: ignore[assignment]
+            workflow_ops_merge.git_checked = original  # type: ignore[assignment]
 
         self.assertEqual(violations, ["srcs/sibling.py", "src_test.py", "src.md", "tests_old/legacy.py"])
 
@@ -9579,6 +9581,7 @@ class StateTruthfulnessTests(unittest.TestCase):
         """Blank scope strings should not match every file path."""
         sys.path.insert(0, str(SCRIPTS))
         import workflow_ops  # pylint: disable=import-outside-toplevel
+        import workflow_ops_merge  # pylint: disable=import-outside-toplevel
 
         agent = {
             "agent_id": "agent-blank-scope",
@@ -9589,12 +9592,12 @@ class StateTruthfulnessTests(unittest.TestCase):
         def fake_git_checked(cwd: str, *args: str) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(args, 0, stdout="src/main.py\nother/foo.py\n", stderr="")
 
-        original = workflow_ops.git_checked
-        workflow_ops.git_checked = fake_git_checked  # type: ignore[assignment]
+        original = workflow_ops_merge.git_checked
+        workflow_ops_merge.git_checked = fake_git_checked  # type: ignore[assignment]
         try:
             violations = workflow_ops.lane_scope_violations(agent, "/tmp")
         finally:
-            workflow_ops.git_checked = original  # type: ignore[assignment]
+            workflow_ops_merge.git_checked = original  # type: ignore[assignment]
 
         self.assertEqual(violations, ["other/foo.py"])
 
