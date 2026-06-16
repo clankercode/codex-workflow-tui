@@ -51,3 +51,4 @@
 12. Agent replacement/recovery — when a worker hits usage limits or crashes, should be able to add a replacement agent with same scope and have it auto-start (currently requires manual `workflow run --attach-run`)
 13. `workflow run --attach-run` re-launches ALL jobs from the run, not just the specified `--job`. When retrying a single agent, it re-launches impl agents too, causing duplicate work and stale-worker confusion. Should only launch the specified jobs.
 14. Replacement agents created via `workflow run --attach-run` lose the original agent's `depends_on` edges, so the dependency graph shows them under the root instead of their real upstreams. Should inherit or allow specifying dependencies.
+15. TUI tab bar jumps when switching to graph tab because detail panel width differs and title was centered → fixed: use full-terminal compact threshold and left-align panel title.

@@ -438,6 +438,7 @@ def render_dashboard(
             focused = Panel(
                 Text(clipped),
                 title=make_panel_title(tab, compact=width < 100, filter_text=filter_text),
+                title_align="left",
                 border_style="green",
                 box=box.ROUNDED,
             )
@@ -445,6 +446,7 @@ def render_dashboard(
             focused = Panel(
                 detail,
                 title=make_panel_title(tab, compact=width < 100, filter_text=filter_text),
+                title_align="left",
                 border_style="green",
                 box=box.ROUNDED,
                 height=pane_height,
@@ -471,7 +473,8 @@ def render_dashboard(
         ),
         Panel(
             detail_widget,
-            title=make_panel_title(tab, compact=right_width < 72, filter_text=""),
+            title=make_panel_title(tab, compact=width < 100, filter_text=""),
+            title_align="left",
             border_style="green",
             box=box.ROUNDED,
             height=pane_height,
