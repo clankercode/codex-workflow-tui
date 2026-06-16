@@ -1,0 +1,50 @@
+{
+  "kind": "workflow-plan",
+  "title": "workflow watch-emit: state-transition emitter for Monitor pairing",
+  "prompt": "Build a new `workflow watch-emit` command that pairs with the Monitor tool. It emits run/phase/agent state transitions so an idle lead agent wakes with full context instead of a dumb ping. All work must pass WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'.",
+  "cwd": "/home/xertrov/.llm-general/ai-coding/codex/skills/workflow",
+  "runner": "ccc",
+  "ccc_runner": "@mimo25p",
+  "max_agents": 2,
+  "phases": [
+    {
+      "phase_id": "phase-impl",
+      "name": "Implementation",
+      "jobs": [
+        {
+          "name": "impl-watch-emit",
+          "prompt": "Build a new `workflow watch-emit` command. Do NOT launch ccc or other runners — work directly.\n\nGOAL: A command that pairs with the Monitor tool. Instead of a dumb heartbeat ping, it emits run/phase/agent STATE TRANSITIONS so an idle lead agent wakes with full context and no follow-up tool call needed.\n\nUSAGE:\n  workflow watch-emit [<run-id>] [--interval 30s] [--loop] [--state-dir PATH]\n  - No run-id: watch ALL active (non-terminal) runs in the state dir.\n  - run-id: watch that one run (even if terminal).\n  - One-shot by DEFAULT: check once, emit any changed lines, exit 0. This is the composable form.\n  - --loop: poll repeatedly at --interval (default 30s); emit ONLY when something changes; silent otherwise. This is the Monitor-pairing form.\n  - --state-dir overrides WORKFLOW_STATE_DIR.\n\nBEHAVIOR:\n1. On each check, load run state(s) and compare to a sidecar snapshot stored at <run-dir>/watch-state.json (one snapshot file per run). The snapshot stores: run status, a dict of {phase_id: status}, a dict of {agent_id: {status, exit_code}}, and the count of events seen.\n2. Diff against the snapshot. For each change, emit ONE line:\n   - Run status change:    `wf-<id> RUN: <old> → <new>`\n   - Phase status change:  `wf-<id> PHASE <phase-name>: <old> → <new>`\n   - Agent status change:  `wf-<id> AGENT <name>: <old> → <new>` (append ` (exit N)` if exit_code present and new status is terminal)\n   - New events:           `wf-<id> EVENT: <event-message>` (only the last 1-3 new events, not the whole history; cap at 3 lines)\n   On FIRST run (no snapshot), emit the current status as the baseline (e.g. `wf-<id> RUN: → <current-status>`); do NOT spam the whole state.\n3. Update the snapshot file. If nothing changed, print NOTHING and exit 0 (in one-shot) or sleep (in --loop).\n4. Use short run ids in output (the full run_id is long; format is `wf-<stamp>-<slug>-<hex6>`). Truncate to the last 8 chars of the run_id via a small local helper. NOTE: workflow_state.short_id(prefix) is only an ID GENERATOR (returns `<prefix>-<hex10>`); it does NOT truncate existing ids, so do NOT reuse it for this (no run_id-truncation helper exists in the codebase today). Keep lines under ~120 chars.\n5. In --loop mode, handle SIGINT/SIGTERM cleanly (exit 0). Never crash on a missing/corrupt snapshot (treat as first-run).\n6. In --loop mode watching ALL active runs, also detect NEW runs that have appeared since last check and emit a line for them.\n\nIMPLEMENTATION:\n- Create scripts/workflow_watch_emit.py with a main() and cmd_watch_emit(args).\n- Reuse workflow_state.load_run / state dir resolution (sys.path bootstrap: ROOT = Path(__file__).resolve().parents[1]; SCRIPTS = ROOT/'scripts'; sys.path.insert(0, str(SCRIPTS))). Do NOT reuse workflow_monitor.cmd_watch / cmd_monitor — those are human-facing compact status-refresh views; watch-emit is a separate machine-facing transition emitter meant to pair with the Monitor tool.\n- Helper functions: _load_snapshot(run_dir), _save_snapshot(run_dir, snap), _diff_and_emit(run, prev_snap) -> list[str] (the emitted lines), _build_snapshot(run) -> dict.\n- Wire into scripts/wf: add a DEDICATED standalone case branch — do NOT add `watch-emit` to the ops-command regex list (that list dispatches to workflow_ops.py, which has no `watch-emit` subparser in build_parser(); adding it there would crash with an argparse invalid-choice error, and workflow_ops.py is out of scope). Instead add a case next to the other standalone scripts (e.g. right after the `state)` case), of the form used by the existing start, run, and state cases: a standalone case that execs python3 against the workflow_watch_emit.py script path with all args forwarded (model it on the state-paren case). Also add a USAGE line: `$PROG watch-emit [<run-id>] [--interval 30s] [--loop] [--state-dir PATH]`.\n- Keep the file under 400 LOC.\n\nTESTS (new file tests/test_workflow_watch.py with sys.path bootstrap):\n- One-shot emits nothing when state unchanged (snapshot exists).\n- One-shot emits transitions when an agent goes running→completed.\n- Emits exit code on terminal agent transitions.\n- Emits phase and run status transitions.\n- First-run (no snapshot) emits baseline, not the whole state.\n- All-runs mode detects a newly-appeared run.\n- Corrupt snapshot is treated as first-run (no crash).\n- --loop mode emits on change then sleeps (make it deterministic: expose a max-iters seam such as an optional `_max_iters` arg or a `WORKFLOW_WATCH_EMIT_MAX_ITERS` env var, and monkeypatch `time.sleep` to a no-op in tests; do NOT actually sleep in tests).\n- run-id mode watches a terminal run and still emits its baseline.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py' and fix until all pass.",
+          "write_scope": ["scripts/workflow_watch_emit.py", "scripts/wf", "tests/test_workflow_watch.py"],
+          "worktree": {"branch": "workflow/p2/watch-emit", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-docs",
+      "name": "Documentation",
+      "depends_on": ["impl-watch-emit"],
+      "jobs": [
+        {
+          "name": "write-docs",
+          "prompt": "Write documentation for the new `workflow watch-emit` command. Do NOT launch ccc or other runners — work directly.\n\n1. Create references/watch-emit.md documenting:\n   - What it does (emits state transitions, pairs with the Monitor tool / heartbeat)\n   - Usage: one-shot vs --loop; single run vs all active runs\n   - Output line formats (RUN/PHASE/AGENT/EVENT)\n   - How to pair with the Monitor tool: `Monitor command=\"workflow watch-emit <run> --loop --interval 30s\" triggerTurn=true` — explain that the agent wakes ONLY on real transitions with full context.\n   - Comparison to GitHub CI watchers (emit on state change, not fixed ping).\n   - Sidecar snapshot location and format.\n2. Add a new '## Monitoring Active Workflows' section to SKILL.md. Anchor it precisely: insert AFTER the '## Start Every Workflow' section (the TUI guidance is step 8 inside it — there is no standalone TUI heading in SKILL.md) and BEFORE '## Delegation Rules'. Content: one paragraph + the Monitor pairing example + a pointer to references/watch-emit.md. Clearly distinguish `watch-emit` (append-only transition deltas for the Monitor tool, silent when unchanged) from the existing `wf watch` / `wf monitor` compact status-refresh commands. Keep it brief — SKILL.md is for the operating agent, not deep detail.\n3. Add `watch-emit` to the command list in references/operations.md if that file lists commands.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py' to ensure nothing broke.",
+          "write_scope": ["references/watch-emit.md", "SKILL.md", "references/operations.md"],
+          "worktree": {"branch": "workflow/p2/watch-emit-docs", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-review",
+      "name": "Review",
+      "depends_on": ["write-docs"],
+      "jobs": [
+        {
+          "name": "review-semantic",
+          "ccc_runner": "@glm51",
+          "prompt": "Semantic review. Verify watch-emit correctly detects run/phase/agent transitions, handles first-run baseline, all-runs mode, corrupt snapshots, and --loop determinism. Check docs match the implementation. Run WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'. Fix issues or file findings. Return strict JSON: status, findings, tests_passed. Do NOT launch ccc or other runners.",
+          "write_scope": ["scripts/", "tests/", "references/", "SKILL.md"],
+          "worktree": {"branch": "workflow/p2/review-watch-emit", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    }
+  ]
+}
