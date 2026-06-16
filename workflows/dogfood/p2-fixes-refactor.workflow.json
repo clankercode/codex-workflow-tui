@@ -1,0 +1,69 @@
+{
+  "kind": "workflow-plan",
+  "title": "P2 Fixes + Refactor: tab bar, graph icons, token split, quota fail-fast, pi-direct tests",
+  "prompt": "Fix TUI bugs and refactor modules over LOC soft limit. All work must pass WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'. Parallel jobs in a phase MUST NOT edit the same file (merge-lanes merges one branch at a time and conflicts on shared files); each job owns a disjoint file set.",
+  "cwd": "/home/xertrov/.llm-general/ai-coding/codex/skills/workflow",
+  "runner": "ccc",
+  "ccc_runner": "@mimo25p",
+  "max_agents": 3,
+  "phases": [
+    {
+      "phase_id": "phase-fixes",
+      "name": "Fixes",
+      "jobs": [
+        {
+          "name": "tui-fixes",
+          "prompt": "Fix three TUI bugs in the workflow skill. Do NOT launch ccc or other runners — work directly.\n\n1. TAB BAR OFFSET (#19): The graph tab uses a narrower sidebar (left_width 28-34) than other tabs (40-46), so centered panel titles appear at a different horizontal position. REVERT the left-align change in scripts/workflow_tui.py (go back to centered titles). Instead, fix the offset: when rendering the detail panel title for the graph tab, pad the title Text with leading spaces equal to the sidebar width difference so the tabs center at the same position as all other tabs. The goal: tabs look centered AND don't move when switching to/from the graph tab.\n\n2. GRAPH STATUS ICONS (#17): Some agents in the dependency graph don't show their status icon (circle/half-circle). Debug scripts/workflow_tui_render.py build_run_graph() — the STATUS_ICONS mapping and the running animation cycle may skip agents with unexpected or missing status values. Ensure every agent node gets an icon. Check that agent_type or status field access doesn't fail silently.\n\n3. TOKEN DIRECTION SPLIT (#18): In scripts/workflow_tui_live.py and scripts/workflow_tui_render.py, the tokens/s rate conflates input/output/reasoning. Split the display to show upstream (input + cached_input) and downstream (output + reasoning) separately, e.g. 'up 1.2k/s down 0.3k/s'. The rate calc should be per-direction.\n\nAfter all three fixes, refactor workflow_tui_render.py (currently ~1035 lines) by extracting the graph-related functions (build_run_graph, make_run_graph_panel, STATUS_ICONS, STATUS_COLORS, _RUNNING_CYCLE) into a new module scripts/workflow_tui_graph.py. Re-export those names from workflow_tui_render.py (e.g. `from .workflow_tui_graph import ...` or module-level re-bindings) so every existing import of them from workflow_tui_render.py keeps working unchanged.\n\nFILE OWNERSHIP: In THIS phase you are the SOLE editor of tests/test_workflow.py and of every scripts/workflow_tui*.py file. Add any new TUI tests to tests/test_workflow.py. Do NOT create or edit any other tests/test_workflow_*.py file — other parallel jobs own those. Update snapshot files under tests/snapshots/ as needed (you are the only snapshot editor).\n\nVerify with: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py' — fix until all pass.",
+          "write_scope": ["scripts/workflow_tui.py", "scripts/workflow_tui_render.py", "scripts/workflow_tui_live.py", "scripts/workflow_tui_activity.py", "scripts/workflow_tui_graph.py", "tests/test_workflow.py", "tests/snapshots/"],
+          "worktree": {"branch": "workflow/p2/tui-fixes", "base": "HEAD", "merge_target": "main"}
+        },
+        {
+          "name": "quota-fail",
+          "prompt": "Add quota error fast-fail to the workflow runner (#20). In scripts/workflow_run_codex.py, add support for failing immediately on quota errors instead of retrying in :00/:30 windows. Add: (a) a --quota-fail-fast CLI flag, (b) a WORKFLOW_QUOTA_FAIL_FAST=1 env var, (c) when enabled, if quota_limit_detected() returns true, mark the agent failed immediately instead of sleeping/retrying. Keep existing retry behavior as default (backward compatible).\n\nFILE OWNERSHIP: Put ALL of your new tests in a NEW file tests/test_workflow_quota.py. Do NOT edit tests/test_workflow.py — another parallel job (tui-fixes) owns it this phase and merge-lanes will conflict if you both touch it. The new file is a standalone unittest module. Mirror the bootstrap used by tests/test_workflow.py: `ROOT = Path(__file__).resolve().parents[1]; SCRIPTS = ROOT/'scripts'; sys.path.insert(0, str(SCRIPTS))` before importing workflow_run_codex. (There is no tests/__init__.py, so do not use a 'tests.' package prefix.) Cover both the fast-fail path and the default retry path with fakes/mocks.\n\nDo NOT launch ccc or other runners. Verify with: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py' — fix until all pass.",
+          "write_scope": ["scripts/workflow_run_codex.py", "tests/test_workflow_quota.py"],
+          "worktree": {"branch": "workflow/p2/quota-fail", "base": "HEAD", "merge_target": "main"}
+        },
+        {
+          "name": "pi-direct-tests",
+          "prompt": "Add test coverage for the PiDirectProvider in scripts/workflow_run_providers.py (#16). The provider exists but has no tests.\n\nFILE OWNERSHIP: Put ALL of your new tests in a NEW file tests/test_workflow_providers.py. Do NOT edit tests/test_workflow.py — another parallel job (tui-fixes) owns it this phase and merge-lanes will conflict if you both touch it. The new file is a standalone unittest module. Mirror the bootstrap used by tests/test_workflow.py: `ROOT = Path(__file__).resolve().parents[1]; SCRIPTS = ROOT/'scripts'; sys.path.insert(0, str(SCRIPTS))` before importing workflow_run_providers. (There is no tests/__init__.py, so do not use a 'tests.' package prefix.) Cover: (a) build_command produces correct pi -p --mode json --approve args, (b) --model flag is passed through, (c) extract_result parses JSON stdout correctly, (d) extract_result falls back to plain text, (e) extract_result falls back to output file. Use fakes/mocks — no real pi process.\n\nDo NOT launch ccc or other runners. Verify with: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py' — fix until all pass.",
+          "write_scope": ["scripts/workflow_run_providers.py", "tests/test_workflow_providers.py"],
+          "worktree": {"branch": "workflow/p2/pi-direct-tests", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-refactor",
+      "name": "Refactor ops",
+      "depends_on": ["tui-fixes", "quota-fail", "pi-direct-tests"],
+      "jobs": [
+        {
+          "name": "refactor-ops",
+          "prompt": "Refactor scripts/workflow_ops.py (currently ~1269 lines, over the 1000 soft limit) by extracting cohesive groups of functions into new modules. Good candidates: merge-lanes logic, lane preparation, scope checking. Keep re-exports in workflow_ops.py for backward compatibility (every public name that callers currently import from workflow_ops must still import cleanly after the split). Ensure no function exceeds 50 lines.\n\nFILE OWNERSHIP: This phase runs AFTER phase-fixes has merged, so tests/test_workflow.py already contains the tui-fixes test additions; you are the sole editor of tests/test_workflow.py in THIS phase, so you may add ops tests there (or in a new tests/test_workflow_ops.py). Do NOT edit any scripts/workflow_tui*.py file.\n\nDo NOT launch ccc or other runners. Verify with: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py' — fix until all pass.",
+          "write_scope": ["scripts/workflow_ops.py", "scripts/workflow_merge.py", "tests/test_workflow.py", "tests/test_workflow_ops.py"],
+          "worktree": {"branch": "workflow/p2/refactor-ops", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-review",
+      "name": "Review",
+      "depends_on": ["refactor-ops"],
+      "jobs": [
+        {
+          "name": "review-semantic",
+          "ccc_runner": "@glm51",
+          "prompt": "Semantic review of the merged result. Verify tab bar offset fix, graph icons, token direction split, quota fast-fail, pi-direct tests, and refactors are correct with adequate test coverage and that backward-compatible re-exports are intact. Do NOT launch nested ccc or other runners — work directly. Verify with: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'. Fix issues you find within your own worktree lane, or file findings as text. Return strict JSON: status, findings, tests_passed.",
+          "write_scope": ["scripts/", "tests/"],
+          "worktree": {"branch": "workflow/p2/review-semantic", "base": "HEAD", "merge_target": "main"}
+        },
+        {
+          "name": "review-standards",
+          "ccc_runner": "@mm3",
+          "prompt": "Standards review of the merged result. Check LOC limits (no file over 2000 hard / 1000 soft), no duplication, meaningful names, test quality, snapshot freshness, and that refactor re-exports keep imports backward compatible. Do NOT launch nested ccc or other runners — work directly. Verify with: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'. Fix issues you find within your own worktree lane. Return strict JSON: status, findings, tests_passed.",
+          "write_scope": ["scripts/", "tests/"],
+          "worktree": {"branch": "workflow/p2/review-standards", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    }
+  ]
+}
