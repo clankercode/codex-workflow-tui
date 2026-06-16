@@ -247,15 +247,12 @@ document is the durable review target.
     keep showing elapsed/live duration; completed ones should make it easy to
     see both how long they ran and how recently they finished.
 
-21. **Add pi coding CLI as a runner.**
+21. **Add pi coding CLI as a runner.** Implemented 2026-06-16.
     Add a `pi-direct` runner (alongside `codex-direct`, `opencode-direct`,
     `kimi-direct`) so `workflow apply/run` can dispatch workers to the pi
-    coding agent CLI. Requires a `PiDirectProvider` in
-    `scripts/workflow_run_providers.py` that builds the correct `pi` command
-    line, handles stdin/stdout streaming, and extracts results from pi's
-    output format. Wire into `build_provider()`, `build_parser()` arg
-    choices, `wf` alias help text, and the `coding-cli-runners.md` reference.
-    Add smoke tests in the runner-matrix or a focused process-level test.
+    coding agent CLI. `PiDirectProvider` uses `pi -p --mode json --approve`
+    for non-interactive execution with `--model` support. Result extracted
+    from JSON stdout with fallback to output file.
 
 22. **Auto-resolve merge conflicts.** Implemented 2026-06-16.
     `merge-lanes` dispatches a resolver agent when a conflict is detected.
