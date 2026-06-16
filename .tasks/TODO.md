@@ -33,5 +33,8 @@
 3. Dependent worktrees need to branch from dependency's branch, not HEAD → fixed
 4. Existing branch from prior run causes create failure → fallback to checkout → fixed
 5. Don't cancel running workflows without asking — let progressing agents finish first
-6. `workflow apply` blocks until completion — should launch and return immediately
+6. `workflow apply` blocks until completion — should launch and return immediately → fixed
 7. Phase boundary adds unnecessary cross-task deps (review-10a waits for impl-11 too)
+8. Stale worker detection — dead processes shown as running forever → fixed with retry + 30s grace
+9. TUI shows `RUN!` in red for stale workers → fixed
+10. Tool call gap: ccc `cache.read` tokens not captured (documented in test_codex_jsonl_cache_read_tokens_gap)
