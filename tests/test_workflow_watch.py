@@ -276,6 +276,32 @@ class WatchEmitTests(unittest.TestCase):
         self.assertEqual(workflow_watch_emit.short_run_id("12345678"), "12345678")
         self.assertEqual(workflow_watch_emit.short_run_id("123456789"), "23456789")
 
+    def test_interval_accepts_seconds_suffix(self) -> None:
+        """--interval accepts both bare seconds and a trailing 's' suffix."""
+        parser = workflow_watch_emit.build_parser()
+        self.assertEqual(parser.parse_args(["--interval", "30s"]).interval, 30.0)
+        self.assertEqual(parser.parse_args(["--interval", "45"]).interval, 45.0)
+        self.assertEqual(parser.parse_args(["--interval", "1.5s"]).interval, 1.5)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["--interval", "nope"])
+
+    def test_all_runs_one_shot_skips_terminal_runs(self) -> None:
+        """One-shot all-runs mode only reports active (non-terminal) runs."""
+        terminal_id = self._init_run(status="completed")
+        run = self._load_run(terminal_id)
+        run["status"] = "completed"
+        self._save_run(terminal_id, run)
+
+        active_id = self._init_run(title="Active Run")
+        active = self._load_run(active_id)
+        active["status"] = "running"
+        self._save_run(active_id, active)
+
+        output = self._capture_emit()
+        # The active run announces its baseline; the terminal run is silent.
+        self.assertIn("RUN: \u2192 running", output)
+        self.assertNotIn("RUN: \u2192 completed", output)
+
     def test_build_snapshot_structure(self) -> None:
         """_build_snapshot captures status, phases, agents, event_count."""
         run = {

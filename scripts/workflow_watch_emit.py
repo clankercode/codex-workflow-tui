@@ -42,6 +42,19 @@ def short_run_id(run_id: str) -> str:
     return run_id[-8:] if len(run_id) > 8 else run_id
 
 
+def _parse_interval(raw: str) -> float:
+    """Parse an interval in seconds; accept an optional trailing ``s`` suffix."""
+    value = raw.strip()
+    if value and value[-1] in ("s", "S"):
+        value = value[:-1]
+    try:
+        return float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid interval value: {raw!r} (expected seconds, e.g. 30 or 30s)"
+        )
+
+
 def _snapshot_path(run_dir: Path) -> Path:
     return run_dir / _SNAPSHOT_NAME
 
@@ -234,7 +247,7 @@ def _watch_all(
                     continue
 
                 if not loop and _is_terminal(run):
-                    pass
+                    continue
 
                 if loop and rid not in known_run_ids and known_run_ids:
                     sr = short_run_id(rid)
@@ -267,7 +280,7 @@ def _watch_all(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_id", nargs="?", default=None, help="watch a specific run (omit to watch all active)")
-    parser.add_argument("--interval", type=float, default=30.0, help="poll interval in seconds (default: 30)")
+    parser.add_argument("--interval", type=_parse_interval, default=30.0, help="poll interval in seconds (default: 30; accepts a trailing 's')")
     parser.add_argument("--loop", action="store_true", help="poll repeatedly; emit only on change")
     parser.add_argument("--state-dir", default=None, help="override state directory")
     return parser
