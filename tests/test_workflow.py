@@ -9451,8 +9451,39 @@ n        This documents a known gap: merge_token_max does not handle ccc's
         # The graph tab title should have leading spaces before "overview"
         lines = rendered.splitlines()
         detail_line = lines[1] if len(lines) > 1 else ""
-        # Find the detail panel border and check title padding
-        self.assertIn("      overview", detail_line)
+        # At width 110: graph_title_pad = 4, Rich adds 1 space after border = 5 total
+        self.assertIn("     overview", detail_line)
+
+    def test_graph_and_runs_tab_marker_same_column(self) -> None:
+        """The active-tab marker ● must render at the same character column for runs and graph tabs."""
+        for width in (100, 110, 120, 140):
+            with self.subTest(width=width):
+                col_by_tab: dict[str, int] = {}
+                for tab in ("runs", "graph"):
+                    rendered = self.run_script(
+                        "workflow_tui.py",
+                        "--snapshot",
+                        "--fixture",
+                        str(FIXTURE),
+                        "--tab",
+                        tab,
+                        "--width",
+                        str(width),
+                        "--height",
+                        "30",
+                        "--row-index",
+                        "0",
+                        env=self.snapshot_env(),
+                    ).stdout
+                    tab_line = rendered.splitlines()[1] if len(rendered.splitlines()) > 1 else ""
+                    col = tab_line.find("\u25cf")
+                    self.assertGreaterEqual(col, 0, f"marker not found on tab bar at width={width} tab={tab}")
+                    col_by_tab[tab] = col
+                self.assertEqual(
+                    col_by_tab["runs"],
+                    col_by_tab["graph"],
+                    f"● column mismatch at width {width}: runs={col_by_tab['runs']} graph={col_by_tab['graph']}",
+                )
 
     @unittest.skipUnless(_phart_available(), "phart not installed")
     def test_graph_status_icons_present_for_all_agents(self) -> None:

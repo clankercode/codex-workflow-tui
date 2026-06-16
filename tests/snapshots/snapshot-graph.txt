@@ -1,20 +1,20 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭──────── Agents: Review ────────╮╭─      overview  runs  ● graph  phases  agents  events  decisions  artifa─╮
+╭──────── Agents: Review ────────╮╭─     overview  runs  ● graph  phases  agents  events  decisions  artifac─╮
 │    Workflow                    ││ ╭────────────────────────── Dependency Graph ──────────────────────────╮ │
 │ ▸  Fixture Workflow With Para… ││ │                                    ┌────────────────────────┐        │ │
-│      > RUN > 6m 00s > Securit… ││ │                                    │                        │        │ │
+│      > RUN > 139h 48m > Secur… ││ │                                    │                        │        │ │
 │    Completed Smoke Fixture     ││ │                                    │  Fixture Workflow Wit  │        │ │
 │      > DONE > 30m 00s          ││ │                                    │                        │        │ │
 │    Failed Worker Fixture       ││ │                                    └────────────────────────┘        │ │
 │      > FAIL > 30m 00s          ││ │             ┌────────────────────────────┬┴───────────────────────── │ │
 │    Blocked Decision Fixture    ││ │             v                            v                           │ │
-│      > BLCK > 3h 06m           ││ │ ┌───────────────────────┐    ┌──────────────────────┐    ┌────────── │ │
+│      > BLCK > 142h 48m         ││ │ ┌───────────────────────┐    ┌──────────────────────┐    ┌────────── │ │
 │    Paused Operator Fixture     ││ │ │                       │    │                      │    │           │ │
-│      > PAUS > 4h 06m           ││ │ │  Security reviewer ◐  │    │  Synthesis writer ○  │    │  Test cov │ │
+│      > PAUS > 143h 48m         ││ │ │  Security reviewer ◓  │    │  Synthesis writer ○  │    │  Test cov │ │
 │    Cancelled Scope Fixture     ││ │ │                       │    │                      │    │           │ │
 │      > CNCL > 30m 00s          ││ │ └───────────────────────┘    └──────────────────────┘    └────────── │ │
 │    Pending Dispatch Fixture    ││ │                                                                      │ │
-│      > PEND > 6h 06m           ││ │                                                                      │ │
+│      > PEND > 145h 48m         ││ │                                                                      │ │
 │                                ││ │                                                                      │ │
 │                                ││ │                                                                      │ │
 │                                ││ │                                                                      │ │
