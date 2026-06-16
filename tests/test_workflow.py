@@ -6305,6 +6305,42 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agents_by_name["b"]["stage"], "review")
             self.assertEqual(agents_by_name["b"]["depends_on"], "a")
 
+    def test_wf_apply_multi_job_phase_depends_on_all_prior_jobs(self) -> None:
+        """A later phase job must depend on ALL jobs in the prior phase, not just the last."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            plan_path = tmp_path / "multi-job.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Multi Job",
+                        "phases": [
+                            {
+                                "name": "impl",
+                                "jobs": [
+                                    {"name": "impl-a", "prompt": "A"},
+                                    {"name": "impl-b", "prompt": "B"},
+                                    {"name": "impl-c", "prompt": "C"},
+                                ],
+                            },
+                            {"name": "review", "jobs": [{"name": "review", "prompt": "R"}]},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf("apply", str(plan_path), "--mock", "--startup-delay", "0", env=env)
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            agents_by_name = {agent["name"]: agent for agent in run["agents"]}
+
+            # The review job must depend on all three impl jobs.
+            deps = agents_by_name["review"]["depends_on"]
+            for expected in ("impl-a", "impl-b", "impl-c"):
+                self.assertIn(expected, deps, f"review should depend on {expected}; got {deps!r}")
+
     def test_wf_apply_records_declared_phase_gates_and_plan_decisions(self) -> None:
         """Make workflow-plan phases/gates visible as first-class run state."""
         with tempfile.TemporaryDirectory() as tmp:

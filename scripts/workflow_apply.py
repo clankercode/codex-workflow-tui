@@ -117,13 +117,14 @@ def merge_plan_options(args: argparse.Namespace, plan: dict[str, Any], source_di
 def phase_jobs(plan: dict[str, Any]) -> list[dict[str, Any]]:
     """Flatten workflow phases while preserving phase stage and order dependencies.
 
-    Only the last job in each phase becomes an implicit dependency for the
-    next phase. Intra-phase dependencies are preserved from explicit
-    ``depends_on``. This lets independent tasks within a phase run in
-    parallel while still enforcing sequential phase ordering.
+    All jobs in a phase become implicit dependencies for the next phase so
+    that the next stage cannot start until the entire prior phase completes.
+    Intra-phase dependencies are preserved from explicit ``depends_on``.
+    This lets independent tasks within a phase run in parallel while still
+    enforcing sequential phase ordering.
     """
     jobs: list[dict[str, Any]] = []
-    previous_phase_last: list[str] = []
+    previous_phase_jobs: list[str] = []
     for phase in plan["phases"]:
         phase_id = phase_id_for_plan_phase(phase)
         phase_execution = {field: phase[field] for field in workflow_plan.EXECUTION_FIELDS if field in phase}
@@ -140,12 +141,12 @@ def phase_jobs(plan: dict[str, Any]) -> list[dict[str, Any]]:
                 dependencies.extend(str(item) for item in raw_depends if str(item).strip())
             elif raw_depends:
                 dependencies.extend(piece.strip() for piece in str(raw_depends).split(",") if piece.strip())
-            dependencies.extend(previous_phase_last)
+            dependencies.extend(previous_phase_jobs)
             if dependencies:
                 flattened["depends_on"] = ", ".join(dict.fromkeys(dependencies))
             jobs.append(flattened)
             phase_job_names.append(str(flattened["name"]))
-        previous_phase_last = [phase_job_names[-1]] if phase_job_names else []
+        previous_phase_jobs = list(phase_job_names)
     return jobs
 
 
