@@ -45,3 +45,4 @@
 9. TUI shows `RUN!` in red for stale workers → fixed
 10. Tool call gap: ccc `cache.read` tokens not captured (documented in test_codex_jsonl_cache_read_tokens_gap)
 11. Merge conflict auto-resolution — `merge-lanes` should dispatch an agent to resolve conflicts instead of failing
+12. Agent replacement/recovery — when a worker hits usage limits or crashes, should be able to add a replacement agent with same scope and have it auto-start (currently requires manual `workflow run --attach-run`)
