@@ -31,16 +31,12 @@ except Exception:  # pragma: no cover - optional runtime dependency
     jsonschema = None  # type: ignore[assignment]
 
 from workflow_run_providers import (  # noqa: F401
-    CCC_FOOTER_RE,
-    KIMI_RESUME_RE,
-    WorkerResult,
     RunnerProvider,
     CodexDirectProvider,
     OpencodeDirectProvider,
     KimiDirectProvider,
     CccProvider,
     build_provider,
-    first_line,
     command_preview,
     agent_cwd,
 )
