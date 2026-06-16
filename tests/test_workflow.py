@@ -10002,5 +10002,89 @@ class WorkflowMonitorTests(unittest.TestCase):
             self.assertIn("health", data[0])
 
 
+    def test_backlog_creates_persistent_artifact(self) -> None:
+        """The backlog command creates a durable file and registers it as an artifact."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Backlog Test", "--prompt", "test backlog", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+
+            result = self.run_wf("backlog", run_id, env=env)
+            data = json.loads(result.stdout)
+
+            self.assertTrue(data["is_new_artifact"])
+            self.assertFalse(data["appended"])
+            backlog = Path(data["path"])
+            self.assertTrue(backlog.exists())
+            self.assertIn("# Workflow Backlog", backlog.read_text(encoding="utf-8"))
+
+            run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertTrue(any(a["kind"] == "backlog" for a in run["artifacts"]))
+
+    def test_backlog_append_persists_findings(self) -> None:
+        """--append writes findings to the backlog file and records an event."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Append Test", "--prompt", "test append", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+
+            result = self.run_wf("backlog", run_id, "--append", "found a race condition in auth", env=env)
+            data = json.loads(result.stdout)
+            self.assertTrue(data["appended"])
+
+            backlog = Path(data["path"])
+            content = backlog.read_text(encoding="utf-8")
+            self.assertIn("race condition in auth", content)
+            self.assertIn("## [", content)
+
+            run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertTrue(any(e.get("kind") == "backlog" and e.get("operation") == "appended" for e in run["events"]))
+
+    def test_backlog_append_multiple_entries(self) -> None:
+        """Multiple appends accumulate in the same backlog file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Multi Append", "--prompt", "multi", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+
+            self.run_wf("backlog", run_id, "--append", "first finding", env=env)
+            self.run_wf("backlog", run_id, "--append", "second finding", env=env)
+            result = self.run_wf("backlog", run_id, env=env)
+            data = json.loads(result.stdout)
+
+            content = Path(data["path"]).read_text(encoding="utf-8")
+            self.assertIn("first finding", content)
+            self.assertIn("second finding", content)
+            self.assertFalse(data["is_new_artifact"])  # already registered
+
+            run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            backlog_artifacts = [a for a in run["artifacts"] if a["kind"] == "backlog"]
+            self.assertEqual(len(backlog_artifacts), 1)
+
+    def test_backlog_survives_event_rollover(self) -> None:
+        """The backlog file persists independently of the event log cap."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_wf("init", "--title", "Rollover Survive", "--prompt", "rollover", "--cwd", str(ROOT), env=env)
+            run_id = json.loads(created.stdout)["run_id"]
+
+            self.run_wf("backlog", run_id, "--append", "critical finding before rollover", env=env)
+
+            for i in range(260):
+                self.run_script("workflow_state.py", "event", run_id, "--message", f"noisy event {i}", env=env)
+
+            run = json.loads(self.run_script("workflow_state.py", "show", run_id, "--json", env=env).stdout)
+            self.assertTrue(any(a["kind"] == "backlog" for a in run["artifacts"]))
+            backlog_path = Path(next(a["path"] for a in run["artifacts"] if a["kind"] == "backlog"))
+            self.assertTrue(backlog_path.exists())
+            self.assertIn("critical finding before rollover", backlog_path.read_text(encoding="utf-8"))
+            rollover_events = [e for e in run["events"] if e.get("kind") == "event-log" and e.get("operation") == "rollover"]
+            self.assertTrue(rollover_events)
+
+
 if __name__ == "__main__":
     unittest.main()
