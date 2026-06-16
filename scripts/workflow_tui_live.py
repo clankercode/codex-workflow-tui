@@ -92,6 +92,31 @@ def agent_duration_text(
     return format_duration(seconds) or ""
 
 
+def finished_ago_text(
+    entity: dict[str, Any],
+    parse_datetime: Any,
+    format_duration: Any,
+    terminal_statuses: set[str],
+    now: datetime | None,
+    snapshot_now: Any,
+) -> str:
+    """Return a human-readable 'finished Nm ago' for terminal entities."""
+    if str(entity.get("status", "")) not in terminal_statuses:
+        return ""
+    end = parse_datetime(entity.get("completed_at") or entity.get("updated_at"))
+    if end is None:
+        return ""
+    effective_now = now or snapshot_now() or datetime.now(end.tzinfo)
+    reference = effective_now.astimezone(end.tzinfo) if end.tzinfo else effective_now.replace(tzinfo=end.tzinfo)
+    seconds = max(0.0, (reference - end).total_seconds())
+    if seconds == 0:
+        return "just finished"
+    duration = format_duration(seconds) or ""
+    if not duration:
+        return ""
+    return f"{duration} ago"
+
+
 def running_agent_summaries(run: dict[str, Any], now_epoch: float) -> list[dict[str, Any]]:
     """Return compact state-derived summaries for active agents."""
     summaries: list[dict[str, Any]] = []
@@ -116,47 +141,6 @@ def running_agents_inline_text(run: dict[str, Any], limit: int = 3) -> str:
     if len(agents) > limit:
         labels.append(f"+{len(agents) - limit}")
     return ", ".join(labels)
-
-
-def running_agents_text(live: dict[str, Any], format_duration: Any) -> str:
-    lines = []
-    for agent in live.get("running_agents", []):
-        elapsed = format_duration(agent.get("elapsed_seconds"))
-        lines.append(" ".join(part for part in (str(agent.get("name") or agent.get("agent_id") or "agent"), elapsed) if part))
-    return "\n".join(lines)
-
-
-def running_agents_table(live: dict[str, Any], format_duration: Any, columns: int = 2) -> Any:
-    """Render running agents as a compact grid table."""
-    from rich import box
-    from rich.table import Table
-    from rich.text import Text
-
-    agents = live.get("running_agents", [])
-    if not agents:
-        return None
-    table = Table(box=box.SIMPLE, pad_edge=False, show_header=False, expand=True)
-    col_width = max(20, 80 // columns)
-    for _ in range(columns):
-        table.add_column(width=col_width, no_wrap=True)
-    row: list[Any] = []
-    for agent in agents:
-        name = str(agent.get("name") or agent.get("agent_id") or "agent")
-        elapsed = format_duration(agent.get("elapsed_seconds")) or ""
-        cell = Text()
-        cell.append("● ", style="green")
-        cell.append(name[:18], style="bold bright_white")
-        if elapsed:
-            cell.append(f" {elapsed}", style="bright_black")
-        row.append(cell)
-        if len(row) == columns:
-            table.add_row(*row)
-            row = []
-    if row:
-        while len(row) < columns:
-            row.append("")
-        table.add_row(*row)
-    return table
 
 
 def todo_status_text(todos: list[dict[str, str]]) -> str:

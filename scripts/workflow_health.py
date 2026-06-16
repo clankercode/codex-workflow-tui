@@ -495,6 +495,21 @@ def analyze_run(run: dict[str, Any], *, stale_seconds: float = DEFAULT_STALE_SEC
                 )
             )
 
+    for event in run.get("events", []):
+        if event.get("kind") == "event-log" and event.get("operation") == "rollover":
+            findings.append(
+                issue(
+                    run=run,
+                    severity=WARNING,
+                    kind="event-log-rollover",
+                    title="Event history rolled over",
+                    message="Some older events were discarded due to the bounded event history (250 events).",
+                    suggestion="Check durable artifacts and logs for the complete event history.",
+                    ts=str(event.get("ts") or run.get("updated_at") or ""),
+                )
+            )
+            break
+
     return sorted(findings, key=attention_sort_key)
 
 

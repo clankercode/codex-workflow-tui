@@ -737,6 +737,7 @@ def cmd_merge_lanes(args: argparse.Namespace) -> None:
                                 worktree["merge_commit"] = merge_commit
                                 workflow_state.add_event(data, "info", f"merge conflict auto-resolved: {state_agent.get('name', conflict['agent_id'])}", kind="worktree", operation="merge-resolved", source="workflow_ops.merge_lanes", agent_id=conflict["agent_id"], data={"branch": conflict["branch"], "merge_commit": merge_commit})
                             workflow_state.mutate_run(args.run, resolved_mutator)
+                            merged.append(conflict["agent_id"])
                             conflicts.clear()
                         else:
                             print(f"auto-resolve succeeded but re-merge still conflicts", file=sys.stderr)

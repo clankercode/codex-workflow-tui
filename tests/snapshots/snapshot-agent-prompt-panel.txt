@@ -1,9 +1,9 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
-╭─────────── Agents: Calculation ────────────╮╭──── overview  runs  phases  ● agents  events  decisions  artifacts ────╮
+╭─────────── Agents: Calculation ────────────╮╭─ overview  runs  graph  phases  ● agents  events  decisions  artifacts─╮
 │                                            ││ ╭────────────────────────────── Agent ───────────────────────────────╮ │
 │   State     Time       Name                ││ │ agent_id      agent-live-tests                                     │ │
 │  ────────────────────────────────────────  ││ │ name          Live test worker                                     │ │
-│   ▸ RUN     0s         Live test worker    ││ │ role          calculation                                          │ │
+│   ▸ RUN!    0s         Live test worker    ││ │ role          calculation                                          │ │
 │                                            ││ │ type          codex-direct                                         │ │
 │                                            ││ │ model         gpt-5.5                                              │ │
 │                                            ││ │ phase         phase-calc                                           │ │
@@ -17,7 +17,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                            ││ │ command_execution · completed · /usr/bin/python3 -c "a,b=0,1\nfor  │ │
 │                                            ││ │ _ in range(20): a,b=b,a+b\nprint(a)"                               │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││ ╭────────────────────────────── Prompt ──────────────────────────────╮ │
+│                                            ││ ╭──────────────────── Prompt — Live test worker ─────────────────────╮ │
 │                                            ││ │ Compute a small independent verification and report the answer.    │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││                                                                        │

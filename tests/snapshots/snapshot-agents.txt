@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
-╭───────────── Agents: Review ─────────────╮╭───────────── ovr  run  pha  ● agt  evt  dec  art ──────────────╮
+╭───────────── Agents: Review ─────────────╮╭─ overview  runs  graph  phases  ● agents  events  decisions  a─╮
 │                                          ││ ╭────────────────────────── Agent ───────────────────────────╮ │
 │   State     Time       Name              ││ │ agent_id      agent-tests                                  │ │
 │  ──────────────────────────────────────  ││ │ name          Test coverage reviewer                       │ │
@@ -10,10 +10,10 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
 │                                          ││ │ tokens      unknown  tail tools 0       parse errs 0       │ │
-│                                          ││ │ duration    1m 38s   status     comple… thread     thread… │ │
-│                                          ││ │ pid         4242                                           │ │
+│                                          ││ │ duration    1m 38s   finished   3m 00s… status     comple… │ │
+│                                          ││ │ thread      thread-… pid        4242                       │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
-│                                          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
+│                                          ││ ╭─────────── Live Output — Test coverage reviewer ───────────╮ │
 │                                          ││ │ Found one missing negative case                            │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││                                                                │

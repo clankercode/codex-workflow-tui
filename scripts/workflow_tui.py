@@ -54,6 +54,7 @@ from workflow_tui_activity import (  # noqa: F401
     parse_duration_seconds,
     compact_decimal,
     format_duration_seconds,
+    has_event_rollover,
     infer_event_kind,
     event_kind_text,
     safe_read_tail_info,
@@ -153,6 +154,7 @@ from workflow_tui_render import (  # noqa: F401
     make_event_detail,
     make_decision_detail,
     make_artifact_detail,
+    make_rollover_warning,
     selected_detail,
     make_run_graph_panel,
 )
@@ -330,7 +332,14 @@ def make_detail_body(
     if tab == "agents":
         return make_agent_activity_detail(item, run, agent_view)
     if tab == "events":
-        return make_event_detail(item)
+        detail = make_event_detail(item)
+        rollover_warning = make_rollover_warning(run)
+        if rollover_warning:
+            return Group(
+                Panel(rollover_warning, title="Warning", border_style="yellow", box=box.ROUNDED),
+                detail,
+            )
+        return detail
     if tab == "decisions":
         return make_decision_detail(item)
     if tab == "artifacts":

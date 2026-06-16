@@ -2015,6 +2015,138 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(retained_messages[0], "event 2")
         self.assertEqual(retained_messages[-1], "event 250")
 
+    def test_has_event_rollover_detects_rollover_marker(self) -> None:
+        """has_event_rollover returns True when a rollover event is present."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity  # pylint: disable=import-outside-toplevel
+        import workflow_state  # pylint: disable=import-outside-toplevel
+
+        run_no_rollover: dict[str, Any] = {
+            "run_id": "wf-no-rollover",
+            "events": [{"event_id": "evt-1", "ts": "2026-01-01T00:00:00Z", "level": "info", "message": "hello"}],
+        }
+        self.assertFalse(workflow_tui_activity.has_event_rollover(run_no_rollover))
+
+        run_with_rollover: dict[str, Any] = {
+            "run_id": "wf-rollover",
+            "events": [],
+        }
+        for index in range(251):
+            workflow_state.add_event(run_with_rollover, "info", f"event {index}")
+        self.assertTrue(workflow_tui_activity.has_event_rollover(run_with_rollover))
+
+        run_empty: dict[str, Any] = {"run_id": "wf-empty", "events": []}
+        self.assertFalse(workflow_tui_activity.has_event_rollover(run_empty))
+
+    def test_rollover_warning_appears_in_overview_attention(self) -> None:
+        """The overview tab should show a warning attention item when events have rolled over."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+        import workflow_state  # pylint: disable=import-outside-toplevel
+
+        run: dict[str, Any] = {
+            "run_id": "wf-rollover-attention",
+            "title": "Rollover Test",
+            "status": "running",
+            "events": [],
+            "phases": [],
+            "agents": [],
+            "artifacts": [],
+            "checks": [],
+            "updated_at": "2026-06-11T00:00:00Z",
+            "created_at": "2026-06-11T00:00:00Z",
+        }
+        for index in range(251):
+            workflow_state.add_event(run, "info", f"event {index}")
+
+        findings = workflow_health.analyze_run(run)
+        rollover_items = [item for item in findings if item["kind"] == "event-log-rollover"]
+        self.assertEqual(len(rollover_items), 1)
+        self.assertEqual(rollover_items[0]["severity"], workflow_health.WARNING)
+        self.assertIn("rolled over", rollover_items[0]["title"])
+        self.assertIn("artifacts", rollover_items[0]["suggestion"].lower())
+
+    def test_no_rollover_attention_when_events_intact(self) -> None:
+        """No rollover attention item when the event log has not rolled over."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_health  # pylint: disable=import-outside-toplevel
+
+        run: dict[str, Any] = {
+            "run_id": "wf-no-rollover",
+            "title": "Intact Events",
+            "status": "running",
+            "events": [{"event_id": "evt-1", "ts": "2026-01-01T00:00:00Z", "level": "info", "message": "hello"}],
+            "phases": [],
+            "agents": [],
+            "artifacts": [],
+            "checks": [],
+            "updated_at": "2026-06-11T00:00:00Z",
+            "created_at": "2026-06-11T00:00:00Z",
+        }
+
+        findings = workflow_health.analyze_run(run)
+        rollover_items = [item for item in findings if item["kind"] == "event-log-rollover"]
+        self.assertEqual(len(rollover_items), 0)
+
+    def test_rollover_warning_renders_in_events_tab_detail(self) -> None:
+        """The events tab detail should include a rollover warning panel when events have rolled over."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+        import workflow_state  # pylint: disable=import-outside-toplevel
+
+        run: dict[str, Any] = {
+            "run_id": "wf-rollover-tui",
+            "title": "Rollover TUI Test",
+            "status": "running",
+            "events": [],
+            "phases": [],
+            "agents": [],
+            "decisions": [],
+            "artifacts": [],
+            "metrics": {},
+            "updated_at": "2026-06-11T00:00:00Z",
+            "created_at": "2026-06-11T00:00:00Z",
+            "paths": {"run_json": "/dev/null"},
+        }
+        for index in range(251):
+            workflow_state.add_event(run, "info", f"event {index}")
+
+        events = sorted(run["events"], key=lambda item: str(item.get("ts", "")), reverse=True)
+        sink = io.StringIO()
+        console = Console(file=sink, width=110, force_terminal=False, color_system=None)
+        console.print(workflow_tui.make_detail_body(run, "events", events, 0))
+        rendered = sink.getvalue()
+        self.assertIn("Event history rolled over", rendered)
+        self.assertIn("durable artifacts", rendered.lower())
+
+    def test_no_rollover_warning_in_events_tab_when_intact(self) -> None:
+        """The events tab detail should not show a rollover warning when events are intact."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run: dict[str, Any] = {
+            "run_id": "wf-intact-tui",
+            "title": "Intact TUI Test",
+            "status": "running",
+            "events": [
+                {"event_id": "evt-1", "ts": "2026-06-11T00:00:00Z", "level": "info", "message": "hello"},
+            ],
+            "phases": [],
+            "agents": [],
+            "decisions": [],
+            "artifacts": [],
+            "metrics": {},
+            "updated_at": "2026-06-11T00:00:00Z",
+            "created_at": "2026-06-11T00:00:00Z",
+            "paths": {"run_json": "/dev/null"},
+        }
+        events = run["events"]
+        sink = io.StringIO()
+        console = Console(file=sink, width=110, force_terminal=False, color_system=None)
+        console.print(workflow_tui.make_detail_body(run, "events", events, 0))
+        rendered = sink.getvalue()
+        self.assertNotIn("rolled over", rendered)
+
     def test_mock_plan_records_truncation_when_max_jobs_cuts_list(self) -> None:
         """Planner output truncated by --max-jobs is recorded as a decision and event."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -4867,11 +4999,105 @@ class WorkflowScriptTests(unittest.TestCase):
                 os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = old_now
 
         rendered = sink.getvalue()
-        self.assertIn("Running Agents", rendered)
+        self.assertIn("Merged Live Output", rendered)
         self.assertIn("Alpha", rendered)
         self.assertIn("5m 00s", rendered)
         self.assertIn("Beta", rendered)
         self.assertIn("1m 30s", rendered)
+
+    def test_run_detail_shows_finished_ago_for_completed_run(self) -> None:
+        """A completed run should show a 'finished ... ago' field alongside duration (#20)."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run = {
+            "run_id": "wf-done",
+            "title": "Completed Run",
+            "status": "completed",
+            "started_at": "2026-06-11T00:40:00Z",
+            "created_at": "2026-06-11T00:40:00Z",
+            "completed_at": "2026-06-11T00:50:00Z",
+            "updated_at": "2026-06-11T00:50:00Z",
+            "agents": [],
+            "metrics": {},
+        }
+        old_now = os.environ.get("WORKFLOW_TUI_SNAPSHOT_NOW")
+        os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = "2026-06-11T01:00:00Z"
+        try:
+            sink = io.StringIO()
+            console = Console(file=sink, width=100, force_terminal=False, color_system=None)
+            console.print(workflow_tui.make_run_detail(run))
+        finally:
+            if old_now is None:
+                os.environ.pop("WORKFLOW_TUI_SNAPSHOT_NOW", None)
+            else:
+                os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = old_now
+
+        rendered = sink.getvalue()
+        self.assertIn("finished", rendered.lower())
+        self.assertIn("10m 00s ago", rendered)
+        self.assertIn("duration", rendered.lower())
+
+    def test_run_detail_no_finished_ago_for_live_run(self) -> None:
+        """A live run should show elapsed duration, not a 'finished ago' field (#20)."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run = {
+            "run_id": "wf-live",
+            "title": "Live Run",
+            "status": "running",
+            "started_at": "2026-06-11T00:40:00Z",
+            "created_at": "2026-06-11T00:40:00Z",
+            "agents": [],
+            "metrics": {},
+        }
+        old_now = os.environ.get("WORKFLOW_TUI_SNAPSHOT_NOW")
+        os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = "2026-06-11T00:50:00Z"
+        try:
+            sink = io.StringIO()
+            console = Console(file=sink, width=100, force_terminal=False, color_system=None)
+            console.print(workflow_tui.make_run_detail(run))
+        finally:
+            if old_now is None:
+                os.environ.pop("WORKFLOW_TUI_SNAPSHOT_NOW", None)
+            else:
+                os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = old_now
+
+        rendered = sink.getvalue()
+        self.assertIn("elapsed", rendered.lower())
+        self.assertNotIn("ago", rendered.lower())
+
+    def test_agent_detail_shows_finished_ago_for_completed_agent(self) -> None:
+        """A completed agent should show a 'finished ... ago' field alongside duration (#20)."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        agent = {
+            "agent_id": "a",
+            "name": "Alpha",
+            "status": "completed",
+            "started_at": "2026-06-11T00:40:00Z",
+            "completed_at": "2026-06-11T00:45:00Z",
+            "updated_at": "2026-06-11T00:45:00Z",
+            "duration_seconds": 300.0,
+        }
+        run = {"run_id": "wf", "agents": [agent], "paths": {"run_json": "/dev/null"}}
+        old_now = os.environ.get("WORKFLOW_TUI_SNAPSHOT_NOW")
+        os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = "2026-06-11T01:00:00Z"
+        try:
+            sink = io.StringIO()
+            console = Console(file=sink, width=100, force_terminal=False, color_system=None)
+            console.print(workflow_tui.make_agent_activity_detail(agent, run))
+        finally:
+            if old_now is None:
+                os.environ.pop("WORKFLOW_TUI_SNAPSHOT_NOW", None)
+            else:
+                os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = old_now
+
+        rendered = sink.getvalue()
+        self.assertIn("finished", rendered.lower())
+        self.assertIn("15m 00s ago", rendered)
 
     def test_merged_live_output_single_agent_no_prefix(self) -> None:
         """Single-agent output should render without an agent-name prefix."""
@@ -6547,6 +6773,109 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual((repo / "note.txt").read_text(encoding="utf-8"), "main\n")
             self.assertTrue(any(check.get("kind") == "merge" and check.get("status") == "failed" for check in run_after["checks"]))
             self.assertTrue(any(event.get("kind") == "worktree" and event.get("operation") == "merge-conflicted" for event in run_after["events"]))
+
+    def test_merge_lanes_auto_resolve_dispatches_resolver_agent(self) -> None:
+        """merge-lanes without WORKFLOW_NO_RESOLVE should dispatch a resolver agent via ccc and succeed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            (repo / "shared.txt").write_text("base\n", encoding="utf-8")
+            self.git(repo, "add", "shared.txt")
+            self.git(repo, "commit", "-m", "base")
+
+            self.git(repo, "checkout", "-b", "workflow/lane-1")
+            (repo / "shared.txt").write_text("lane-1\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "lane-1 change")
+
+            self.git(repo, "checkout", "main")
+            self.git(repo, "checkout", "-b", "workflow/lane-2")
+            (repo / "other.txt").write_text("lane-2\n", encoding="utf-8")
+            self.git(repo, "add", "other.txt")
+            self.git(repo, "commit", "-m", "lane-2 adds other.txt")
+
+            self.git(repo, "checkout", "main")
+            (repo / "shared.txt").write_text("main\n", encoding="utf-8")
+            self.git(repo, "commit", "-am", "main change")
+
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_ccc = fake_bin / "ccc"
+            ccc_args_path = tmp_path / "ccc-args.json"
+            fake_ccc.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import subprocess
+                    import sys
+                    from pathlib import Path
+
+                    Path(__import__("os").environ["CCC_ARGS_PATH"]).write_text(
+                        json.dumps(sys.argv[1:]), encoding="utf-8"
+                    )
+                    result = subprocess.run(
+                        ["git", "status", "--porcelain"], capture_output=True, text=True
+                    )
+                    for line in result.stdout.strip().splitlines():
+                        prefix = line[:2]
+                        path = line[3:]
+                        if prefix in ("UU", "AA", "DD", "AU", "UA", "DU", "UD"):
+                            subprocess.run(["git", "checkout", "--theirs", path], check=True)
+                            subprocess.run(["git", "add", path], check=True)
+                    subprocess.run(["git", "commit", "--no-edit"], check=True)
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_ccc.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CCC_ARGS_PATH"] = str(ccc_args_path)
+            env.pop("WORKFLOW_NO_RESOLVE", None)
+
+            created = self.run_wf("init", "--title", "Auto Resolve", "--prompt", "resolve", "--cwd", str(repo), env=env)
+            created_data = json.loads(created.stdout)
+            run_id = created_data["run_id"]
+            run_path = Path(created_data["path"])
+            self.run_wf("add-phase", run_id, "--phase-id", "phase-impl", "--name", "Implementation", "--status", "completed", env=env)
+            for agent_id, name in [("agent-lane-1", "lane-1"), ("agent-lane-2", "lane-2")]:
+                self.run_wf(
+                    "add-agent", run_id, "--phase", "phase-impl",
+                    "--agent-id", agent_id, "--name", name,
+                    "--agent-type", "codex-exec", "--status", "completed",
+                    "--cwd", str(repo), env=env,
+                )
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["agents"][0]["worktree"] = {"branch": "workflow/lane-1", "path": str(tmp_path / "lane1"), "merge_target": "main"}
+            run["agents"][1]["worktree"] = {"branch": "workflow/lane-2", "path": str(tmp_path / "lane2"), "merge_target": "main"}
+            run_path.write_text(json.dumps(run, indent=2), encoding="utf-8")
+
+            result = self.run_wf("merge-lanes", run_id, "--leave-conflicts", env=env)
+            merged = json.loads(result.stdout)
+            run_after = json.loads(run_path.read_text(encoding="utf-8"))
+            ccc_args = json.loads(ccc_args_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(merged["conflicts"], [])
+            self.assertEqual(merged["merged"], ["agent-lane-1"])
+            self.assertEqual((repo / "shared.txt").read_text(encoding="utf-8"), "lane-1\n")
+            self.assertEqual(self.git(repo, "branch", "--show-current").stdout.strip(), "main")
+            self.assertIn("--yolo", ccc_args)
+            self.assertIn("Merge Conflict Resolution", ccc_args[-1])
+            lane1_agent = next(a for a in run_after["agents"] if a["agent_id"] == "agent-lane-1")
+            self.assertEqual(lane1_agent["worktree"]["merge_status"], "merged")
+            self.assertTrue(lane1_agent["worktree"]["merged_at"])
+            self.assertTrue(any(
+                e.get("operation") == "merge-resolved" and e.get("agent_id") == "agent-lane-1"
+                for e in run_after["events"]
+            ))
+            self.assertTrue(any(
+                c.get("kind") == "merge" and c.get("status") == "passed" and "merge lane agent-lane-1" in c.get("name", "")
+                for c in run_after["checks"]
+            ))
 
     def test_wf_apply_cli_overrides_plan_cwd_tags_and_caps(self) -> None:
         """Workflow-plan execution metadata should not be silently discarded."""
@@ -10084,6 +10413,7 @@ class WorkflowMonitorTests(unittest.TestCase):
             self.assertIn("critical finding before rollover", backlog_path.read_text(encoding="utf-8"))
             rollover_events = [e for e in run["events"] if e.get("kind") == "event-log" and e.get("operation") == "rollover"]
             self.assertTrue(rollover_events)
+
 
 
 if __name__ == "__main__":

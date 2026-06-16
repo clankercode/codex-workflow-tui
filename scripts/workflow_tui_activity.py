@@ -846,3 +846,11 @@ def reference_epoch() -> float:
             except ValueError:
                 pass
     return __import__("time").time()
+
+
+def has_event_rollover(run: dict[str, Any]) -> bool:
+    """Return True when the run's event log has lost old events due to the bounded history."""
+    for event in run.get("events", []):
+        if event.get("kind") == "event-log" and event.get("operation") == "rollover":
+            return True
+    return False

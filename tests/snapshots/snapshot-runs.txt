@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭────────────────── Runs ──────────────────╮╭───────────── ovr  ● run  pha  agt  evt  dec  art ──────────────╮
+╭────────────────── Runs ──────────────────╮╭─ overview  ● runs  graph  phases  agents  events  decisions  a─╮
 │    Workflow                              ││ id          wf-fixture-rich                                    │
 │ ▸  Fixture Workflow With Parallel Review ││ title       Fixture Workflow With Parallel Review              │
 │      > RUN > 6m 00s > Security reviewer  ││ status      running                                            │
@@ -10,20 +10,20 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │    Blocked Decision Fixture              ││ updated     Jun 11 10:05 AEST                                  │
 │      > BLCK > 3h 06m                     ││ state       /home/xertrov/.llm-general/ai-coding/codex/workfl… │
 │    Paused Operator Fixture               ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
-│      > PAUS > 4h 06m                     ││ │ tokens      unknown  tail tools 0       active     1       │ │
-│    Cancelled Scope Fixture               ││ │ longest     Securit… agents     3       phases     3       │ │
-│      > CNCL > 30m 00s                    ││ │ checks      1                                              │ │
+│      > PAUS > 4h 06m                     ││ │ elapsed     6m 00s   tokens     unknown tail tools 0       │ │
+│    Cancelled Scope Fixture               ││ │ active      1        longest    Securi… agents     3       │ │
+│      > CNCL > 30m 00s                    ││ │ phases      3        checks     1                          │ │
 │    Pending Dispatch Fixture              ││ ╰────────────────────────────────────────────────────────────╯ │
-│      > PEND > 6h 06m                     ││ ╭─────────────────────── Live Output ────────────────────────╮ │
+│      > PEND > 6h 06m                     ││ ╭──────────────────── Merged Live Output ────────────────────╮ │
+│                                          ││ │ ● Security reviewer 4m 40s                                 │ │
 │                                          ││ │ No live output yet.                                        │ │
-│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
-│                                          ││ ╭────────────────────── Running Agents ──────────────────────╮ │
-│                                          ││ │ Security reviewer 4m 40s                                   │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││ ╭────────────────────────── Prompt ──────────────────────────╮ │
 │                                          ││ │ Build and review a Codex workflow system with a polished   │ │
 │                                          ││ │ TUI, fixtures, snapshots, and clear state.                 │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
 │                                          ││                                                                │
 │                                          ││                                                                │
 ╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯

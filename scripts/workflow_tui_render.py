@@ -24,6 +24,7 @@ from workflow_tui_activity import (
     format_duration_seconds,
     format_token_total,
     format_token_total_with_throughput,
+    has_event_rollover,
     is_duration_seconds_key,
     parse_duration_seconds,
     longest_agent_label,
@@ -114,6 +115,10 @@ def run_duration_text(run: dict[str, Any], now: datetime | None = None) -> str:
 
 def agent_duration_text(agent: dict[str, Any], now: datetime | None = None) -> str:
     return workflow_tui_live.agent_duration_text(agent, parse_local_datetime, parse_duration_seconds, format_duration_seconds, workflow_state.TERMINAL_STATUS_VALUES, now, snapshot_reference_time)
+
+
+def finished_ago_text(entity: dict[str, Any], now: datetime | None = None) -> str:
+    return workflow_tui_live.finished_ago_text(entity, parse_local_datetime, format_duration_seconds, workflow_state.TERMINAL_STATUS_VALUES, now, snapshot_reference_time)
 
 
 def display_event_timestamp(value: Any, now: datetime | None = None) -> str:
@@ -555,6 +560,7 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
     metrics = run.get("metrics", {})
     control = run.get("control") or {}
     run_is_live = str(run.get("status", "")) not in workflow_state.TERMINAL_STATUS_VALUES
+    run_ago = finished_ago_text(run)
     facts = make_facts_table(
         [
             ("id", run.get("run_id", "")),
@@ -579,6 +585,7 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
         started_at=run.get("started_at") or run.get("created_at"),
         is_live=run_is_live,
     )
+    run_duration = run_duration_text(run)
     live_rows = [
         ("tokens", token_display),
         ("tail tools", live.get("tool_call_count", 0)),
@@ -588,18 +595,38 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
         ("phases", metrics.get("phases_total", len(run.get("phases", [])))),
         ("checks", metrics.get("checks_total", len(run.get("checks", [])))),
     ]
+    if run_duration:
+        label = "duration" if str(run.get("status", "")) in workflow_state.TERMINAL_STATUS_VALUES else "elapsed"
+        live_rows.insert(0, (label, run_duration))
+    if run_ago:
+        live_rows.insert(1, ("finished", run_ago))
     live_stats = Panel(make_facts_grid(live_rows), title="Live Stats", border_style="magenta", box=box.ROUNDED)
     tool_text = "\n".join(live.get("latest_tool_calls", [])[-8:]) or "No tool calls recorded yet."
     merged_output = merged_live_output_text(
         live.get("activities", []), run.get("agents", [])
     )
     output_label = f"Merged Live Output — {live.get('latest_output_agent', '')}" if live.get("latest_output_agent") else "Merged Live Output"
-    latest = Panel(merged_output, title=output_label, border_style="yellow", box=box.ROUNDED)
-    panels: list[Any] = [facts, live_stats, latest]
+    running_agents = live.get("running_agents", [])
+    if running_agents:
+        agents_text = Text()
+        for index, agent in enumerate(running_agents):
+            if index:
+                agents_text.append("  ")
+            name = str(agent.get("name") or agent.get("agent_id") or "agent")
+            elapsed = format_duration_seconds(agent.get("elapsed_seconds")) or ""
+            agents_text.append("● ", style="green")
+            agents_text.append(name, style="bold bright_white")
+            if elapsed:
+                agents_text.append(f" {elapsed}", style="bright_black")
+        merged_output = Text()
+        merged_output.append_text(agents_text)
+        merged_output.append("\n")
+        output_lines = merged_live_output_text(
+            live.get("activities", []), run.get("agents", [])
+        )
+        merged_output.append_text(output_lines)
+    panels: list[Any] = [facts, live_stats, Panel(merged_output, title=output_label, border_style="yellow", box=box.ROUNDED)]
     if detail_height is None or detail_height >= 28:
-        running_table = workflow_tui_live.running_agents_table(live, format_duration_seconds)
-        if running_table is not None:
-            panels.append(Panel(running_table, title="Running Agents", border_style="green", box=box.ROUNDED))
         if live.get("latest_tool_calls"):
             panels.append(Panel(Text(tool_text, overflow="fold"), title="Latest Tool Calls", border_style="cyan", box=box.ROUNDED))
         if live.get("latest_todos"):
@@ -669,14 +696,19 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
         started_at=agent.get("started_at"),
         is_live=is_live,
     )
+    ago = finished_ago_text(agent)
     stats_rows: list[tuple[str, Any]] = [
         ("tokens", token_display),
         ("tail tools", activity.get("tool_call_count", 0)),
         ("parse errs", activity.get("parse_errors", 0)),
         (duration_label, duration_text),
+    ]
+    if ago:
+        stats_rows.append(("finished", ago))
+    stats_rows.extend([
         ("status", agent.get("status", "")),
         ("thread", agent.get("thread_id", "")),
-    ]
+    ])
     if process_display:
         stats_rows.append((process_label, process_display))
     if native_id:
@@ -712,6 +744,17 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
         panels.append(Panel(Text(activity["fallback_output"], overflow="fold"), title="Fallback (no final output)", border_style="yellow", box=box.ROUNDED))
     panels.append(body)
     return Group(*panels)
+
+
+def make_rollover_warning(run: dict[str, Any] | None) -> Text | None:
+    """Return a warning banner when the run's event log has rolled over."""
+    if not run or not has_event_rollover(run):
+        return None
+    warning = Text()
+    warning.append("\u26a0 ", style="bold yellow")
+    warning.append("Event history rolled over.", style="bold yellow")
+    warning.append(" Some older events were discarded. Check durable artifacts/logs for complete history.", style="bright_black")
+    return warning
 
 
 def make_events_table(events: list[dict[str, Any]], selected: int, visible: int) -> Table:
@@ -903,8 +946,10 @@ def build_run_graph(run: dict[str, Any]) -> Any | None:
     phases = run.get("phases", [])
     if not agents:
         return None
-    # Animated running icon cycles based on current time
-    cycle_index = int(_time.time()) % len(_RUNNING_CYCLE)
+    # Animated running icon cycles based on current time (use snapshot time when available)
+    snapshot_now = snapshot_reference_time()
+    effective_time = snapshot_now.timestamp() if snapshot_now else _time.time()
+    cycle_index = int(effective_time) % len(_RUNNING_CYCLE)
     # Add start node
     title = str(run.get("title", "workflow")[:20])
     G.add_node("▶", label=title, color="white")

@@ -1,5 +1,5 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
-╭─────────── Agents: Many rows ────────────╮╭───────────── ovr  run  pha  ● agt  evt  dec  art ──────────────╮
+╭─────────── Agents: Many rows ────────────╮╭─ overview  runs  graph  phases  ● agents  events  decisions  a─╮
 │                                          ││ ╭────────────────────────── Agent ───────────────────────────╮ │
 │   State     Time       Name              ││ │ agent_id      agent-08                                     │ │
 │  ──────────────────────────────────────  ││ │ name          Agent 08                                     │ │
@@ -12,7 +12,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │     PEND               Agent 06          ││ │ tokens      unknown  tail tools 0       parse errs 0       │ │
 │     DONE               Agent 07          ││ │ elapsed              status     running thread             │ │
 │   ▸ RUN                Agent 08          ││ ╰────────────────────────────────────────────────────────────╯ │
-│     FAIL               Agent 09          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
+│     FAIL               Agent 09          ││ ╭────────────────── Live Output — Agent 08 ──────────────────╮ │
 │     BLCK               Agent 10          ││ │ slice 08 summary                                           │ │
 │     PAUS               Agent 11          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││                                                                │
