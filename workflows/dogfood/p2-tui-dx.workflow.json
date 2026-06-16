@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "kind": "workflow-plan",
+  "title": "P2 TUI + DX: Items #17, #19, #20, #13",
+  "goal": "Implement scrolling (#17), throughput stats (#19), finished-ago (#20), and backlog support (#13). TUI items in one worktree to avoid merge conflicts.",
+  "cwd": ".",
+  "runner": "ccc",
+  "ccc_runner": "@mimo25p",
+  "ccc_output_mode": "stream-json",
+  "permission_mode": "yolo",
+  "startup_delay": 0,
+  "max_agents": 4,
+  "failure_retries": 1,
+  "tags": ["dogfood", "p2-tui-dx"],
+  "decisions": [
+    {
+      "title": "TUI items share one worktree",
+      "rationale": "#17 (scrolling), #19 (throughput), #20 (finished-ago) all modify workflow_tui_render.py. Separate branches would conflict on merge-back. One impl agent handles all three sequentially in one worktree."
+    },
+    {
+      "title": "Backlog support gets its own worktree",
+      "rationale": "#13 touches workflow_state.py, workflow_ops.py, workflow_apply.py — completely disjoint from TUI work. No file overlap with TUI lane."
+    },
+    {
+      "title": "Review per worktree, not per task",
+      "rationale": "Since TUI items share a worktree, one review pass covers all three. Semantic reviewer checks correctness, standards reviewer checks quality."
+    }
+  ],
+  "phases": [
+    {
+      "name": "impl-phase",
+      "title": "Implementation",
+      "goal": "Implement all features in parallel worktree lanes.",
+      "jobs": [
+        {
+          "name": "impl-tui",
+          "role": "implementer",
+          "prompt": "You are already running as a ccc worker. Do not run ccc or spawn/delegate to another agent. Work in the current cwd.\n\nImplement THREE features in sequence:\n\n1. #17: TUI pane scrolling and run-list bounds.\n   - Right-hand detail pane should be scrollable with mouse wheel.\n   - Left-hand run-list: fix windowing for variable-height rows (2-3 visual lines per row).\n   - Add regression tests for variable-height run rows and mouse-wheel/detail-pane scrolling.\n\n2. #19: Live throughput stats and smoothed counters.\n   - All live stats boxes should show estimated tokens-per-second when token telemetry is available.\n   - Monotonic numeric values (token totals, tokens/sec) should use smooth odometer-like display that increases at estimated rate while live.\n   - Once completed, show exact recorded value.\n   - Do NOT apply smoothing to times or dates.\n\n3. #20: Finished-ago field for completed runs and agents.\n   - Agent and run detail views should show 'finished ago' / completed-age field once status is terminal, alongside duration.\n   - Live runs/agents keep showing elapsed/live duration.\n   - Completed ones should show both how long they ran and how recently they finished.\n\nCode standards: no file over 2000 LOC, no duplication, meaningful names.\nAfter implementing all three, run: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\nCommit each feature separately with messages:\n  feat(workflow): add TUI pane scrolling and run-list bounds (#17)\n  feat(workflow): add live throughput stats and smoothed counters (#19)\n  feat(workflow): add finished-ago field for completed runs/agents (#20)\n\nReturn strict JSON with keys: status (pass|blocked), summary (string), files_changed (array), tests_passed (bool), commits (array).",
+          "worktree": {"branch": "workflow/p2/impl-tui", "base": "HEAD", "merge_target": "main"},
+          "write_scope": [
+            "scripts/workflow_tui_app.py",
+            "scripts/workflow_tui_render.py",
+            "scripts/workflow_tui_activity.py",
+            "scripts/workflow_tui_live.py",
+            "scripts/workflow_tui.py",
+            "tests/test_workflow.py",
+            "tests/snapshots/"
+          ]
+        },
+        {
+          "name": "impl-13",
+          "role": "implementer",
+          "prompt": "You are already running as a ccc worker. Do not run ccc or spawn/delegate to another agent. Work in the current cwd.\n\nImplement #13: First-class dogfood/backlog support.\n\nWhat to build:\n- Add a command or convention that creates a durable backlog artifact, registers it, and appends discoveries there instead of relying on bounded event history.\n- The backlog should be a workflow artifact (file on disk) that survives event rollover.\n- Add a `workflow backlog <run-id> --append '<finding>'` command to workflow_ops.py.\n- The backlog file should be registered as an artifact in run state.\n- Add tests in tests/test_workflow.py.\n\nCode standards: no file over 2000 LOC, no duplication, meaningful names.\nAfter implementing, run: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\nCommit with message: feat(workflow): add first-class dogfood/backlog support (#13)\n\nReturn strict JSON with keys: status (pass|blocked), summary (string), files_changed (array), tests_passed (bool), commit (string or null).",
+          "worktree": {"branch": "workflow/p2/impl-13", "base": "HEAD", "merge_target": "main"},
+          "write_scope": [
+            "scripts/workflow_state.py",
+            "scripts/workflow_ops.py",
+            "scripts/workflow_apply.py",
+            "tests/test_workflow.py"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "review-phase",
+      "title": "Review",
+      "goal": "Semantic and standards review for each worktree.",
+      "jobs": [
+        {
+          "name": "review-tui-a",
+          "role": "semantic reviewer + fixer",
+          "depends_on": "impl-tui",
+          "ccc_runner": "@glm51",
+          "prompt": "You are already running as a ccc @glm51 review worker. Do not run ccc. Work in the current cwd.\n\nReview-and-fix for THREE TUI features just committed in this worktree:\n- #17: Scrolling — does mouse wheel work? Variable-height rows handled? Selection stays visible?\n- #19: Throughput — is tokens/sec correct? Odometer smoothing works for live vs completed?\n- #20: Finished-ago — shown for terminal only? Alongside duration?\n\nNo behavioral regression in existing tests.\nFix and commit until PASS. Run: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\nReturn strict JSON: status, findings, tests_passed, commits, notes.",
+          "worktree": {"branch": "workflow/p2/impl-tui", "base": "HEAD", "merge_target": "main"},
+          "write_scope": [
+            "scripts/workflow_tui_app.py",
+            "scripts/workflow_tui_render.py",
+            "scripts/workflow_tui_activity.py",
+            "scripts/workflow_tui_live.py",
+            "tests/test_workflow.py",
+            "tests/snapshots/"
+          ]
+        },
+        {
+          "name": "review-tui-b",
+          "role": "standards reviewer + fixer",
+          "depends_on": "review-tui-a",
+          "ccc_runner": "@cx-reviewer",
+          "prompt": "You are already running as a ccc @cx-reviewer review worker. Do not run ccc. Work in the current cwd.\n\nStandards review for TUI features. Previous semantic review already applied.\n- Code standards (LOC, duplication, naming)\n- Test quality, snapshot freshness\n- Re-export completeness\n- Previous reviewer's fixes\n\nFix and commit until PASS. Run: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\nReturn strict JSON: status, findings, tests_passed, commits, notes.",
+          "worktree": {"branch": "workflow/p2/impl-tui", "base": "HEAD", "merge_target": "main"},
+          "write_scope": [
+            "scripts/workflow_tui_app.py",
+            "scripts/workflow_tui_render.py",
+            "scripts/workflow_tui_activity.py",
+            "scripts/workflow_tui_live.py",
+            "tests/test_workflow.py",
+            "tests/snapshots/"
+          ]
+        },
+        {
+          "name": "review-13a",
+          "role": "semantic reviewer + fixer",
+          "depends_on": "impl-13",
+          "ccc_runner": "@glm51",
+          "prompt": "You are already running as a ccc @glm51 review worker. Do not run ccc. Work in the current cwd.\n\nReview-and-fix for #13 (backlog support) just committed in this worktree.\n- Does backlog append correctly?\n- Is the artifact registered and searchable?\n- Does it survive event rollover?\n- Does the CLI command work?\n\nFix and commit until PASS. Run: WORKFLOW_TEST_MODE=fast python3 -m unittest tests.test_workflow\nReturn strict JSON: status, findings, tests_passed, commits, notes.",
+          "worktree": {"branch": "workflow/p2/impl-13", "base": "HEAD", "merge_target": "main"},
+          "write_scope": [
+            "scripts/workflow_state.py",
+            "scripts/workflow_ops.py",
+            "scripts/workflow_apply.py",
+            "tests/test_workflow.py"
+          ]
+        }
+      ]
+    }
+  ]
+}

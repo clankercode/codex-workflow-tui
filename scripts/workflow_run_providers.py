@@ -257,6 +257,59 @@ class KimiDirectProvider(RunnerProvider):
         )
 
 
+class PiDirectProvider(RunnerProvider):
+    """Use pi directly through `pi -p --mode json`."""
+
+    def __init__(self) -> None:
+        super().__init__("pi-direct", "pi")
+
+    def build_command(self, agent: dict[str, Any], args: argparse.Namespace) -> list[str]:
+        command = [
+            "pi",
+            "-p",
+            "--mode",
+            "json",
+            "--approve",
+        ]
+        if args.model:
+            command.extend(["--model", args.model])
+        command.append(agent["prompt"])
+        return command
+
+    def extract_result(
+        self,
+        agent: dict[str, Any],
+        exit_code: int,
+        *,
+        stdout_text: str | None = None,
+        stderr_text: str | None = None,
+    ) -> WorkerResult:
+        final_message = ""
+        session_id = ""
+        # Try parsing JSON output from pi
+        if stdout_text:
+            try:
+                data = json.loads(stdout_text)
+                if isinstance(data, dict):
+                    final_message = str(data.get("response") or data.get("text") or data.get("content") or "")
+                    session_id = str(data.get("session_id") or data.get("sessionId") or "")
+                elif isinstance(data, str):
+                    final_message = data
+            except json.JSONDecodeError:
+                # Plain text output
+                final_message = stdout_text.strip()
+        # Fallback: read output file
+        if not final_message:
+            output_path = Path(agent["output_path"])
+            final_message = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
+        Path(agent["output_path"]).write_text(final_message, encoding="utf-8")
+        return WorkerResult(
+            result=final_message,
+            summary=first_line(final_message) or f"pi exited {exit_code}",
+            thread_id=session_id,
+        )
+
+
 class CccProvider(RunnerProvider):
     """Use `ccc` as a stable adapter around a coding CLI."""
 
@@ -373,6 +426,8 @@ def build_provider(args: argparse.Namespace) -> RunnerProvider:
         return OpencodeDirectProvider()
     if args.runner == "kimi-direct":
         return KimiDirectProvider()
+    if args.runner == "pi-direct":
+        return PiDirectProvider()
     if args.runner == "ccc-codex":
         return CccProvider("codex", "ccc-codex")
     if args.runner == "ccc-opencode":

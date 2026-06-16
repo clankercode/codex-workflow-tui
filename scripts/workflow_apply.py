@@ -493,7 +493,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--runner",
         default=None,
-        choices=["codex-direct", "ccc-codex", "ccc-opencode", "ccc", "opencode-direct", "kimi-direct"],
+        choices=["codex-direct", "ccc-codex", "ccc-opencode", "ccc", "opencode-direct", "kimi-direct", "pi-direct"],
         help="coding CLI provider to use for worker processes",
     )
     parser.add_argument("--ccc-runner")
