@@ -124,6 +124,7 @@ def run_textual_app(tui: Any) -> None:
             self.dashboard: Static | None = None
             self.update_status: tui.UpdateStatus | None = None
             self.notified_update_head: str | None = None
+            self.detail_scroll_offset: int = 0
 
         @property
         def tab(self) -> str:
@@ -349,6 +350,7 @@ def run_textual_app(tui: Any) -> None:
                     agent_view=self.agent_view,
                     filter_text=self.filter_text,
                     focus=self.focus_mode,
+                    scroll_offset=self.detail_scroll_offset,
                 )
             )
 
@@ -451,6 +453,7 @@ def run_textual_app(tui: Any) -> None:
             self.capture_selection()
             self.tab_index = tui.TABS.index("overview")
             self.focus_mode = False
+            self.detail_scroll_offset = 0
             self.restore_selection()
             self.update_tab_chrome()
 
@@ -458,6 +461,7 @@ def run_textual_app(tui: Any) -> None:
             self.capture_selection()
             self.tab_index = (self.tab_index + 1) % len(tui.TABS)
             self.focus_mode = False
+            self.detail_scroll_offset = 0
             self.restore_selection()
             self.update_tab_chrome()
 
@@ -465,6 +469,7 @@ def run_textual_app(tui: Any) -> None:
             self.capture_selection()
             self.tab_index = (self.tab_index - 1) % len(tui.TABS)
             self.focus_mode = False
+            self.detail_scroll_offset = 0
             self.restore_selection()
             self.update_tab_chrome()
 
@@ -547,6 +552,23 @@ def run_textual_app(tui: Any) -> None:
                 if rows:
                     self.selected_row_ids[self.tab] = tui.item_key(self.tab, rows[self.row_index], self.row_index)
                     self.fallback_indexes[self.tab] = self.row_index
+            self.detail_scroll_offset = 0
+            self.update_dashboard()
+
+        def action_scroll_detail_down(self) -> None:
+            self.detail_scroll_offset += 3
+            self.update_dashboard()
+
+        def action_scroll_detail_up(self) -> None:
+            self.detail_scroll_offset = max(0, self.detail_scroll_offset - 3)
+            self.update_dashboard()
+
+        def on_mouse_scroll_down(self, event: object) -> None:
+            self.detail_scroll_offset += 3
+            self.update_dashboard()
+
+        def on_mouse_scroll_up(self, event: object) -> None:
+            self.detail_scroll_offset = max(0, self.detail_scroll_offset - 3)
             self.update_dashboard()
 
     WorkflowDashboardApp().run()

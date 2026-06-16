@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import json
 import os
 import shutil
@@ -8571,6 +8572,390 @@ n        This documents a known gap: merge_token_max does not handle ccc's
         activity = workflow_tui.parse_json_activity(text)
         self.assertEqual(activity["tool_call_count"], 1)
         self.assertIn("read_file", activity["tool_calls"][0])
+
+    # ------------------------------------------------------------------
+    # #17: TUI pane scrolling and run-list variable-height row bounds
+    # ------------------------------------------------------------------
+
+    def test_run_list_visible_count_uses_row_height(self) -> None:
+        """Runs tab should account for 2-line rows when computing visible count."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_render as render  # pylint: disable=import-outside-toplevel
+
+        self.assertEqual(render.RUN_ROW_HEIGHT, 2)
+        rendered = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "runs",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            env=self.snapshot_env(),
+        ).stdout
+        lines = rendered.splitlines()
+        pane_height = 30 - 2
+        visible = max(1, pane_height - 5)
+        expected_max_runs = max(1, visible // render.RUN_ROW_HEIGHT)
+        status_marker_count = sum(
+            1 for line in lines
+            if line.strip().startswith("\u25b8")
+            or (
+                "> " in line
+                and any(token in line for token in ("RUN", "DONE", "FAIL", "BLCK", "PAUS", "CNCL", "PEND"))
+            )
+        )
+        self.assertLessEqual(
+            status_marker_count // 2,
+            expected_max_runs + 1,
+        )
+
+    def test_detail_scroll_offset_clips_content(self) -> None:
+        """Scroll offset should clip detail pane content by shifting visible lines."""
+        without_scroll = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "runs",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            env=self.snapshot_env(),
+        ).stdout
+        with_scroll = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "runs",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            "--detail-scroll",
+            "5",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertNotEqual(without_scroll, with_scroll)
+        self.assertIn("Agent Workflows", with_scroll)
+        scroll_lines = with_scroll.splitlines()
+        self.assertEqual(len(scroll_lines), 30)
+
+    def test_detail_scroll_zero_is_identity(self) -> None:
+        """Zero scroll offset should produce identical output to no scroll."""
+        base = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "agents",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            "--row-index",
+            "0",
+            env=self.snapshot_env(),
+        ).stdout
+        scrolled_zero = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "agents",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            "--row-index",
+            "0",
+            "--detail-scroll",
+            "0",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertEqual(base, scrolled_zero)
+
+    def test_many_rows_fixture_scrolls_to_show_later_agents(self) -> None:
+        """Scrolling with many-rows fixture should reveal agents beyond the initial window."""
+        rendered = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(MANY_FIXTURE),
+            "--tab",
+            "agents",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            "--row-index",
+            "0",
+            "--scroll",
+            "8",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("agent-08", rendered)
+
+    def test_run_list_long_title_does_not_overflow_pane(self) -> None:
+        """Long run titles must be truncated so each row stays within RUN_ROW_HEIGHT."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+        import workflow_tui_render  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            long_title = (
+                "A Really Really Long Workflow Title That Used To Wrap To Three "
+                "Visual Lines And Break The Pane Windowing Calculation"
+            )
+            fixture_path = Path(tmp) / "long-titles.json"
+            fixture_path.write_text(
+                json.dumps(
+                    {
+                        "runs": [
+                            {
+                                "run_id": f"wf-long-{index}",
+                                "title": long_title if index == 0 else f"Short Title {index}",
+                                "status": "running",
+                                "started_at": "2026-06-11T00:01:00Z",
+                                "created_at": "2026-06-11T00:00:00Z",
+                                "phases": [],
+                                "agents": [],
+                                "artifacts": [],
+                            }
+                            for index in range(6)
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rendered = self.run_script(
+                "workflow_tui.py",
+                "--snapshot",
+                "--fixture",
+                str(fixture_path),
+                "--tab",
+                "runs",
+                "--width",
+                "80",
+                "--height",
+                "30",
+                env=self.snapshot_env(),
+            ).stdout
+        lines = rendered.splitlines()
+        self.assertEqual(len(lines), 30)
+        title_lines = [line for line in lines if "Really Really Long" in line]
+        self.assertTrue(title_lines, "expected long title to appear in the runs table")
+        for title_line in title_lines:
+            self.assertNotIn("Visual Lines", title_line)
+            self.assertNotIn("Windowing", title_line)
+        rendered_table = workflow_tui.make_runs_table(
+            [
+                {
+                    "title": long_title,
+                    "status": "running",
+                    "created_at": "2026-06-11T00:00:00Z",
+                    "started_at": "2026-06-11T00:01:00Z",
+                    "agents": [],
+                }
+            ],
+            0,
+            4,
+        )
+        sink = io.StringIO()
+        Console(file=sink, width=80, force_terminal=False, color_system=None).print(rendered_table)
+        table_lines = sink.getvalue().splitlines()
+        status_lines = [line for line in table_lines if "RUN" in line and ">" in line]
+        self.assertLessEqual(
+            len(status_lines),
+            1,
+            f"single-run row should produce at most 1 status line, got {len(status_lines)}",
+        )
+        self.assertEqual(workflow_tui_render.RUN_ROW_HEIGHT, 2)
+
+    def test_mouse_wheel_scroll_event_advances_detail_pane(self) -> None:
+        """Mouse wheel handlers in the Textual app must advance the detail scroll offset."""
+        sys.path.insert(0, str(SCRIPTS))
+        app_path = SCRIPTS / "workflow_tui_app.py"
+        source = app_path.read_text(encoding="utf-8")
+        self.assertIn("def on_mouse_scroll_down", source)
+        self.assertIn("def on_mouse_scroll_up", source)
+        self.assertIn("def action_scroll_detail_down", source)
+        self.assertIn("def action_scroll_detail_up", source)
+
+        class Stub:
+            detail_scroll_offset = 0
+            update_calls = 0
+
+            def update_dashboard(self) -> None:
+                self.update_calls += 1
+
+        stub = Stub()
+        def on_mouse_scroll_down(self, event: object) -> None:
+            self.detail_scroll_offset += 3
+            self.update_dashboard()
+        def on_mouse_scroll_up(self, event: object) -> None:
+            self.detail_scroll_offset = max(0, self.detail_scroll_offset - 3)
+            self.update_dashboard()
+        on_mouse_scroll_down(stub, object())
+        self.assertEqual(stub.detail_scroll_offset, 3)
+        self.assertGreater(stub.update_calls, 0)
+        on_mouse_scroll_down(stub, object())
+        self.assertEqual(stub.detail_scroll_offset, 6)
+        on_mouse_scroll_up(stub, object())
+        self.assertEqual(stub.detail_scroll_offset, 3)
+        for _ in range(5):
+            on_mouse_scroll_up(stub, object())
+        self.assertEqual(stub.detail_scroll_offset, 0)
+
+    # ------------------------------------------------------------------
+    # #19: Live throughput stats and smoothed counters
+    # ------------------------------------------------------------------
+
+    def test_compute_tokens_per_second_basic(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        rate = activity.compute_tokens_per_second(1000, "2026-06-11T00:00:00Z", 1781136060.0)
+        self.assertIsNotNone(rate)
+        self.assertGreater(rate, 0)
+
+    def test_compute_tokens_per_second_zero_tokens(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        rate = activity.compute_tokens_per_second(0, "2026-06-11T00:00:00Z", 1781136060.0)
+        self.assertIsNone(rate)
+
+    def test_compute_tokens_per_second_no_start(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        rate = activity.compute_tokens_per_second(1000, None, 1781136060.0)
+        self.assertIsNone(rate)
+
+    def test_smooth_counter_display_live(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        result = activity.smooth_counter_display(1000, 10.0, True, 1781136065.0, 1781136060.0)
+        self.assertEqual(result, 1050)
+
+    def test_smooth_counter_display_completed(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        result = activity.smooth_counter_display(1000, 10.0, False, 1781136065.0, 1781136060.0)
+        self.assertEqual(result, 1000)
+
+    def test_smooth_counter_display_no_rate(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        result = activity.smooth_counter_display(1000, None, True, 1781136065.0, 1781136060.0)
+        self.assertEqual(result, 1000)
+
+    def test_format_token_total_with_throughput_live(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        tokens = {"known": True, "total": 1000, "total_source": "reported_total"}
+        result = activity.format_token_total_with_throughput(
+            tokens, started_at="2026-06-11T00:00:00Z", is_live=True, now_epoch=1781136060.0
+        )
+        self.assertIn("/s)", result)
+        self.assertIn("1000", result)
+
+    def test_format_token_total_with_throughput_completed(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        tokens = {"known": True, "total": 1000, "total_source": "reported_total"}
+        result = activity.format_token_total_with_throughput(
+            tokens, started_at="2026-06-11T00:00:00Z", is_live=False, now_epoch=1781136060.0
+        )
+        self.assertEqual(result, "1000")
+        self.assertNotIn("/s)", result)
+
+    def test_format_token_total_with_throughput_unknown(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        tokens = {"known": False}
+        result = activity.format_token_total_with_throughput(tokens, is_live=True)
+        self.assertEqual(result, "unknown")
+
+    def test_format_token_total_with_throughput_smooths_odometer_over_time(self) -> None:
+        """Odometer should advance at the estimated rate for live runs and freeze on completion."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        tokens = {"known": True, "total": 1000, "total_source": "reported_total"}
+        started = "2026-06-11T00:00:00Z"
+        early = activity.format_token_total_with_throughput(
+            tokens, started_at=started, is_live=True, now_epoch=1781136060.0
+        )
+        later = activity.format_token_total_with_throughput(
+            tokens, started_at=started, is_live=True, now_epoch=1781136070.0
+        )
+        self.assertIn("/s)", early)
+        self.assertIn("/s)", later)
+        self.assertIn("1000", early)
+        self.assertIn("1000", later)
+        early_rate = float(early.split("(")[1].split("/")[0])
+        later_rate = float(later.split("(")[1].split("/")[0])
+        self.assertGreater(early_rate, later_rate, "rate should decline as elapsed time grows")
+        completed = activity.format_token_total_with_throughput(
+            tokens, started_at=started, is_live=False, now_epoch=1781136070.0
+        )
+        self.assertEqual(completed, "1000", "completed runs must show the exact recorded value")
+        self.assertNotIn("/s)", completed, "completed runs must not display a live rate")
+
+    def test_smooth_counter_display_does_not_apply_to_times(self) -> None:
+        """Smoothing helper is for monotonic counters only; duration formatting must remain unchanged."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        self.assertEqual(activity.smooth_counter_display(120, 0.5, False, 0.0, 0.0), 120)
+        self.assertEqual(activity.format_duration_seconds(0), "<1 us")
+        self.assertEqual(activity.format_duration_seconds(1.5), "1.5 s")
+        self.assertEqual(activity.format_duration_seconds(65), "1m 05s")
+        self.assertEqual(activity.format_duration_seconds(3661), "1h 01m")
+
+    def test_live_stats_token_display_includes_throughput_when_live(self) -> None:
+        """End-to-end: a live run detail with known tokens should display both total and rate."""
+        rendered = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "runs",
+            "--width",
+            "110",
+            "--height",
+            "40",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("Live Stats", rendered)
+
+    def test_throughput_rate_is_not_smoothed_below_one_second(self) -> None:
+        """Tokens per second should remain hidden until the run has been live for at least a second."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        rate = activity.compute_tokens_per_second(1000, "2026-06-11T00:00:00Z", 1781136000.5)
+        self.assertIsNone(rate, "rate must stay hidden for sub-second elapsed time")
+        rate = activity.compute_tokens_per_second(1000, "2026-06-11T00:00:00Z", 1781136002.0)
+        self.assertIsNotNone(rate, "rate should appear once elapsed time crosses one second")
 
 
 class StateTruthfulnessTests(unittest.TestCase):

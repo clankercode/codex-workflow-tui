@@ -345,6 +345,57 @@ def format_token_total(tokens: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Throughput estimation and smoothed counter display
+# ---------------------------------------------------------------------------
+
+
+def compute_tokens_per_second(token_total: int, started_at: Any = None, now_epoch: float | None = None) -> float | None:
+    """Return estimated tokens-per-second when timing and token data are available."""
+    if token_total <= 0 or started_at is None:
+        return None
+    start_epoch = timestamp_epoch(started_at)
+    if start_epoch <= 0:
+        return None
+    current = now_epoch if now_epoch is not None else reference_epoch()
+    elapsed = current - start_epoch
+    if elapsed < 1.0:
+        return None
+    return token_total / elapsed
+
+
+def smooth_counter_display(base_value: int, rate: float | None, is_live: bool, now_epoch: float | None = None, base_epoch: float | None = None) -> int:
+    """Return an interpolated counter value for live display, or the exact value when not live."""
+    if not is_live or rate is None or rate <= 0:
+        return base_value
+    current = now_epoch if now_epoch is not None else reference_epoch()
+    base = base_epoch if base_epoch is not None else current
+    elapsed = current - base
+    if elapsed <= 0:
+        return base_value
+    return base_value + int(rate * elapsed)
+
+
+def format_token_total_with_throughput(
+    tokens: dict[str, Any],
+    started_at: Any = None,
+    is_live: bool = False,
+    now_epoch: float | None = None,
+) -> str:
+    """Render token totals with throughput rate when available."""
+    base_label = format_token_total(tokens)
+    if base_label == "unknown":
+        return base_label
+    token_total = token_value(tokens.get("total"))
+    if is_live and token_total > 0:
+        rate = compute_tokens_per_second(token_total, started_at, now_epoch)
+        if rate is not None and rate > 0:
+            displayed = smooth_counter_display(token_total, rate, True, now_epoch)
+            per_sec = compact_decimal(rate, 1)
+            return f"{displayed} ({per_sec}/s)"
+    return base_label
+
+
+# ---------------------------------------------------------------------------
 # Timestamp utilities
 # ---------------------------------------------------------------------------
 

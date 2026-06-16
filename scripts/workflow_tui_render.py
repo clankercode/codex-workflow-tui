@@ -23,6 +23,7 @@ from workflow_tui_activity import (
     display_path_value,
     format_duration_seconds,
     format_token_total,
+    format_token_total_with_throughput,
     is_duration_seconds_key,
     parse_duration_seconds,
     longest_agent_label,
@@ -55,6 +56,7 @@ MIN_WIDTH = 80
 MIN_HEIGHT = 12
 DISPLAY_TIMESTAMP_WIDTH = 18
 COMPACT_TIMESTAMP_WIDTH = 14
+RUN_ROW_HEIGHT = 2
 TIMESTAMP_KEYS = {"ts", "created_at", "updated_at", "started_at", "completed_at"}
 SNAPSHOT_NOW_ENV = "WORKFLOW_TUI_SNAPSHOT_NOW"
 
@@ -444,7 +446,7 @@ def make_attention_detail(item: dict[str, Any]) -> Group:
 def make_runs_table(runs: list[dict[str, Any]], selected: int, visible: int) -> Table:
     table = Table(box=None, expand=True, show_header=True, header_style="bold bright_black", pad_edge=False)
     table.add_column("", width=1, no_wrap=True)
-    table.add_column("Workflow", ratio=1, overflow="ellipsis", no_wrap=False)
+    table.add_column("Workflow", ratio=1, overflow="ellipsis", no_wrap=True)
     if not runs:
         table.add_row("", "No workflow runs found.")
         return table
@@ -454,7 +456,7 @@ def make_runs_table(runs: list[dict[str, Any]], selected: int, visible: int) -> 
         style = "reverse" if index == selected else ""
         run_status_label = STATUS_META.get(str(run.get("status", "")), (str(run.get("status", "")).upper()[:4], ""))[0]
         duration = run_duration_text(run)
-        summary = Text(str(run.get("title", "")) or "(untitled)")
+        summary = Text(str(run.get("title", "")) or "(untitled)", no_wrap=True, overflow="ellipsis")
         summary.append("\n  > ", style="dim")
         summary.append(run_status_label, style=status_text(run.get("status", "")).style)
         if duration:
@@ -552,6 +554,7 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
     live = collect_run_activity(run)
     metrics = run.get("metrics", {})
     control = run.get("control") or {}
+    run_is_live = str(run.get("status", "")) not in workflow_state.TERMINAL_STATUS_VALUES
     facts = make_facts_table(
         [
             ("id", run.get("run_id", "")),
@@ -571,8 +574,13 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
         border_style="blue",
         box=box.ROUNDED,
     )
+    token_display = format_token_total_with_throughput(
+        live.get("tokens", {}),
+        started_at=run.get("started_at") or run.get("created_at"),
+        is_live=run_is_live,
+    )
     live_rows = [
-        ("tokens", format_token_total(live.get("tokens", {}))),
+        ("tokens", token_display),
         ("tail tools", live.get("tool_call_count", 0)),
         ("active", len([agent for agent in run.get("agents", []) if agent.get("status") == "running"])),
         ("longest", longest_agent_label(live)),
@@ -655,8 +663,14 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
     native_id = agent.get("native_id")
     process_label = "pgid" if process_group_id else "pid"
     process_display = str(process_group_id or process_id or "") if process_id or process_group_id else ""
+    is_live = str(agent.get("status", "")) not in workflow_state.TERMINAL_STATUS_VALUES
+    token_display = format_token_total_with_throughput(
+        activity.get("tokens", {}),
+        started_at=agent.get("started_at"),
+        is_live=is_live,
+    )
     stats_rows: list[tuple[str, Any]] = [
-        ("tokens", format_token_total(activity.get("tokens", {}))),
+        ("tokens", token_display),
         ("tail tools", activity.get("tool_call_count", 0)),
         ("parse errs", activity.get("parse_errors", 0)),
         (duration_label, duration_text),
