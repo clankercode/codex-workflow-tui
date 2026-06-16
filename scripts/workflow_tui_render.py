@@ -506,9 +506,10 @@ def merged_live_output_text(
 ) -> Text:
     """Merge live output from multiple agents with colored name prefixes.
 
-    Each output line is prefixed with ``[agent-name]`` in a color assigned
-    per agent, producing a stable interleaved view.  When only one agent has
-    output, the prefix is omitted so single-agent runs remain clean.
+    Outputs are grouped per agent (each agent's lines kept together) and
+    every line is prefixed with ``[agent-name]`` in a color assigned per
+    agent.  When only one agent has output, the prefix is omitted so
+    single-agent runs remain clean.
     """
     entries: list[tuple[str, str, str]] = []
     agent_names: dict[str, str] = {
@@ -522,7 +523,7 @@ def merged_live_output_text(
         if not output:
             continue
         agent_id = str(activity.get("agent_id", ""))
-        agent_name = agent_names.get(agent_id, agent_id or "agent")
+        agent_name = agent_names.get(agent_id) or str(activity.get("name") or "") or agent_id or "agent"
         if agent_id not in color_map:
             color_map[agent_id] = AGENT_COLORS[color_index % len(AGENT_COLORS)]
             color_index += 1
