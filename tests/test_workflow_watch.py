@@ -175,7 +175,7 @@ class WatchEmitTests(unittest.TestCase):
         self.assertIn("RUN: running \u2192 completed", output)
 
     def test_first_run_emits_baseline_not_full_state(self) -> None:
-        """With no snapshot, emits current status as baseline (→ status), not all history."""
+        """With no snapshot, emits minimal baseline (just RUN status), not full state."""
         run_id = self._init_run()
         run = self._load_run(run_id)
         run["agents"] = [
@@ -188,12 +188,12 @@ class WatchEmitTests(unittest.TestCase):
         # No snapshot written — first run
         output = self._capture_emit(run_id)
         lines = output.strip().splitlines()
-        # Should have 1 RUN + 1 PHASE + 2 AGENT lines
-        self.assertEqual(len(lines), 4)
+        # Minimal baseline: ONLY the RUN line, no phases/agents
+        self.assertEqual(len(lines), 1)
         self.assertIn("RUN: \u2192 running", lines[0])
-        self.assertIn("PHASE Build: \u2192 running", lines[1])
-        self.assertIn("AGENT w1: \u2192 completed (exit 0)", lines[2])
-        self.assertIn("AGENT w2: \u2192 running", lines[3])
+        # Second run: snapshot exists, still no changes → silent
+        output2 = self._capture_emit(run_id)
+        self.assertEqual(output2.strip(), "")
 
     def test_all_runs_mode_detects_new_run(self) -> None:
         """In all-runs mode (--loop), a newly-appeared run gets a [new] marker."""
@@ -226,9 +226,10 @@ class WatchEmitTests(unittest.TestCase):
         self._save_run(run_id, run)
 
         output = self._capture_emit(run_id)
-        # Should emit baseline (first-run behavior)
+        # Corrupt snapshot → treated as first-run → minimal baseline
         self.assertIn("RUN: \u2192 running", output)
-        self.assertIn("AGENT w: \u2192 running", output)
+        # Minimal baseline does not include agents
+        self.assertNotIn("AGENT", output)
 
     def test_loop_mode_emits_on_change_then_silent(self) -> None:
         """--loop mode emits on change, then nothing when state is same."""
@@ -248,17 +249,15 @@ class WatchEmitTests(unittest.TestCase):
                 workflow_watch_emit.cmd_watch_emit(args)
         output = buf.getvalue()
 
-        # First iteration: baseline emitted
+        # First iteration: minimal baseline (just RUN line)
         self.assertIn("RUN: \u2192 running", output)
-        self.assertIn("AGENT w: \u2192 running", output)
 
-        # Second iteration: no change → nothing new
+        # Only the first-iteration line should be present (1 line total)
         lines_after_first = output.strip().splitlines()
-        # Only the first-iteration lines should be present
-        self.assertEqual(len(lines_after_first), 2)
+        self.assertEqual(len(lines_after_first), 1)
 
     def test_run_id_mode_watches_terminal_run(self) -> None:
-        """Watching a terminal run by ID still emits its baseline."""
+        """Watching a terminal run by ID still emits its minimal baseline."""
         run_id = self._init_run(status="completed")
         run = self._load_run(run_id)
         run["status"] = "completed"
@@ -267,7 +266,8 @@ class WatchEmitTests(unittest.TestCase):
 
         output = self._capture_emit(run_id)
         self.assertIn("RUN: \u2192 completed", output)
-        self.assertIn("AGENT w: \u2192 completed (exit 0)", output)
+        # Minimal baseline does not include agents
+        self.assertNotIn("AGENT", output)
 
     def test_short_run_id_truncation(self) -> None:
         """short_run_id returns last 8 chars for long ids."""
@@ -355,18 +355,29 @@ class WatchEmitTests(unittest.TestCase):
         self.assertEqual(snap["agents"]["a1"]["status"], "running")
 
     def test_exit_code_on_first_run_terminal_agent(self) -> None:
-        """First-run baseline includes exit code for terminal agents."""
-        run_id = self._init_run(status="completed")
+        """Exit code appears on agent transition AFTER baseline (not on first run)."""
+        run_id = self._init_run(status="running")
         run = self._load_run(run_id)
-        run["status"] = "completed"
+        run["status"] = "running"
         run["agents"] = [{
-            "agent_id": "a1", "name": "w", "status": "failed",
-            "exit_code": 42, "phase_id": None,
+            "agent_id": "a1", "name": "w", "status": "running",
+            "exit_code": None, "phase_id": None,
         }]
         self._save_run(run_id, run)
 
+        # First run: minimal baseline (no agent line)
         output = self._capture_emit(run_id)
-        self.assertIn("AGENT w: \u2192 failed (exit 42)", output)
+        self.assertIn("RUN: \u2192 running", output)
+        self.assertNotIn("AGENT", output)
+
+        # Now agent fails → transition emits with exit code
+        run = self._load_run(run_id)
+        run["agents"][0]["status"] = "failed"
+        run["agents"][0]["exit_code"] = 42
+        self._save_run(run_id, run)
+
+        output2 = self._capture_emit(run_id)
+        self.assertIn("AGENT w: running \u2192 failed (exit 42)", output2)
 
     def test_all_runs_no_runs_emits_nothing(self) -> None:
         """When no runs exist, all-runs mode emits nothing."""

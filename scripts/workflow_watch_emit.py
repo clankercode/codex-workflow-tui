@@ -101,18 +101,8 @@ def _diff_and_emit(run: dict[str, Any], prev_snap: dict[str, Any] | None) -> lis
     current_status = run.get("status", "unknown")
 
     if prev_snap is None:
+        # Minimal baseline: just the run status, not every phase/agent.
         lines.append(f"{rid} RUN: \u2192 {current_status}")
-        for phase in run.get("phases", []):
-            pid = phase.get("name", phase.get("phase_id", ""))
-            lines.append(f"{rid} PHASE {pid}: \u2192 {phase.get('status', 'unknown')}")
-        for agent in run.get("agents", []):
-            name = agent.get("name", agent.get("agent_id", ""))
-            status = agent.get("status", "unknown")
-            line = f"{rid} AGENT {name}: \u2192 {status}"
-            exit_code = agent.get("exit_code")
-            if exit_code is not None and status in workflow_state.TERMINAL_STATUS_VALUES:
-                line += f" (exit {exit_code})"
-            lines.append(line)
         return lines
 
     old_status = prev_snap.get("status", "")
@@ -246,8 +236,14 @@ def _watch_all(
                 except (OSError, json.JSONDecodeError):
                     continue
 
-                if not loop and _is_terminal(run):
-                    continue
+                # Skip historical terminal runs entirely. A terminal run with
+                # no snapshot is done and not worth monitoring. A terminal run
+                # WITH a snapshot may have just transitioned, so process it once
+                # (to emit the terminal transition) then skip going forward.
+                if _is_terminal(run):
+                    prev_snap_for_check = _load_snapshot(run_dir)
+                    if prev_snap_for_check is None:
+                        continue
 
                 if loop and rid not in known_run_ids and known_run_ids:
                     sr = short_run_id(rid)
