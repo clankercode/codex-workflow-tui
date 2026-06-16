@@ -418,6 +418,8 @@ def render_dashboard(
         left_width = max(28, min(34, width // 3))
     else:
         left_width = max(40, min(46, (width * 2) // 5))
+    normal_left_width = max(40, min(46, (width * 2) // 5))
+    graph_title_pad = max(0, (normal_left_width - left_width) // 2) if tab == "graph" else 0
     right_width = max(20, width - left_width)
     visible = max(1, pane_height - 5)
     if tab == "runs":
@@ -441,12 +443,17 @@ def render_dashboard(
         filter_text=filter_text,
     )
     use_scroll = scroll_offset > 0
+    detail_title = make_panel_title(tab, compact=width < 100, filter_text=filter_text)
+    if graph_title_pad:
+        padded = Text(" " * graph_title_pad)
+        padded.append_text(detail_title)
+        detail_title = padded
     if focus:
         if use_scroll:
             clipped = _clip_content_to_height(detail, pane_height, scroll_offset)
             focused = Panel(
                 Text(clipped),
-                title=make_panel_title(tab, compact=width < 100, filter_text=filter_text),
+                title=detail_title,
                 title_align="left",
                 border_style="green",
                 box=box.ROUNDED,
@@ -454,7 +461,7 @@ def render_dashboard(
         else:
             focused = Panel(
                 detail,
-                title=make_panel_title(tab, compact=width < 100, filter_text=filter_text),
+                title=detail_title,
                 title_align="left",
                 border_style="green",
                 box=box.ROUNDED,
@@ -482,7 +489,7 @@ def render_dashboard(
         ),
         Panel(
             detail_widget,
-            title=make_panel_title(tab, compact=width < 100, filter_text=""),
+            title=detail_title,
             title_align="left",
             border_style="green",
             box=box.ROUNDED,
