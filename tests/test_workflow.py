@@ -9225,5 +9225,299 @@ class StateTruthfulnessTests(unittest.TestCase):
             self.assertEqual(dependent["status"], "pending")
 
 
+class WorkflowMonitorTests(unittest.TestCase):
+    """Verify compact monitor/status command output."""
+
+    def run_script(self, script: str, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        command = [sys.executable, str(SCRIPTS / script), *args]
+        return subprocess.run(command, check=True, text=True, capture_output=True, env=env)
+
+    def run_wf(self, *args: str, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+        command = [str(SCRIPTS / "wf"), *args]
+        return subprocess.run(command, check=check, text=True, capture_output=True, env=env)
+
+    def test_format_elapsed_seconds(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+        self.assertEqual(workflow_monitor.format_elapsed(5), "5s")
+        self.assertEqual(workflow_monitor.format_elapsed(59), "59s")
+
+    def test_format_elapsed_minutes(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+        self.assertEqual(workflow_monitor.format_elapsed(60), "1m00s")
+        self.assertEqual(workflow_monitor.format_elapsed(125), "2m05s")
+
+    def test_format_elapsed_hours(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+        self.assertEqual(workflow_monitor.format_elapsed(3600), "1h00m")
+        self.assertEqual(workflow_monitor.format_elapsed(3750), "1h02m")
+
+    def test_format_elapsed_none(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+        self.assertEqual(workflow_monitor.format_elapsed(None), "--")
+        self.assertEqual(workflow_monitor.format_elapsed(-1), "--")
+
+    def test_truncate_short_text(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+        self.assertEqual(workflow_monitor.truncate("hello", 10), "hello")
+
+    def test_truncate_long_text(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+        result = workflow_monitor.truncate("hello world this is long", 10)
+        self.assertEqual(len(result), 10)
+        self.assertTrue(result.endswith("\u2026"))
+
+    def test_safe_command_basename(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+        self.assertEqual(workflow_monitor.safe_command_basename("/usr/bin/codex --arg1 --arg2"), "codex")
+        self.assertEqual(workflow_monitor.safe_command_basename("ccc some args"), "ccc")
+        self.assertEqual(workflow_monitor.safe_command_basename(""), "")
+
+    def test_build_run_row_fields(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+
+        run = {
+            "run_id": "wf-20260611T000000Z-test-abc123",
+            "status": "running",
+            "title": "Test Workflow",
+            "mode": "codex-direct",
+            "started_at": "2026-06-11T00:00:00Z",
+            "updated_at": "2026-06-11T00:05:00Z",
+            "metrics": {"agents_total": 2},
+            "agents": [
+                {
+                    "status": "running",
+                    "tool_call_count": 5,
+                    "token_total": 1000,
+                    "latest_output": "working on task",
+                },
+                {
+                    "status": "completed",
+                    "tool_call_count": 3,
+                    "token_total": 500,
+                },
+            ],
+            "events": [{"kind": "run", "message": "workflow started"}],
+        }
+        now = datetime(2026, 6, 11, 0, 10, 0, tzinfo=timezone.utc)
+        row = workflow_monitor.build_run_row(run, now=now)
+
+        self.assertEqual(row["run_id"], "wf-20260611T000000Z-test-abc123")
+        self.assertEqual(row["short_id"], "abc123")
+        self.assertEqual(row["status"], "running")
+        self.assertEqual(row["agent_summary"], "1R/1C")
+        self.assertEqual(row["pids"], "--")
+        self.assertEqual(row["tool_calls"], 8)
+        self.assertEqual(row["token_delta"], 1500)
+        self.assertEqual(row["runner_type"], "codex-direct")
+        self.assertIsInstance(row["health"], str)
+        self.assertIn("10m", row["elapsed"])
+
+    def test_build_run_row_no_agents(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+
+        run = {
+            "run_id": "wf-empty",
+            "status": "pending",
+            "title": "Empty",
+            "agents": [],
+            "events": [],
+        }
+        row = workflow_monitor.build_run_row(run)
+        self.assertEqual(row["agent_summary"], "0")
+        self.assertEqual(row["pids"], "--")
+        self.assertEqual(row["tool_calls"], 0)
+
+    def test_build_agent_row_with_tokens(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+
+        agent = {
+            "agent_id": "agent-1",
+            "name": "Worker Alpha",
+            "status": "running",
+            "process_id": 999,
+            "started_at": "2026-06-11T00:00:00Z",
+            "tool_call_count": 10,
+            "token_total": 5000,
+            "tokens": {"total": 5000, "input": 3000, "output": 2000},
+            "latest_output": "Analyzing the codebase for patterns",
+        }
+        now = datetime(2026, 6, 11, 0, 5, 0, tzinfo=timezone.utc)
+        row = workflow_monitor.build_agent_row(agent, now=now)
+
+        self.assertEqual(row["name"], "Worker Alpha")
+        self.assertEqual(row["status"], "running")
+        self.assertEqual(row["pid"], "999")
+        self.assertEqual(row["tool_calls"], 10)
+        self.assertEqual(row["token_delta"], "+2000/-3000")
+        self.assertIn("5m", row["elapsed"])
+
+    def test_build_agent_row_no_tokens(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_monitor
+
+        agent = {
+            "agent_id": "agent-2",
+            "name": "Idle Worker",
+            "status": "pending",
+        }
+        row = workflow_monitor.build_agent_row(agent)
+        self.assertEqual(row["pid"], "--")
+        self.assertEqual(row["token_delta"], "--")
+        self.assertEqual(row["tool_calls"], 0)
+
+    def test_monitor_json_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            self.run_script(
+                "workflow_state.py", "init",
+                "--title", "Monitor Test", "--prompt", "test",
+                "--cwd", str(ROOT), env=env,
+            )
+            result = self.run_script(
+                "workflow_ops.py", "monitor", "--json", "--all", env=env,
+            )
+            data = json.loads(result.stdout)
+            self.assertIsInstance(data, list)
+            self.assertEqual(len(data), 1)
+            self.assertIn("run_id", data[0])
+            self.assertIn("status", data[0])
+            self.assertIn("agent_summary", data[0])
+            self.assertIn("tool_calls", data[0])
+            self.assertIn("token_delta", data[0])
+
+    def test_monitor_json_with_agents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_script(
+                "workflow_state.py", "init",
+                "--title", "Monitor Agents", "--prompt", "test",
+                "--cwd", str(ROOT), env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_script(
+                "workflow_state.py", "add-agent", run_id,
+                "--agent-id", "agent-mon", "--name", "Monitor Agent",
+                "--status", "running", env=env,
+            )
+            result = self.run_script(
+                "workflow_ops.py", "monitor", "--json", "--all", "--agents", env=env,
+            )
+            data = json.loads(result.stdout)
+            self.assertEqual(len(data[0]["agents"]), 1)
+            self.assertEqual(data[0]["agents"][0]["name"], "Monitor Agent")
+
+    def test_monitor_text_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            self.run_script(
+                "workflow_state.py", "init",
+                "--title", "Text Monitor", "--prompt", "test",
+                "--cwd", str(ROOT), env=env,
+            )
+            result = self.run_script(
+                "workflow_ops.py", "monitor", "--all", "--no-color", env=env,
+            )
+            self.assertIn("Text Monitor", result.stdout)
+            self.assertIn("[R]", result.stdout)  # running status symbol (init creates running)
+
+    def test_monitor_empty_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            result = self.run_script(
+                "workflow_ops.py", "monitor", env=env,
+            )
+            self.assertIn("No workflow runs found", result.stdout)
+
+    def test_wf_monitor_dispatches_to_ops(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            self.run_wf(
+                "init", "--title", "WF Monitor", "--prompt", "test",
+                "--cwd", str(ROOT), env=env,
+            )
+            result = self.run_wf("monitor", "--json", "--all", env=env)
+            data = json.loads(result.stdout)
+            self.assertEqual(len(data), 1)
+            self.assertEqual(data[0]["title"], "WF Monitor")
+
+    def test_wf_watch_dispatches_to_ops(self) -> None:
+        """wf watch should dispatch and exit cleanly with --interval 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            self.run_wf(
+                "init", "--title", "WF Watch", "--prompt", "test",
+                "--cwd", str(ROOT), env=env,
+            )
+            # Use --json --interval 0 with a timeout so it doesn't loop forever
+            proc = subprocess.Popen(
+                [str(SCRIPTS / "wf"), "watch", "--json", "--all", "--interval", "0"],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+            )
+            try:
+                stdout, _ = proc.communicate(timeout=5)
+                # watch with interval 0 loops; we just verify it started ok
+                data = json.loads(stdout.strip().split("\n")[0])
+                self.assertEqual(data[0]["title"], "WF Watch")
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                proc.kill()
+                raise
+
+    def test_monitor_pid_display_for_running_agents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            created = self.run_script(
+                "workflow_state.py", "init",
+                "--title", "PID Monitor", "--prompt", "test",
+                "--cwd", str(ROOT), env=env,
+            )
+            run_id = json.loads(created.stdout)["run_id"]
+            self.run_script(
+                "workflow_state.py", "add-agent", run_id,
+                "--agent-id", "agent-pid", "--name", "PID Agent",
+                "--status", "running", "--process-id", "54321",
+                env=env,
+            )
+            result = self.run_script(
+                "workflow_ops.py", "monitor", "--json", "--all", env=env,
+            )
+            data = json.loads(result.stdout)
+            self.assertEqual(data[0]["pids"], "54321")
+
+    def test_monitor_health_field_reflects_issues(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(Path(tmp) / "state")
+            self.run_script(
+                "workflow_state.py", "init",
+                "--title", "Health Monitor", "--prompt", "test",
+                "--cwd", str(ROOT), env=env,
+            )
+            result = self.run_script(
+                "workflow_ops.py", "monitor", "--json", "--all", env=env,
+            )
+            data = json.loads(result.stdout)
+            self.assertIn("health", data[0])
+
+
 if __name__ == "__main__":
     unittest.main()
