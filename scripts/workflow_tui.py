@@ -150,6 +150,7 @@ from workflow_tui_render import (  # noqa: F401
     make_decision_detail,
     make_artifact_detail,
     selected_detail,
+    make_run_graph_panel,
 )
 
 
@@ -244,6 +245,8 @@ def rows_for_tab(
         return workflow_health.attention_items(runs)
     if tab == "runs":
         return runs
+    if tab == "graph":
+        return runs
     if not run:
         return []
     if tab == "phases":
@@ -269,7 +272,7 @@ def make_sidebar(tab: str, rows: list[dict[str, Any]], selected: int, visible: i
         return Text(filter_empty_message(filter_text), style="dim")
     if tab == "overview":
         return make_attention_table(rows, selected, visible)
-    if tab == "runs":
+    if tab in ("runs", "graph"):
         return make_runs_table(rows, selected, visible)
     if tab == "phases":
         return make_phase_table(rows, selected, visible)
@@ -308,6 +311,10 @@ def make_detail_body(
         if not rows:
             return Text("No run selected.", style="dim")
         return make_run_detail(rows[clamp_index(selected, len(rows))], detail_height=detail_height)
+    if tab == "graph":
+        if not rows:
+            return Text("No run selected.", style="dim")
+        return make_run_graph_panel(rows[clamp_index(selected, len(rows))])
     if not run:
         return Text("No run selected.", style="dim")
     if not rows:
@@ -329,9 +336,11 @@ def make_detail_body(
 
 def sidebar_title_for(tab: str, run: dict[str, Any] | None, selected_phase_id: str | None, agent_scope: str) -> str:
     """Return the contextual sidebar title."""
-    if tab != "agents" or agent_scope == "all":
+    if tab not in ("agents", "graph") or (tab == "agents" and agent_scope == "all"):
         if tab == "overview":
             return "Attention"
+        if tab == "graph":
+            return "Runs"
         return tab.capitalize()
     phase = selected_phase(run, selected_phase_id)
     if not phase:

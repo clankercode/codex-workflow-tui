@@ -5332,7 +5332,7 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(rendered, expected)
         self.assertIn("● evt", rendered)
         self.assertIn("time          10:05:00 AEST", rendered)
-        self.assertIn("dec  art", rendered)
+        self.assertIn("dec", rendered)
         self.assertIn("wf-fixture-rich/run.json", rendered)
 
     def test_selected_row_stays_visible_in_snapshot_tables(self) -> None:

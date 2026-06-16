@@ -47,7 +47,7 @@ STATUS_META = {
     "cancelled": ("CNCL", "red"),
     "paused": ("PAUS", "yellow"),
 }
-TABS = ("overview", "runs", "phases", "agents", "events", "decisions", "artifacts")
+TABS = ("overview", "runs", "graph", "phases", "agents", "events", "decisions", "artifacts")
 AGENT_SCOPES = ("phase", "all")
 AGENT_VIEWS = ("live", "prompt")
 AGENT_ONLY_ACTIONS = frozenset({"toggle_agent_scope", "toggle_agent_view"})
@@ -347,6 +347,7 @@ def make_tabs_title(tab: str, compact: bool = False) -> Text:
     labels = {
         "overview": "ovr",
         "runs": "run",
+        "graph": "grf",
         "phases": "pha",
         "agents": "agt",
         "events": "evt",
@@ -838,5 +839,103 @@ def selected_detail(rows: list[dict[str, Any]], selected: int, title: str) -> Pa
         json_renderable(display_timestamps_in_detail(rows[selected])),
         title=title,
         border_style="bright_black",
+        box=box.ROUNDED,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Graph tab (phart dependency visualization)
+# ---------------------------------------------------------------------------
+
+try:
+    import networkx as nx
+    from phart import ASCIIRenderer, LayoutOptions
+    HAS_PHART = True
+except ImportError:
+    HAS_PHART = False
+
+STATUS_ICONS = {
+    "completed": "●",
+    "running": "◐",
+    "pending": "○",
+    "failed": "✗",
+    "cancelled": "⊘",
+    "blocked": "◉",
+    "paused": "‖",
+}
+
+
+def build_run_graph(run: dict[str, Any]) -> Any | None:
+    """Build a NetworkX DiGraph from workflow run state."""
+    if not HAS_PHART:
+        return None
+    G = nx.DiGraph()
+    agents = run.get("agents", [])
+    phases = run.get("phases", [])
+    if not agents:
+        return None
+    # Add start node
+    G.add_node("▶", label=str(run.get("title", "workflow")[:30]))
+    # Build agent nodes with labels
+    for agent in agents:
+        name = str(agent.get("name", ""))
+        status = str(agent.get("status", ""))
+        icon = STATUS_ICONS.get(status, "?")
+        runner = str(agent.get("agent_type", ""))
+        label_parts = [name, icon]
+        if runner:
+            label_parts.insert(1, f"({runner})")
+        label = " ".join(label_parts)
+        G.add_node(name, label=label[:40])
+    # Connect start to agents with no dependencies
+    for agent in agents:
+        depends_on = str(agent.get("depends_on", "")).strip()
+        if not depends_on:
+            G.add_edge("▶", str(agent.get("name", "")))
+    # Connect dependencies
+    for agent in agents:
+        name = str(agent.get("name", ""))
+        depends_on = str(agent.get("depends_on", "")).strip()
+        if not depends_on:
+            continue
+        for dep in depends_on.split(","):
+            dep = dep.strip()
+            if dep and dep in G:
+                G.add_edge(dep, name)
+    return G if len(G) > 1 else None
+
+
+def make_run_graph_panel(run: dict[str, Any]) -> Any:
+    """Render a dependency graph for a workflow run using phart."""
+    if not HAS_PHART:
+        return Panel(
+            Text("Install phart for graph view: pip install phart", style="dim"),
+            title="Dependency Graph",
+            border_style="yellow",
+            box=box.ROUNDED,
+        )
+    G = build_run_graph(run)
+    if G is None:
+        return Panel(
+            Text("No agents to graph.", style="dim"),
+            title="Dependency Graph",
+            border_style="yellow",
+            box=box.ROUNDED,
+        )
+    opts = LayoutOptions(
+        use_labels=True,
+        node_label_attr="label",
+        bboxes=True,
+        hpad=2,
+        vpad=0,
+        layer_spacing=3,
+        use_ascii=False,
+    )
+    renderer = ASCIIRenderer(G, options=opts)
+    graph_text = renderer.render()
+    return Panel(
+        Text(graph_text, overflow="fold"),
+        title="Dependency Graph",
+        border_style="cyan",
         box=box.ROUNDED,
     )
