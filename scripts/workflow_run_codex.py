@@ -444,6 +444,17 @@ def quota_limit_detected(*texts: str) -> bool:
     return any(QUOTA_LIMIT_RE.search(text or "") for text in texts)
 
 
+def quota_fail_fast(args: argparse.Namespace) -> bool:
+    """Return true when quota errors should cause immediate failure.
+
+    Reads ``--quota-fail-fast`` from *args* and the
+    ``WORKFLOW_QUOTA_FAIL_FAST`` environment variable.
+    """
+    if getattr(args, "quota_fail_fast", False):
+        return True
+    return os.environ.get("WORKFLOW_QUOTA_FAIL_FAST", "0") == "1"
+
+
 def seconds_until_next_quota_window(now: datetime | None = None, *, buffer_seconds: float = 5.0) -> float:
     """Return seconds until the next wall-clock :00 or :30 retry window."""
     current = now or datetime.now().astimezone()
@@ -811,6 +822,7 @@ async def run_worker(
             last_timed_out = False
             last_validation_error: str | None = None
             result_json: Any | None = None
+            quota_fail_fast_triggered = False
             while True:
                 if not await wait_until_launch_allowed(run_id, agent["agent_id"]):
                     return
@@ -892,22 +904,35 @@ async def run_worker(
                         exit_code = 1
                         stderr_text += f"\nschema validation failed: {validation_error}\n"
 
-                if exit_code != 0 and quota_retry_count < quota_retries and quota_limit_detected(stdout_text, stderr_text):
-                    quota_retry_count += 1
-                    sleep_seconds = quota_retry_sleep_seconds(args)
-                    update_agent(
-                        run_id,
-                        agent["agent_id"],
-                        status="running",
-                        summary=f"quota limit detected; retry {quota_retry_count}/{quota_retries} after next :00/:30 window",
-                        exit_code=exit_code,
-                        quota_retry_count=quota_retry_count,
-                        quota_sleep_seconds=round(sleep_seconds, 3),
-                        emit_event=True,
-                    )
-                    if not await sleep_until_quota_retry_allowed(run_id, agent["agent_id"], sleep_seconds):
-                        return
-                    continue
+                if exit_code != 0 and quota_limit_detected(stdout_text, stderr_text):
+                    if quota_fail_fast(args):
+                        quota_fail_fast_triggered = True
+                        update_agent(
+                            run_id,
+                            agent["agent_id"],
+                            status="failed",
+                            summary="quota limit detected; fail-fast enabled",
+                            exit_code=exit_code,
+                            quota_retry_count=quota_retry_count,
+                            emit_event=True,
+                        )
+                        break
+                    if quota_retry_count < quota_retries:
+                        quota_retry_count += 1
+                        sleep_seconds = quota_retry_sleep_seconds(args)
+                        update_agent(
+                            run_id,
+                            agent["agent_id"],
+                            status="running",
+                            summary=f"quota limit detected; retry {quota_retry_count}/{quota_retries} after next :00/:30 window",
+                            exit_code=exit_code,
+                            quota_retry_count=quota_retry_count,
+                            quota_sleep_seconds=round(sleep_seconds, 3),
+                            emit_event=True,
+                        )
+                        if not await sleep_until_quota_retry_allowed(run_id, agent["agent_id"], sleep_seconds):
+                            return
+                        continue
                 if exit_code != 0 and failure_retry_count < failure_retries:
                     failure_retry_count += 1
                     if validation_error:
@@ -935,6 +960,9 @@ async def run_worker(
                     await asyncio.sleep(test_interval_env("WORKFLOW_FAILURE_RETRY_SLEEP_SECS", 1.0))
                     continue
                 break
+
+            if quota_fail_fast_triggered:
+                return
 
             status = "completed" if exit_code == 0 else "failed"
             summary = extracted.summary
@@ -1492,6 +1520,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cli-agent", help="direct OpenCode agent name for --runner opencode-direct")
     parser.add_argument("--timeout-secs", type=positive_int, help="forwarded to ccc providers")
     parser.add_argument("--quota-retries", type=nonnegative_int, default=2, help="quota/rate-limit retries; default: 2")
+    parser.add_argument("--quota-fail-fast", action="store_true", help="fail immediately on quota errors instead of retrying in :00/:30 windows")
     parser.add_argument("--quota-retry-buffer-secs", type=nonnegative_float, default=5.0, help="seconds added after the next :00/:30 retry window; default: 5.0")
     parser.add_argument("--failure-retries", type=nonnegative_int, default=0, help="non-quota worker retries; default: 0")
     parser.add_argument("--result-schema", help="path to a JSON schema file applied to worker output")
