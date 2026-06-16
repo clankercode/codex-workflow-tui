@@ -2,7 +2,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 ╭─────────────────── Runs ───────────────────╮╭──── overview  ● runs  phases  agents  events  decisions  artifacts ────╮
 │    Workflow                                ││ id          wf-fixture-e2e-live                                        │
 │ ▸  Live Telemetry Fixture                  ││ title       Live Telemetry Fixture                                     │
-│      > RUN > 125h 22m > Live test worker   ││ status      running                                                    │
+│      > RUN > 125h 50m > Live test worker   ││ status      running                                                    │
 │                                            ││ mode        codex-direct                                               │
 │                                            ││ paused      no                                                         │
 │                                            ││ stop req    no                                                         │
@@ -14,7 +14,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ │ longest     Live test… agents     1          phases     1          │ │
 │                                            ││ │ checks      0                                                      │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││ ╭────────────────── Live Output — Live test worker ──────────────────╮ │
+│                                            ││ ╭────────────── Merged Live Output — Live test worker ───────────────╮ │
 │                                            ││ │ F(20) = 6765                                                       │ │
 │                                            ││ │                                                                    │ │
 │                                            ││ │ Worker is still streaming context, but the current artifact        │ │
@@ -22,7 +22,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭────────────────────────── Running Agents ──────────────────────────╮ │
 │                                            ││ │                                                                    │ │
-│                                            ││ │  ● Live test worker 125h 21m                                       │ │
+│                                            ││ │  ● Live test worker 125h 50m                                       │ │
 │                                            ││ │                                                                    │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────── Latest Tool Calls ─────────────────────────╮ │

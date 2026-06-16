@@ -4774,6 +4774,116 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("Beta", rendered)
         self.assertIn("1m 30s", rendered)
 
+    def test_merged_live_output_single_agent_no_prefix(self) -> None:
+        """Single-agent output should render without an agent-name prefix."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activities = [{"agent_id": "a", "name": "Alpha", "latest_output": "hello world"}]
+        agents = [{"agent_id": "a", "name": "Alpha"}]
+        text = workflow_tui.merged_live_output_text(activities, agents)
+        self.assertEqual(str(text), "hello world")
+
+    def test_merged_live_output_multi_agent_colored_prefixes(self) -> None:
+        """Multi-agent output should interleave lines with colored name prefixes."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activities = [
+            {"agent_id": "a", "name": "Alpha", "latest_output": "line A1\nline A2"},
+            {"agent_id": "b", "name": "Beta", "latest_output": "line B1"},
+        ]
+        agents = [{"agent_id": "a", "name": "Alpha"}, {"agent_id": "b", "name": "Beta"}]
+        text = workflow_tui.merged_live_output_text(activities, agents)
+        rendered = str(text)
+        self.assertIn("[Alpha] line A1", rendered)
+        self.assertIn("[Alpha] line A2", rendered)
+        self.assertIn("[Beta] line B1", rendered)
+
+    def test_merged_live_output_empty_when_no_output(self) -> None:
+        """No agent output should show a placeholder message."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activities = [{"agent_id": "a", "name": "Alpha", "latest_output": ""}]
+        agents = [{"agent_id": "a", "name": "Alpha"}]
+        text = workflow_tui.merged_live_output_text(activities, agents)
+        self.assertIn("No live output", str(text))
+
+    def test_run_detail_uses_merged_live_output_panel(self) -> None:
+        """Run detail should render a 'Merged Live Output' panel."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run = {
+            "run_id": "wf-merged",
+            "title": "Merged Output Test",
+            "status": "running",
+            "agents": [
+                {"agent_id": "a", "name": "Alpha", "status": "running", "started_at": "2026-06-11T00:01:00Z"},
+                {"agent_id": "b", "name": "Beta", "status": "running", "started_at": "2026-06-11T00:02:00Z"},
+            ],
+            "metrics": {"agents_total": 2, "phases_total": 1, "checks_total": 0},
+        }
+        sink = io.StringIO()
+        console = Console(file=sink, width=100, force_terminal=False, color_system=None)
+        console.print(workflow_tui.make_run_detail(run))
+        rendered = sink.getvalue()
+        self.assertIn("Merged Live Output", rendered)
+
+    def test_merged_live_output_multi_agent_one_output_no_prefix(self) -> None:
+        """When N agents exist but only one has output, omit the prefix."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activities = [
+            {"agent_id": "a", "name": "Alpha", "latest_output": ""},
+            {"agent_id": "b", "name": "Beta", "latest_output": "only me"},
+            {"agent_id": "c", "name": "Gamma", "latest_output": ""},
+        ]
+        agents = [
+            {"agent_id": "a", "name": "Alpha"},
+            {"agent_id": "b", "name": "Beta"},
+            {"agent_id": "c", "name": "Gamma"},
+        ]
+        text = workflow_tui.merged_live_output_text(activities, agents)
+        rendered = str(text)
+        self.assertEqual(rendered, "only me")
+        self.assertNotIn("[Beta]", rendered)
+
+    def test_merged_live_output_max_lines_truncates_per_agent(self) -> None:
+        """max_lines should cap the number of lines shown per agent."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activities = [
+            {"agent_id": "a", "name": "Alpha", "latest_output": "\n".join(f"a{i}" for i in range(10))},
+            {"agent_id": "b", "name": "Beta", "latest_output": "\n".join(f"b{i}" for i in range(10))},
+        ]
+        agents = [{"agent_id": "a", "name": "Alpha"}, {"agent_id": "b", "name": "Beta"}]
+        text = workflow_tui.merged_live_output_text(activities, agents, max_lines=3)
+        rendered = str(text)
+        self.assertIn("[Alpha] a0", rendered)
+        self.assertIn("[Alpha] a2", rendered)
+        self.assertNotIn("a3", rendered)
+        self.assertIn("[Beta] b0", rendered)
+        self.assertIn("[Beta] b2", rendered)
+        self.assertNotIn("b3", rendered)
+
+    def test_merged_live_output_falls_back_to_activity_name(self) -> None:
+        """When the agents list is empty, use the activity's own name field."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activities = [
+            {"agent_id": "a", "name": "Alpha", "latest_output": "line A1"},
+            {"agent_id": "b", "name": "Beta", "latest_output": "line B1"},
+        ]
+        text = workflow_tui.merged_live_output_text(activities, agents=[])
+        rendered = str(text)
+        self.assertIn("[Alpha] line A1", rendered)
+        self.assertIn("[Beta] line B1", rendered)
+
     @slow_test
     def test_skill_update_check_reports_remote_git_update(self) -> None:
         """Detect a newer upstream commit without mutating the local checkout."""
@@ -5089,8 +5199,8 @@ class WorkflowScriptTests(unittest.TestCase):
         ).stdout
         expected = (SNAPSHOTS / "snapshot-run-live-panels.txt").read_text(encoding="utf-8")
         self.assertEqual(rendered, expected)
-        self.assertLess(rendered.index("Live Output"), rendered.index("Latest Tool Calls"))
-        self.assertLess(rendered.index("Live Output"), rendered.index("Prompt"))
+        self.assertLess(rendered.index("Merged Live Output"), rendered.index("Latest Tool Calls"))
+        self.assertLess(rendered.index("Merged Live Output"), rendered.index("Prompt"))
         self.assertIn("F(20) = 6765", rendered)
 
     def test_e2e_fixture_paths_resolve_under_fixture_dir(self) -> None:

@@ -136,6 +136,7 @@ from workflow_tui_render import (  # noqa: F401
     make_facts_table,
     make_facts_grid,
     make_run_detail,
+    merged_live_output_text,
     make_phase_table,
     make_agent_table,
     make_agent_activity_detail,
