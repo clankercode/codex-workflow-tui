@@ -4,18 +4,24 @@
 - [x] Refactor: split workflow_tui.py (2035→567 LOC) into 4 modules
 - [x] Refactor: split workflow_run_codex.py (1743→1411 LOC) into 2 modules
 - [x] ccc-review-cx review of refactor — 6 drifts found and fixed
-- [x] Bug fix: worktree lane deduplication (prepare_worktree_lanes called create per-job)
-- [x] Bug fix: lazy worktree creation at launch time (not upfront)
-- [x] Bug fix: dependent worktrees branch from dependency's worktree branch
-- [x] Bug fix: existing branch recovery (fallback to checkout instead of create)
+- [x] Bug fix: worktree lane deduplication
+- [x] Bug fix: lazy worktree creation at launch time
+- [x] Bug fix: dependent worktrees branch from dependency's branch
+- [x] Bug fix: existing branch recovery (fallback to checkout)
+- [x] Bug fix: stale worker detection + 3 retries with 30s grace
+- [x] Bug fix: phase_jobs last-job-only inter-phase deps
+- [x] Feat: workflow apply detaches by default
+- [x] Feat: grid running agents, labeled live output
+- [x] Feat: merge-lanes auto-resolves conflicts (UNTESTED)
+- [x] #10: Run-level merged live output
+- [x] #11: Compact live monitor/status command
+- [x] 7 worktree lane tests + 35 tool-call parsing tests
+- [x] Plan updated: parallel impls, reviews depend on impls
 
 ## IN PROGRESS
-- [ ] Test cases for worktree behavior (subagent planning)
-- [ ] Launch workflow for #10 + #11 (blocked on test cases)
+- [ ] Test for merge-lanes auto-resolve
 
 ## BACKLOG (from dogfood-backlog.md)
-- [ ] #10: Run-level merged live output
-- [ ] #11: Compact live monitor/status command
 - [ ] #12: Event rollover visibility
 - [ ] #13: First-class dogfood/backlog support
 - [ ] #14: Ergonomic layered review workflows

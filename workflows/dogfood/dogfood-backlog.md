@@ -66,9 +66,11 @@ document is the durable review target.
    lane with `@mimo25p`, then `@mm3` and `@glm51` review phases in the same
    lane. V1 adds `workflow merge-conflicts <run-id> [--agent <id>]`, which
    prepares durable merger prompt/context artifacts and records a
-   `merge-conflict-assist` event after a failed `merge-lanes` conflict. It does
-   not silently auto-resolve; operators or merger agents must resolve, verify,
-   and rerun `merge-lanes`. Reviews fixed misleading/conflicting guidance,
+   `merge-conflict-assist` event after a failed `merge-lanes` conflict.
+   V2 (2026-06-16): `merge-lanes` now auto-resolves conflicts by dispatching
+   a ccc resolver agent with the merger prompt. The agent resolves, commits,
+   and merge-lanes re-attempts the merge. Skippable with `--no-resolve` or
+   `WORKFLOW_NO_RESOLVE=1`. Reviews fixed misleading/conflicting guidance,
    malformed conflict-state handling, and a pending-check lifecycle bug.
 
 4. **Per-job runner/model configuration.** Implemented 2026-06-15.
@@ -156,11 +158,15 @@ document is the durable review target.
 
 ### P2: Improve Live Operator Visibility
 
-10. **Run-level merged live output.**
+10. **Run-level merged live output.** Implemented 2026-06-16.
    Add run-level live output that merges all live agent streams with stable
    colored agent-name prefixes.
+   Dogfood result: impl-10 agent implemented merged output with per-agent
+   color prefixes in a new `merged_live_output_text()` function. Two review-
+   and-fix passes (glm51 semantic, cx-reviewer standards) in isolated
+   worktrees. Merged back with conflict auto-resolution.
 
-11. **Compact live monitor/status command.**
+11. **Compact live monitor/status command.** Implemented 2026-06-16.
     Add a low-noise `workflow status/watch` view for lead agents and humans:
     one compact row per run/agent with status, PID, elapsed time, last event,
     latest output excerpt, tool-call count, token delta, and optional `--json`.
@@ -250,6 +256,23 @@ document is the durable review target.
     output format. Wire into `build_provider()`, `build_parser()` arg
     choices, `wf` alias help text, and the `coding-cli-runners.md` reference.
     Add smoke tests in the runner-matrix or a focused process-level test.
+
+22. **Auto-resolve merge conflicts.** Implemented 2026-06-16.
+    `merge-lanes` dispatches a resolver agent when a conflict is detected.
+    Agent receives context (files, original task, merge log), resolves, and
+    commits. Re-attempts merge after resolution. Skippable with `--no-resolve`
+    or `WORKFLOW_NO_RESOLVE=1`. Still needs a dedicated integration test.
+
+23. **Stale worker detection and retry.** Implemented 2026-06-16.
+    Detect running agents whose process is no longer alive. Retry up to 3
+    times with a 30-second grace period (prevents false positives from race
+    conditions). After retries exhausted, mark failed. TUI shows `RUN!` in
+    red for stale workers.
+
+24. **`workflow apply` should not block.** Implemented 2026-06-16.
+    `workflow apply` now spawns workers in a detached subprocess and returns
+    immediately. Set `WORKFLOW_DETACH=0` or `--no-detach` for blocking
+    behavior (used in tests).
 
 ### Completed Or Superseded
 
