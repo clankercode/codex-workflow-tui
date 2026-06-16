@@ -44,6 +44,34 @@ def slow_test(func: Any) -> Any:
     return unittest.skipIf(os.environ.get("WORKFLOW_TEST_MODE") == "fast", "slow workflow integration test")(func)
 
 
+def _phart_available() -> bool:
+    """Return True when phart is importable in the test interpreter."""
+    try:
+        import phart  # noqa: F401
+        import networkx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _max_line_length_between_borders(rendered: str) -> int:
+    """Return the longest line length inside the outer panel borders."""
+    lines = rendered.splitlines()
+    max_len = 0
+    inside = False
+    for line in lines:
+        if "╭" in line and "Dependency Graph" in line:
+            inside = True
+            continue
+        if inside and line.strip().startswith("╰"):
+            break
+        if inside:
+            # Strip border characters at the edges for the content width.
+            stripped = line.strip("│ ╎")
+            max_len = max(max_len, len(stripped))
+    return max_len
+
+
 class WorkflowScriptTests(unittest.TestCase):
     """Verify workflow state, worker mocking, and snapshot rendering."""
 
@@ -3429,6 +3457,7 @@ class WorkflowScriptTests(unittest.TestCase):
         cases = [
             ("overview", "snapshot-overview.txt", "0"),
             ("runs", "snapshot-runs.txt", "0"),
+            ("graph", "snapshot-graph.txt", "0"),
             ("phases", "snapshot-phases.txt", "1"),
             ("agents", "snapshot-agents.txt", "1"),
             ("events", "snapshot-events.txt", "0"),
@@ -3454,6 +3483,70 @@ class WorkflowScriptTests(unittest.TestCase):
                 ).stdout
                 expected = (SNAPSHOTS / snapshot_name).read_text(encoding="utf-8")
                 self.assertEqual(rendered, expected)
+
+    def test_graph_tab_shows_fallback_when_phart_missing(self) -> None:
+        """Graph tab renders gracefully when phart is not installed."""
+        rendered = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "graph",
+            "--width",
+            "110",
+            "--height",
+            "30",
+            "--row-index",
+            "0",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("Dependency Graph", rendered)
+        self.assertIn("Install phart for graph view", rendered)
+
+    @unittest.skipUnless(_phart_available(), "phart not installed")
+    def test_graph_tab_width_respects_panel_and_does_not_fold(self) -> None:
+        """Graph output must fit within the detail panel and not wrap mid-line."""
+        env = self.snapshot_env()
+        non_focus = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "graph",
+            "--width",
+            "120",
+            "--height",
+            "30",
+            "--row-index",
+            "0",
+            env=env,
+        ).stdout
+        focus = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "graph",
+            "--width",
+            "120",
+            "--height",
+            "30",
+            "--row-index",
+            "0",
+            "--focus",
+            env=env,
+        ).stdout
+        # Focus mode allocates the full width to the detail panel, so the graph
+        # should be at least as wide as the non-focus detail panel.
+        detail_panel_width_non_focus = _max_line_length_between_borders(non_focus)
+        detail_panel_width_focus = _max_line_length_between_borders(focus)
+        self.assertGreaterEqual(detail_panel_width_focus, detail_panel_width_non_focus)
+        # No line should contain a broken ANSI escape sequence from folding.
+        self.assertNotIn("\x1b[0m\n", focus)
+        self.assertNotIn("\x1b[38;5;", focus.split("\n")[0] or "")
 
     @slow_test
     def test_snapshot_filter_and_focus_modes(self) -> None:

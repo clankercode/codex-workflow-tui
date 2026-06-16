@@ -1,0 +1,30 @@
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
+╭──────── Agents: Review ────────╮╭─ overview  runs  ● graph  phases  agents  events  decisions  artifacts ──╮
+│    Workflow                    ││ ╭────────────────────────── Dependency Graph ──────────────────────────╮ │
+│ ▸  Fixture Workflow With       ││ │ Install phart for graph view: pip install phart                      │ │
+│    Parallel Review             ││ │                                                                      │ │
+│      > RUN > 6m 00s > Security ││ │                                                                      │ │
+│    reviewer                    ││ │                                                                      │ │
+│    Completed Smoke Fixture     ││ │                                                                      │ │
+│      > DONE > 30m 00s          ││ │                                                                      │ │
+│    Failed Worker Fixture       ││ │                                                                      │ │
+│      > FAIL > 30m 00s          ││ │                                                                      │ │
+│    Blocked Decision Fixture    ││ │                                                                      │ │
+│      > BLCK > 3h 06m           ││ │                                                                      │ │
+│    Paused Operator Fixture     ││ │                                                                      │ │
+│      > PAUS > 4h 06m           ││ │                                                                      │ │
+│    Cancelled Scope Fixture     ││ │                                                                      │ │
+│      > CNCL > 30m 00s          ││ │                                                                      │ │
+│    Pending Dispatch Fixture    ││ │                                                                      │ │
+│      > PEND > 6h 06m           ││ │                                                                      │ │
+│                                ││ │                                                                      │ │
+│                                ││ │                                                                      │ │
+│                                ││ │                                                                      │ │
+│                                ││ │                                                                      │ │
+│                                ││ │                                                                      │ │
+│                                ││ │                                                                      │ │
+│                                ││ │                                                                      │ │
+│                                ││ │                                                                      │ │
+│                                ││ ╰──────────────────────────────────────────────────────────────────────╯ │
+╰────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────╯
+path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json

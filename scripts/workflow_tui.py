@@ -297,6 +297,7 @@ def make_detail_body(
     selected: int,
     *,
     detail_height: int | None = None,
+    detail_width: int | None = None,
     agent_view: str = "live",
     agent_scope: str = "phase",
     filter_text: str = "",
@@ -314,7 +315,7 @@ def make_detail_body(
     if tab == "graph":
         if not rows:
             return Text("No run selected.", style="dim")
-        return make_run_graph_panel(rows[clamp_index(selected, len(rows))])
+        return make_run_graph_panel(rows[clamp_index(selected, len(rows))], detail_width=detail_width)
     if not run:
         return Text("No run selected.", style="dim")
     if not rows:
@@ -384,7 +385,11 @@ def render_dashboard(
     selected_run_index = clamp_index(run_index, len(runs))
     base_run = runs[selected_run_index] if runs else None
     pane_height = height - 2 if chrome else height
-    left_width = max(40, min(46, (width * 2) // 5))
+    if tab == "graph":
+        # Give the graph tab a narrower sidebar so the DAG has more room.
+        left_width = max(28, min(34, width // 3))
+    else:
+        left_width = max(40, min(46, (width * 2) // 5))
     right_width = max(20, width - left_width)
     visible = max(1, pane_height - 5)
     rows = apply_row_filter(rows_for_tab(base_run, tab, runs, selected_phase_id=selected_phase_id, agent_scope=agent_scope), filter_text)
@@ -400,6 +405,7 @@ def render_dashboard(
         rows,
         selected_row_index,
         detail_height=pane_height,
+        detail_width=width if focus else right_width,
         agent_view=agent_view,
         agent_scope=agent_scope,
         filter_text=filter_text,

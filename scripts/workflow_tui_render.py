@@ -924,7 +924,7 @@ def build_run_graph(run: dict[str, Any]) -> Any | None:
     return G if len(G) > 1 else None
 
 
-def make_run_graph_panel(run: dict[str, Any]) -> Any:
+def make_run_graph_panel(run: dict[str, Any], detail_width: int | None = None) -> Any:
     """Render a dependency graph for a workflow run using phart."""
     if not HAS_PHART:
         return Panel(
@@ -941,6 +941,11 @@ def make_run_graph_panel(run: dict[str, Any]) -> Any:
             border_style="yellow",
             box=box.ROUNDED,
         )
+    # Account for panel borders/padding (≈4 chars). Clamp to a sane range.
+    if detail_width is None:
+        target_width = 76
+    else:
+        target_width = max(40, min(120, detail_width - 4))
     opts = LayoutOptions(
         use_labels=True,
         node_label_attr="label",
@@ -950,12 +955,12 @@ def make_run_graph_panel(run: dict[str, Any]) -> Any:
         layer_spacing=2,
         use_ascii=False,
         ansi_colors=True,
-        target_canvas_width=76,
+        target_canvas_width=target_width,
     )
     renderer = ASCIIRenderer(G, options=opts)
     graph_text = renderer.render()
     return Panel(
-        Text(graph_text, overflow="fold"),
+        Text.from_ansi(graph_text, overflow="crop", no_wrap=True),
         title="Dependency Graph",
         border_style="cyan",
         box=box.ROUNDED,
