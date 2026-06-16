@@ -864,29 +864,48 @@ STATUS_ICONS = {
     "paused": "‖",
 }
 
+# Animated running icons cycle through these on each refresh
+_RUNNING_CYCLE = ["◐", "◓", "◑", "◒"]
+
+# ANSI color names for phart node_color attribute
+STATUS_COLORS = {
+    "completed": "green",
+    "running": "cyan",
+    "pending": "yellow",
+    "failed": "red",
+    "cancelled": "bright_black",
+    "blocked": "magenta",
+    "paused": "yellow",
+}
+
 
 def build_run_graph(run: dict[str, Any]) -> Any | None:
     """Build a NetworkX DiGraph from workflow run state."""
     if not HAS_PHART:
         return None
+    import time as _time
     G = nx.DiGraph()
     agents = run.get("agents", [])
     phases = run.get("phases", [])
     if not agents:
         return None
+    # Animated running icon cycles based on current time
+    cycle_index = int(_time.time()) % len(_RUNNING_CYCLE)
     # Add start node
-    G.add_node("▶", label=str(run.get("title", "workflow")[:30]))
-    # Build agent nodes with labels
+    title = str(run.get("title", "workflow")[:20])
+    G.add_node("▶", label=title, color="white")
+    # Build agent nodes with compact labels and colors
     for agent in agents:
         name = str(agent.get("name", ""))
         status = str(agent.get("status", ""))
-        icon = STATUS_ICONS.get(status, "?")
-        runner = str(agent.get("agent_type", ""))
-        label_parts = [name, icon]
-        if runner:
-            label_parts.insert(1, f"({runner})")
-        label = " ".join(label_parts)
-        G.add_node(name, label=label[:40])
+        if status == "running":
+            icon = _RUNNING_CYCLE[cycle_index]
+        else:
+            icon = STATUS_ICONS.get(status, "?")
+        # Short label: just name + icon, no runner type
+        label = f"{name} {icon}"
+        color = STATUS_COLORS.get(status, "white")
+        G.add_node(name, label=label[:24], color=color)
     # Connect start to agents with no dependencies
     for agent in agents:
         depends_on = str(agent.get("depends_on", "")).strip()
@@ -926,10 +945,12 @@ def make_run_graph_panel(run: dict[str, Any]) -> Any:
         use_labels=True,
         node_label_attr="label",
         bboxes=True,
-        hpad=2,
+        hpad=1,
         vpad=0,
-        layer_spacing=3,
+        layer_spacing=2,
         use_ascii=False,
+        ansi_colors=True,
+        target_canvas_width=76,
     )
     renderer = ASCIIRenderer(G, options=opts)
     graph_text = renderer.render()
