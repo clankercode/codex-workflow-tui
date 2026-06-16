@@ -941,18 +941,18 @@ def make_run_graph_panel(run: dict[str, Any], detail_width: int | None = None) -
             border_style="yellow",
             box=box.ROUNDED,
         )
-    # Account for panel borders/padding (≈4 chars). Clamp to a sane range.
+    # Account for panel borders/padding (≈8 chars). Clamp to a sane range.
     if detail_width is None:
         target_width = 76
     else:
-        target_width = max(40, min(120, detail_width - 4))
+        target_width = max(40, min(120, detail_width - 8))
     opts = LayoutOptions(
         use_labels=True,
         node_label_attr="label",
         bboxes=True,
-        hpad=1,
-        vpad=0,
-        layer_spacing=2,
+        hpad=2,
+        vpad=1,
+        layer_spacing=3,
         use_ascii=False,
         ansi_colors=True,
         target_canvas_width=target_width,

@@ -1,18 +1,18 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 ╭──────── Agents: Review ────────╮╭─ overview  runs  ● graph  phases  agents  events  decisions  artifacts ──╮
 │    Workflow                    ││ ╭────────────────────────── Dependency Graph ──────────────────────────╮ │
-│ ▸  Fixture Workflow With       ││ │ Install phart for graph view: pip install phart                      │ │
-│    Parallel Review             ││ │                                                                      │ │
-│      > RUN > 6m 00s > Security ││ │                                                                      │ │
-│    reviewer                    ││ │                                                                      │ │
-│    Completed Smoke Fixture     ││ │                                                                      │ │
-│      > DONE > 30m 00s          ││ │                                                                      │ │
-│    Failed Worker Fixture       ││ │                                                                      │ │
-│      > FAIL > 30m 00s          ││ │                                                                      │ │
-│    Blocked Decision Fixture    ││ │                                                                      │ │
-│      > BLCK > 3h 06m           ││ │                                                                      │ │
-│    Paused Operator Fixture     ││ │                                                                      │ │
-│      > PAUS > 4h 06m           ││ │                                                                      │ │
+│ ▸  Fixture Workflow With       ││ │                              ┌────────────────────────┐              │ │
+│    Parallel Review             ││ │                              │                        │              │ │
+│      > RUN > 6m 00s > Security ││ │                              │  Fixture Workflow Wit  │              │ │
+│    reviewer                    ││ │                              │                        │              │ │
+│    Completed Smoke Fixture     ││ │                              └────────────────────────┘              │ │
+│      > DONE > 30m 00s          ││ │             ┌────────────────────────────┬┴───────────────────────── │ │
+│    Failed Worker Fixture       ││ │             v                            v                           │ │
+│      > FAIL > 30m 00s          ││ │ ┌───────────────────────┐    ┌──────────────────────┐    ┌────────── │ │
+│    Blocked Decision Fixture    ││ │ │                       │    │                      │    │           │ │
+│      > BLCK > 3h 06m           ││ │ │  Security reviewer ◒  │    │  Synthesis writer ○  │    │  Test cov │ │
+│    Paused Operator Fixture     ││ │ │                       │    │                      │    │           │ │
+│      > PAUS > 4h 06m           ││ │ └───────────────────────┘    └──────────────────────┘    └────────── │ │
 │    Cancelled Scope Fixture     ││ │                                                                      │ │
 │      > CNCL > 30m 00s          ││ │                                                                      │ │
 │    Pending Dispatch Fixture    ││ │                                                                      │ │
