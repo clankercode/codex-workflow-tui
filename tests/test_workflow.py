@@ -8720,6 +8720,147 @@ n        This documents a known gap: merge_token_max does not handle ccc's
             on_mouse_scroll_up(stub, object())
         self.assertEqual(stub.detail_scroll_offset, 0)
 
+    # ------------------------------------------------------------------
+    # #19: Live throughput stats and smoothed counters
+    # ------------------------------------------------------------------
+
+    def test_compute_tokens_per_second_basic(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        rate = activity.compute_tokens_per_second(1000, "2026-06-11T00:00:00Z", 1781136060.0)
+        self.assertIsNotNone(rate)
+        self.assertGreater(rate, 0)
+
+    def test_compute_tokens_per_second_zero_tokens(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        rate = activity.compute_tokens_per_second(0, "2026-06-11T00:00:00Z", 1781136060.0)
+        self.assertIsNone(rate)
+
+    def test_compute_tokens_per_second_no_start(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        rate = activity.compute_tokens_per_second(1000, None, 1781136060.0)
+        self.assertIsNone(rate)
+
+    def test_smooth_counter_display_live(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        result = activity.smooth_counter_display(1000, 10.0, True, 1781136065.0, 1781136060.0)
+        self.assertEqual(result, 1050)
+
+    def test_smooth_counter_display_completed(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        result = activity.smooth_counter_display(1000, 10.0, False, 1781136065.0, 1781136060.0)
+        self.assertEqual(result, 1000)
+
+    def test_smooth_counter_display_no_rate(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        result = activity.smooth_counter_display(1000, None, True, 1781136065.0, 1781136060.0)
+        self.assertEqual(result, 1000)
+
+    def test_format_token_total_with_throughput_live(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        tokens = {"known": True, "total": 1000, "total_source": "reported_total"}
+        result = activity.format_token_total_with_throughput(
+            tokens, started_at="2026-06-11T00:00:00Z", is_live=True, now_epoch=1781136060.0
+        )
+        self.assertIn("/s)", result)
+        self.assertIn("1000", result)
+
+    def test_format_token_total_with_throughput_completed(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        tokens = {"known": True, "total": 1000, "total_source": "reported_total"}
+        result = activity.format_token_total_with_throughput(
+            tokens, started_at="2026-06-11T00:00:00Z", is_live=False, now_epoch=1781136060.0
+        )
+        self.assertEqual(result, "1000")
+        self.assertNotIn("/s)", result)
+
+    def test_format_token_total_with_throughput_unknown(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        tokens = {"known": False}
+        result = activity.format_token_total_with_throughput(tokens, is_live=True)
+        self.assertEqual(result, "unknown")
+
+    def test_format_token_total_with_throughput_smooths_odometer_over_time(self) -> None:
+        """Odometer should advance at the estimated rate for live runs and freeze on completion."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        tokens = {"known": True, "total": 1000, "total_source": "reported_total"}
+        started = "2026-06-11T00:00:00Z"
+        early = activity.format_token_total_with_throughput(
+            tokens, started_at=started, is_live=True, now_epoch=1781136060.0
+        )
+        later = activity.format_token_total_with_throughput(
+            tokens, started_at=started, is_live=True, now_epoch=1781136070.0
+        )
+        self.assertIn("/s)", early)
+        self.assertIn("/s)", later)
+        self.assertIn("1000", early)
+        self.assertIn("1000", later)
+        early_rate = float(early.split("(")[1].split("/")[0])
+        later_rate = float(later.split("(")[1].split("/")[0])
+        self.assertGreater(early_rate, later_rate, "rate should decline as elapsed time grows")
+        completed = activity.format_token_total_with_throughput(
+            tokens, started_at=started, is_live=False, now_epoch=1781136070.0
+        )
+        self.assertEqual(completed, "1000", "completed runs must show the exact recorded value")
+        self.assertNotIn("/s)", completed, "completed runs must not display a live rate")
+
+    def test_smooth_counter_display_does_not_apply_to_times(self) -> None:
+        """Smoothing helper is for monotonic counters only; duration formatting must remain unchanged."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        self.assertEqual(activity.smooth_counter_display(120, 0.5, False, 0.0, 0.0), 120)
+        self.assertEqual(activity.format_duration_seconds(0), "<1 us")
+        self.assertEqual(activity.format_duration_seconds(1.5), "1.5 s")
+        self.assertEqual(activity.format_duration_seconds(65), "1m 05s")
+        self.assertEqual(activity.format_duration_seconds(3661), "1h 01m")
+
+    def test_live_stats_token_display_includes_throughput_when_live(self) -> None:
+        """End-to-end: a live run detail with known tokens should display both total and rate."""
+        rendered = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "runs",
+            "--width",
+            "110",
+            "--height",
+            "40",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn("Live Stats", rendered)
+
+    def test_throughput_rate_is_not_smoothed_below_one_second(self) -> None:
+        """Tokens per second should remain hidden until the run has been live for at least a second."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_activity as activity  # pylint: disable=import-outside-toplevel
+
+        rate = activity.compute_tokens_per_second(1000, "2026-06-11T00:00:00Z", 1781136000.5)
+        self.assertIsNone(rate, "rate must stay hidden for sub-second elapsed time")
+        rate = activity.compute_tokens_per_second(1000, "2026-06-11T00:00:00Z", 1781136002.0)
+        self.assertIsNotNone(rate, "rate should appear once elapsed time crosses one second")
+
 
 class StateTruthfulnessTests(unittest.TestCase):
     """Focused tests for P1 state truthfulness improvements."""

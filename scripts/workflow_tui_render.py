@@ -23,6 +23,7 @@ from workflow_tui_activity import (
     display_path_value,
     format_duration_seconds,
     format_token_total,
+    format_token_total_with_throughput,
     is_duration_seconds_key,
     parse_duration_seconds,
     longest_agent_label,
@@ -552,6 +553,7 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
     live = collect_run_activity(run)
     metrics = run.get("metrics", {})
     control = run.get("control") or {}
+    run_is_live = str(run.get("status", "")) not in workflow_state.TERMINAL_STATUS_VALUES
     facts = make_facts_table(
         [
             ("id", run.get("run_id", "")),
@@ -571,8 +573,13 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
         border_style="blue",
         box=box.ROUNDED,
     )
+    token_display = format_token_total_with_throughput(
+        live.get("tokens", {}),
+        started_at=run.get("started_at") or run.get("created_at"),
+        is_live=run_is_live,
+    )
     live_rows = [
-        ("tokens", format_token_total(live.get("tokens", {}))),
+        ("tokens", token_display),
         ("tail tools", live.get("tool_call_count", 0)),
         ("active", len([agent for agent in run.get("agents", []) if agent.get("status") == "running"])),
         ("longest", longest_agent_label(live)),
@@ -655,8 +662,14 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
     native_id = agent.get("native_id")
     process_label = "pgid" if process_group_id else "pid"
     process_display = str(process_group_id or process_id or "") if process_id or process_group_id else ""
+    is_live = str(agent.get("status", "")) not in workflow_state.TERMINAL_STATUS_VALUES
+    token_display = format_token_total_with_throughput(
+        activity.get("tokens", {}),
+        started_at=agent.get("started_at"),
+        is_live=is_live,
+    )
     stats_rows: list[tuple[str, Any]] = [
-        ("tokens", format_token_total(activity.get("tokens", {}))),
+        ("tokens", token_display),
         ("tail tools", activity.get("tool_call_count", 0)),
         ("parse errs", activity.get("parse_errors", 0)),
         (duration_label, duration_text),
