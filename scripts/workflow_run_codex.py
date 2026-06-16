@@ -696,11 +696,23 @@ def _ensure_worktree_lane(run_id: str, agent: dict[str, Any], cwd: str) -> str:
     if result.returncode != 0:
         stderr = result.stderr.strip() or result.stdout.strip()
         if "already exists" in stderr:
-            # Branch exists from a prior run; try checking it out instead
-            command = ["git", "-C", git_cwd, "worktree", "add", str(path), branch]
-            result = subprocess.run(command, text=True, capture_output=True, check=False)
-            if result.returncode != 0:
-                raise SystemExit(f"failed to attach worktree lane {branch}: {result.stderr.strip() or result.stdout.strip()}")
+            # Branch exists. Try checking it out.
+            checkout_cmd = ["git", "-C", git_cwd, "worktree", "add", str(path), branch]
+            checkout_result = subprocess.run(checkout_cmd, text=True, capture_output=True, check=False)
+            if checkout_result.returncode != 0:
+                co_err = checkout_result.stderr.strip() or checkout_result.stdout.strip()
+                if "is already used by worktree" in co_err:
+                    # Branch is checked out elsewhere (shared branch). Reuse it.
+                    list_result = subprocess.run(["git", "-C", git_cwd, "worktree", "list", "--porcelain"], text=True, capture_output=True, check=False)
+                    for line in list_result.stdout.splitlines():
+                        if line.startswith("worktree "):
+                            wt_path = line.split(" ", 1)[1]
+                            branch_result = subprocess.run(["git", "-C", wt_path, "branch", "--show-current"], text=True, capture_output=True, check=False)
+                            if branch_result.stdout.strip() == branch:
+                                update_agent(run_id, agent["agent_id"], cwd=wt_path)
+                                return wt_path
+                    raise SystemExit(f"failed to find existing worktree for branch {branch}")
+                raise SystemExit(f"failed to attach worktree lane {branch}: {co_err}")
         else:
             raise SystemExit(f"failed to create worktree lane {branch}: {stderr}")
     # Persist cwd and record event
@@ -746,6 +758,9 @@ async def run_worker(
         try:
             if not await wait_until_launch_allowed(run_id, agent["agent_id"]):
                 return
+            # Create worktree lazily if needed (after dry-run check, before mock)
+            if not job_args.dry_run:
+                agent["cwd"] = _ensure_worktree_lane(run_id, agent, agent.get("cwd", args.cwd))
             if job_args.mock:
                 await startup_limiter.mark_virtual_start()
                 started_epoch = time.time()
@@ -784,9 +799,6 @@ async def run_worker(
                     **timing_fields(started_epoch),
                 )
                 return
-
-            # Create worktree lazily if needed (dependent jobs branch from dependency)
-            agent["cwd"] = _ensure_worktree_lane(run_id, agent, agent.get("cwd", args.cwd))
 
             jsonl_path = Path(agent["jsonl_path"])
             stderr_path = Path(agent["log_path"])

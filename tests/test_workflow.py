@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+from typing import Any
 from unittest import mock
 import argparse
 import contextlib
@@ -82,6 +84,24 @@ class WorkflowScriptTests(unittest.TestCase):
         self.git(source, "push", "-u", "origin", "main")
         subprocess.run(["git", "clone", str(origin), str(skill)], check=True, text=True, capture_output=True)
         return source, skill, first_head
+
+    def parse_apply_summary(self, result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+        """Extract the JSON summary from workflow apply stdout robustly."""
+        # Try parsing the full stdout first (handles pretty-printed JSON)
+        text = result.stdout.strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        # Try parsing up to the first non-JSON line
+        for i, line in enumerate(text.splitlines()):
+            if line.strip().startswith(("command:", "dry run:", "error:")):
+                chunk = "\n".join(text.splitlines()[:i])
+                try:
+                    return json.loads(chunk)
+                except json.JSONDecodeError:
+                    pass
+        self.fail(f"no JSON summary in apply stdout: {result.stdout[:300]}")
 
     def snapshot_env(self) -> dict[str, str]:
         """Return a deterministic local timezone and clock for TUI snapshots."""
@@ -6001,6 +6021,211 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(codex_args[codex_args.index("--cd") + 1], str(lane_path))
             self.assertTrue(any(event.get("kind") == "worktree" and event.get("operation") == "created" for event in run["events"]))
 
+    def test_worktree_lane_shared_branch_across_phase_does_not_fail(self) -> None:
+        """Three jobs in one phase sharing the same worktree branch must not crash."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            self.write_commit(repo, "base")
+            plan_path = tmp_path / "shared.json"
+            plan_path.write_text(
+                json.dumps({
+                    "title": "Shared Branch Phase",
+                    "cwd": str(repo),
+                    "phases": [{
+                        "name": "implement",
+                        "jobs": [
+                            {"name": "impl", "prompt": "Implement.", "worktree": {"branch": "workflow/shared-feature"}},
+                            {"name": "review-1", "prompt": "Review 1.", "worktree": {"branch": "workflow/shared-feature"}},
+                            {"name": "review-2", "prompt": "Review 2.", "worktree": {"branch": "workflow/shared-feature"}},
+                        ],
+                    }],
+                }),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf("apply", str(plan_path), "--mock", "--startup-delay", "0", "--max-agents", "3", env=env)
+            summary = self.parse_apply_summary(result)
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(run["status"], "completed")
+            agents_by_name = {a["name"]: a for a in run["agents"]}
+            self.assertEqual(len(agents_by_name), 3)
+            for name in ("impl", "review-1", "review-2"):
+                self.assertEqual(agents_by_name[name]["worktree"]["branch"], "workflow/shared-feature")
+                self.assertEqual(agents_by_name[name]["status"], "completed")
+            paths = {agents_by_name[n]["cwd"] for n in ("impl", "review-1", "review-2")}
+            # Shared branch means shared worktree path
+            self.assertEqual(len(paths), 1, "jobs sharing a branch should share one worktree path")
+            for name in ("impl", "review-1", "review-2"):
+                self.assertTrue(Path(agents_by_name[name]["cwd"]).exists())
+
+    def test_worktree_lane_dependent_reviewer_branches_from_impl(self) -> None:
+        """A reviewer with depends_on branches from the impl worktree's branch."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            self.write_commit(repo, "base")
+            plan_path = tmp_path / "dep.json"
+            plan_path.write_text(
+                json.dumps({
+                    "title": "Dependent Lane",
+                    "cwd": str(repo),
+                    "phases": [
+                        {"name": "implement", "jobs": [{"name": "impl", "prompt": "Implement.", "worktree": {"branch": "workflow/dep-impl"}}]},
+                        {"name": "review", "jobs": [{"name": "reviewer", "prompt": "Review.", "depends_on": "impl", "worktree": {"branch": "workflow/dep-review"}}]},
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf("apply", str(plan_path), "--mock", "--startup-delay", "0", env=env)
+            summary = self.parse_apply_summary(result)
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(run["status"], "completed")
+            impl_agent = next(a for a in run["agents"] if a["name"] == "impl")
+            review_agent = next(a for a in run["agents"] if a["name"] == "reviewer")
+            self.assertEqual(impl_agent["worktree"]["branch"], "workflow/dep-impl")
+            self.assertEqual(review_agent["worktree"]["branch"], "workflow/dep-review")
+            self.assertTrue(Path(impl_agent["cwd"]).exists())
+            self.assertTrue(Path(review_agent["cwd"]).exists())
+
+    def test_worktree_lane_chain_dependencies_each_branches_from_previous(self) -> None:
+        """impl -> review-a -> review-b: each worktree branches from the previous."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            self.write_commit(repo, "base")
+            plan_path = tmp_path / "chain.json"
+            plan_path.write_text(
+                json.dumps({
+                    "title": "Chain Deps",
+                    "cwd": str(repo),
+                    "phases": [
+                        {"name": "impl-phase", "jobs": [{"name": "impl", "prompt": "Implement.", "worktree": {"branch": "workflow/chain-impl"}}]},
+                        {"name": "review-a-phase", "jobs": [{"name": "review-a", "prompt": "Review A.", "depends_on": "impl", "worktree": {"branch": "workflow/chain-review-a"}}]},
+                        {"name": "review-b-phase", "jobs": [{"name": "review-b", "prompt": "Review B.", "depends_on": "review-a", "worktree": {"branch": "workflow/chain-review-b"}}]},
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf("apply", str(plan_path), "--mock", "--startup-delay", "0", env=env)
+            summary = self.parse_apply_summary(result)
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(run["status"], "completed")
+            agents = {a["name"]: a for a in run["agents"]}
+            self.assertIn("impl", agents["review-a"]["depends_on"])
+            self.assertIn("review-a", agents["review-b"]["depends_on"])
+            for name in ("impl", "review-a", "review-b"):
+                self.assertTrue(Path(agents[name]["cwd"]).exists(), f"{name} worktree missing")
+
+    def test_worktree_lane_parallel_independent_tasks_run_concurrently(self) -> None:
+        """Two jobs with separate branches and no dependency run concurrently."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            self.write_commit(repo, "base")
+            plan_path = tmp_path / "parallel.json"
+            plan_path.write_text(
+                json.dumps({
+                    "title": "Parallel Independent",
+                    "cwd": str(repo),
+                    "jobs": [
+                        {"name": "task-a", "prompt": "Task A.", "worktree": {"branch": "workflow/parallel-a"}},
+                        {"name": "task-b", "prompt": "Task B.", "worktree": {"branch": "workflow/parallel-b"}},
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf("apply", str(plan_path), "--mock", "--startup-delay", "0", "--max-agents", "2", env=env)
+            summary = self.parse_apply_summary(result)
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(run["status"], "completed")
+            agents = {a["name"]: a for a in run["agents"]}
+            self.assertEqual(agents["task-a"]["status"], "completed")
+            self.assertEqual(agents["task-b"]["status"], "completed")
+            self.assertEqual(agents["task-a"]["worktree"]["branch"], "workflow/parallel-a")
+            self.assertEqual(agents["task-b"]["worktree"]["branch"], "workflow/parallel-b")
+            self.assertNotEqual(agents["task-a"]["cwd"], agents["task-b"]["cwd"])
+
+    def test_worktree_lane_existing_branch_recovery_checkout_instead_of_create(self) -> None:
+        """A pre-existing branch from a prior run should be checked out, not created."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            self.write_commit(repo, "base")
+            # Pre-create the branch
+            self.git(repo, "checkout", "-b", "workflow/recovery-lane")
+            (repo / "prior.txt").write_text("prior run\n", encoding="utf-8")
+            self.git(repo, "add", "prior.txt")
+            self.git(repo, "commit", "-m", "prior run change")
+            self.git(repo, "checkout", "main")
+            plan_path = tmp_path / "recovery.json"
+            plan_path.write_text(
+                json.dumps({
+                    "title": "Recovery Lane",
+                    "cwd": str(repo),
+                    "jobs": [{"name": "impl", "prompt": "Retry.", "worktree": {"branch": "workflow/recovery-lane"}}],
+                }),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf("apply", str(plan_path), "--mock", "--startup-delay", "0", env=env)
+            summary = self.parse_apply_summary(result)
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(run["status"], "completed")
+            agent = run["agents"][0]
+            self.assertEqual(agent["worktree"]["branch"], "workflow/recovery-lane")
+            lane_path = Path(agent["cwd"])
+            self.assertTrue(lane_path.exists())
+            # The prior run's commit should be visible
+            prior_file = lane_path / "prior.txt"
+            self.assertTrue(prior_file.exists())
+            self.assertEqual(prior_file.read_text(encoding="utf-8"), "prior run\n")
+
+    def test_worktree_lane_dry_run_plans_metadata_but_skips_creation(self) -> None:
+        """Dry run records worktree metadata but does not create directories."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, text=True, capture_output=True)
+            self.write_commit(repo, "base")
+            plan_path = tmp_path / "dry.json"
+            plan_path.write_text(
+                json.dumps({
+                    "title": "Dry Run Lanes",
+                    "cwd": str(repo),
+                    "jobs": [{"name": "impl", "prompt": "Implement.", "worktree": {"branch": "workflow/dry-run-lane"}}],
+                }),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            result = self.run_wf("apply", str(plan_path), "--dry-run", "--startup-delay", "0", env=env)
+            summary = self.parse_apply_summary(result)
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            agent = run["agents"][0]
+            self.assertEqual(agent["worktree"]["branch"], "workflow/dry-run-lane")
+            self.assertTrue(any(e.get("kind") == "worktree" and e.get("operation") == "planned" for e in run["events"]))
+            self.assertFalse(any(e.get("kind") == "worktree" and e.get("operation") == "created" for e in run["events"]))
+
     def test_merge_lanes_merges_completed_worktree_branch(self) -> None:
         """Merge completed worktree lane branches back into the workflow run cwd."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -7400,6 +7625,740 @@ class WorkflowScriptTests(unittest.TestCase):
             # check_id uniqueness invariant across all checks.
             check_ids = [c["check_id"] for c in run_after.get("checks", [])]
             self.assertEqual(len(check_ids), len(set(check_ids)))
+
+    # ------------------------------------------------------------------
+    # Tool-call parsing: comprehensive format coverage
+    # ------------------------------------------------------------------
+
+    def test_ccc_command_execution_text_transcript(self) -> None:
+        """Parse a realistic ccc/codex text transcript with command_execution markers."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                "[assistant] I'll read the plan first.",
+                "[tool:start] command_execution: /usr/bin/bash -lc \"sed -n '1,220p' CLAUDE.md\"",
+                "[tool:result] command_execution (ok): /usr/bin/bash -lc \"sed -n '1,220p' CLAUDE.md\"",
+                "[tool:result] # Topic tree orientation ...",
+                "[tool:start] command_execution: /usr/bin/bash -lc 'wc -l server/src/ws.rs'",
+                "[tool:result] command_execution (ok): /usr/bin/bash -lc 'wc -l server/src/ws.rs'",
+                "[tool:result] 2817 server/src/ws.rs",
+                "[assistant] Now I'll implement the refactor.",
+            ]
+        )
+
+        activity = workflow_tui.parse_text_activity(text)
+        self.assertEqual(activity["tool_call_count"], 2)
+        joined = "\n".join(activity["tool_calls"])
+        self.assertIn("command_execution", joined)
+        self.assertIn("Now I'll implement", activity["latest_output"])
+        self.assertEqual(activity["parse_errors"], 0)
+
+    def test_ccc_multiline_result_groups_into_single_tool_call(self) -> None:
+        """Multi-line [tool:result] blocks count as one tool call per start/result group."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                "[tool:start] read: src/main.rs",
+                "[tool:result] read (ok): src/main.rs",
+                "[tool:result] fn main() {",
+                "[tool:result]     println!(\"hello\");",
+                "[tool:result] }",
+                "[tool:start] write: src/main.rs",
+                "[tool:result] write (ok): src/main.rs",
+                "[assistant] Updated main.rs",
+            ]
+        )
+
+        activity = workflow_tui.parse_text_activity(text)
+        self.assertEqual(activity["tool_call_count"], 2)
+        self.assertIn("read", activity["tool_calls"][0])
+        self.assertIn("write", activity["tool_calls"][1])
+
+    def test_kimi_transcript_with_mixed_thinking_and_tools(self) -> None:
+        """Kimi transcripts mix bullet-point thinking with • Used markers."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                "• We need to inspect the codebase first.",
+                "  Need be efficient. Let's start.",
+                "• Used SetTodoList",
+                "  • Inspect branch status ←",
+                "  • Run tests",
+                "• Used Shell (cd /home/xertrov/src/proj && git status --short)",
+                "• The repo is clean. Now let's build.",
+                "• Used Shell (cd /home/xertrov/src/proj && cargo build 2>&1)",
+                "• Build succeeded. Now run tests.",
+                "• Used Shell (cd /home/xertrov/src/proj && cargo test 2>&1)",
+            ]
+        )
+
+        activity = workflow_tui.parse_text_activity(text)
+        self.assertEqual(activity["tool_call_count"], 4)
+        joined = "\n".join(activity["tool_calls"])
+        self.assertIn("SetTodoList", joined)
+        self.assertIn("Shell", joined)
+        # Thinking/chat lines should NOT appear as tool calls
+        self.assertNotIn("inspect the codebase", joined)
+        self.assertNotIn("repo is clean", joined)
+
+    def test_kimi_readfile_and_grep_tool_calls(self) -> None:
+        """Kimi ReadFile and Grep tools produce tool-call entries."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                "• Used ReadFile (src/main.rs)",
+                "• Used Grep (pattern: 'fn main', path: src/)",
+                "• Used ReadFile (src/lib.rs)",
+            ]
+        )
+
+        activity = workflow_tui.parse_text_activity(text)
+        self.assertEqual(activity["tool_call_count"], 3)
+        self.assertIn("ReadFile", activity["tool_calls"][0])
+        self.assertIn("Grep", activity["tool_calls"][1])
+
+    def test_codex_jsonl_step_finish_extracts_token_usage(self) -> None:
+        """Codex step_finish events carry cumulative token usage."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                json.dumps({"type": "step_start", "timestamp": 1781580291000, "part": {"type": "step-start"}}),
+                json.dumps({
+                    "type": "tool_use",
+                    "timestamp": 1781580291500,
+                    "part": {
+                        "type": "tool",
+                        "tool": "read",
+                        "callID": "call_1",
+                        "state": {"status": "completed", "input": {"filePath": "src/main.rs"}, "title": "Read main.rs"},
+                    },
+                }),
+                json.dumps({
+                    "type": "step_finish",
+                    "timestamp": 1781580292000,
+                    "part": {
+                        "type": "step-finish",
+                        "tokens": {"total": 80585, "input": 27158, "output": 95, "reasoning": 20},
+                        "cost": 0,
+                    },
+                }),
+            ]
+        )
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertEqual(activity["tool_call_count"], 1)
+        self.assertIn("read", activity["tool_calls"][0])
+        self.assertEqual(activity["tokens"]["total"], 80585)
+        self.assertEqual(activity["tokens"]["input"], 27158)
+        self.assertEqual(activity["tokens"]["output"], 95)
+        self.assertEqual(activity["tokens"]["reasoning"], 20)
+        self.assertTrue(activity["tokens"]["known"])
+        self.assertEqual(activity["tokens"]["total_source"], "reported_total")
+
+    def test_codex_jsonl_cache_read_tokens_gap(self) -> None:
+        """Codex ccc step_finish tokens with cache.read are NOT captured as cached_input.
+
+n        This documents a known gap: merge_token_max does not handle ccc's
+        cache.read/cache.write nested format. If this test starts failing,
+        the gap has been fixed and the assertion should be updated.
+        """
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = json.dumps({
+            "type": "step_finish",
+            "timestamp": 1781580291731,
+            "part": {
+                "type": "step-finish",
+                "tokens": {
+                    "total": 80585,
+                    "input": 27158,
+                    "output": 95,
+                    "reasoning": 20,
+                    "cache": {"write": 0, "read": 53312},
+                },
+                "cost": 0,
+            },
+        })
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertTrue(activity["tokens"]["known"])
+        self.assertEqual(activity["tokens"]["total"], 80585)
+        # KNOWN GAP: cache.read 53312 is not captured as cached_input
+        self.assertEqual(activity["tokens"]["cached_input"], 0)
+
+    def test_codex_jsonl_multi_step_token_accumulation(self) -> None:
+        """Multiple step_finish events should accumulate with max semantics."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                json.dumps({
+                    "type": "step_finish",
+                    "timestamp": 1781580291000,
+                    "part": {"type": "step-finish", "tokens": {"total": 50000, "input": 20000, "output": 50}},
+                }),
+                json.dumps({
+                    "type": "step_finish",
+                    "timestamp": 1781580292000,
+                    "part": {"type": "step-finish", "tokens": {"total": 80585, "input": 27158, "output": 95, "reasoning": 20}},
+                }),
+            ]
+        )
+
+        activity = workflow_tui.parse_json_activity(text)
+        # Should use max values, not sum
+        self.assertEqual(activity["tokens"]["total"], 80585)
+        self.assertEqual(activity["tokens"]["input"], 27158)
+        self.assertEqual(activity["tokens"]["output"], 95)
+        self.assertEqual(activity["tokens"]["reasoning"], 20)
+
+    def test_opencode_tool_use_with_callid_and_state(self) -> None:
+        """OpenCode format uses part.callID and part.state for tool tracking."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                json.dumps({
+                    "type": "text",
+                    "timestamp": 1781158880831,
+                    "part": {"type": "text", "text": "Checking the file."},
+                }),
+                json.dumps({
+                    "type": "tool_use",
+                    "timestamp": 1781158882007,
+                    "part": {
+                        "type": "tool",
+                        "tool": "bash",
+                        "callID": "call_abc123",
+                        "state": {
+                            "status": "completed",
+                            "input": {"command": "python3 -c 'print(42)'"},
+                            "title": "Run Python",
+                        },
+                    },
+                }),
+            ]
+        )
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertEqual(activity["tool_call_count"], 1)
+        self.assertIn("bash", activity["tool_calls"][0])
+        self.assertIn("completed", activity["tool_calls"][0])
+        self.assertIn("Run Python", activity["tool_calls"][0])
+        self.assertIn("Checking the file", activity["latest_output"])
+
+    def test_opencode_step_finish_tokens_use_max_not_sum(self) -> None:
+        """OpenCode step_finish tokens are cumulative; merge should use max."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                json.dumps({"type": "step_finish", "part": {"type": "step-finish", "tokens": {"total": 500, "input": 400, "output": 100}}}),
+                json.dumps({"type": "step_finish", "part": {"type": "step-finish", "tokens": {"total": 1200, "input": 900, "output": 300}}}),
+            ]
+        )
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertEqual(activity["tokens"]["total"], 1200)
+        self.assertEqual(activity["tokens"]["input"], 900)
+        self.assertEqual(activity["tokens"]["output"], 300)
+
+    def test_json_activity_extracts_anthropic_token_format(self) -> None:
+        """Anthropic uses input_tokens/output_tokens with cache_creation_input_tokens."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = json.dumps({
+            "type": "message",
+            "usage": {
+                "input_tokens": 5000,
+                "output_tokens": 1500,
+                "cache_creation_input_tokens": 200,
+                "cache_read_input_tokens": 3000,
+            },
+        })
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertTrue(activity["tokens"]["known"])
+        self.assertEqual(activity["tokens"]["input"], 5000)
+        self.assertEqual(activity["tokens"]["output"], 1500)
+        self.assertEqual(activity["tokens"]["cached_input"], 3000)
+
+    def test_json_activity_extracts_openai_token_format(self) -> None:
+        """OpenAI uses prompt_tokens/completion_tokens with input_tokens_details."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = json.dumps({
+            "type": "response.completed",
+            "usage": {
+                "prompt_tokens": 4000,
+                "completion_tokens": 800,
+                "input_tokens_details": {"cached_tokens": 2500},
+                "output_tokens_details": {"reasoning_tokens": 200},
+            },
+        })
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertTrue(activity["tokens"]["known"])
+        self.assertEqual(activity["tokens"]["input"], 4000)
+        self.assertEqual(activity["tokens"]["output"], 800)
+        self.assertEqual(activity["tokens"]["cached_input"], 2500)
+        self.assertEqual(activity["tokens"]["reasoning"], 200)
+
+    def test_json_activity_extracts_gemini_token_format(self) -> None:
+        """Gemini uses total_tokens/prompt_tokens/completion_tokens."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = json.dumps({
+            "type": "generateContent",
+            "usage": {
+                "total_tokens": 6000,
+                "prompt_tokens": 5000,
+                "completion_tokens": 1000,
+            },
+        })
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertTrue(activity["tokens"]["known"])
+        self.assertEqual(activity["tokens"]["total"], 6000)
+        self.assertEqual(activity["tokens"]["input"], 5000)
+        self.assertEqual(activity["tokens"]["output"], 1000)
+        self.assertEqual(activity["tokens"]["total_source"], "reported_total")
+
+    def test_json_activity_extracts_tokens_from_part_level(self) -> None:
+        """Tokens nested inside part.tokens should be found."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = json.dumps({
+            "type": "step_finish",
+            "part": {
+                "type": "step-finish",
+                "tokens": {"total": 999, "input": 800, "output": 199},
+            },
+        })
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertEqual(activity["tokens"]["total"], 999)
+        self.assertEqual(activity["tokens"]["input"], 800)
+
+    def test_json_activity_extracts_tokens_from_item_level(self) -> None:
+        """Tokens nested inside item.usage should be found."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = json.dumps({
+            "type": "item.completed",
+            "item": {
+                "type": "turn",
+                "usage": {"total_tokens": 2000, "input_tokens": 1500, "output_tokens": 500},
+            },
+        })
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertEqual(activity["tokens"]["total"], 2000)
+        self.assertEqual(activity["tokens"]["input"], 1500)
+        self.assertEqual(activity["tokens"]["output"], 500)
+
+    def test_empty_text_transcript_returns_empty_activity(self) -> None:
+        """An empty text transcript should return empty activity gracefully."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activity = workflow_tui.parse_text_activity("")
+        self.assertEqual(activity["tool_call_count"], 0)
+        self.assertEqual(activity["tool_calls"], [])
+        self.assertEqual(activity["latest_output"], "")
+        self.assertFalse(activity["tokens"]["known"])
+
+    def test_empty_jsonl_transcript_returns_empty_activity(self) -> None:
+        """An empty JSONL transcript should return empty activity gracefully."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        activity = workflow_tui.parse_json_activity("")
+        self.assertEqual(activity["tool_call_count"], 0)
+        self.assertEqual(activity["tool_calls"], [])
+        self.assertEqual(activity["latest_output"], "")
+        self.assertEqual(activity["parse_errors"], 0)
+
+    def test_malformed_json_lines_counted_as_parse_errors(self) -> None:
+        """Lines that look like JSON but fail to parse should increment parse_errors."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                "{not valid json",
+                json.dumps({"type": "text", "part": {"text": "valid line"}}),
+                "{also bad json but starts with brace",
+            ]
+        )
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertEqual(activity["parse_errors"], 2)
+        self.assertIn("valid line", activity["latest_output"])
+
+    def test_mixed_json_and_non_json_lines_detected_as_json(self) -> None:
+        """When most lines are valid JSON objects, treat as JSONL."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                json.dumps({"type": "text", "part": {"text": "line one"}}),
+                json.dumps({"type": "text", "part": {"text": "line two"}}),
+                "some non-json output",
+            ]
+        )
+
+        self.assertTrue(workflow_tui.should_parse_json_activity(text, Path("mixed.jsonl")))
+
+    def test_jsonl_file_extension_prefers_json_parser_even_with_few_json_lines(self) -> None:
+        """A .jsonl extension should trigger JSON parsing even if few lines match."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                "lots of plain text here",
+                "more plain text",
+                json.dumps({"type": "text", "part": {"text": "one json line"}}),
+            ]
+        )
+
+        # Without .jsonl extension, would return False (1 json < 2 other)
+        self.assertFalse(workflow_tui.should_parse_json_activity(text, Path("output.txt")))
+        # With .jsonl extension, returns True (any json lines > 0)
+        self.assertTrue(workflow_tui.should_parse_json_activity(text, Path("transcript.jsonl")))
+
+    def test_tool_event_key_extracts_various_id_fields(self) -> None:
+        """tool_event_key should find IDs from different provider formats."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        # Codex format: part.callID
+        key1 = workflow_tui.tool_event_key({"type": "tool_use", "part": {"type": "tool", "callID": "call_abc"}}, 0)
+        self.assertEqual(key1, "call_abc")
+
+        # OpenCode format: part.id
+        key2 = workflow_tui.tool_event_key({"type": "tool_use", "part": {"type": "tool", "id": "tool_xyz"}}, 0)
+        self.assertEqual(key2, "tool_xyz")
+
+        # Item format: item.id
+        key3 = workflow_tui.tool_event_key({"item": {"id": "cmd_123", "type": "command_execution"}}, 0)
+        self.assertEqual(key3, "cmd_123")
+
+        # Fallback to index
+        key4 = workflow_tui.tool_event_key({"type": "tool_use"}, 42)
+        self.assertEqual(key4, "tool-42")
+
+        # Non-tool event returns None
+        key5 = workflow_tui.tool_event_key({"type": "text", "part": {"text": "hello"}}, 0)
+        self.assertIsNone(key5)
+
+    def test_summarize_tool_call_compacts_various_input_shapes(self) -> None:
+        """summarize_tool_call should produce readable labels from different shapes."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        # command_execution format
+        cmd_event = {
+            "item": {
+                "type": "command_execution",
+                "command": "python3 -c 'print(42)'",
+                "status": "completed",
+            }
+        }
+        cmd_summary = workflow_tui.summarize_tool_call(cmd_event)
+        self.assertIn("command_execution", cmd_summary)
+        self.assertIn("python3", cmd_summary)
+
+        # tool_use with arguments dict
+        arg_event = {
+            "type": "tool_use",
+            "part": {
+                "type": "tool",
+                "tool": "grep",
+                "state": {
+                    "status": "running",
+                    "input": {"pattern": "TODO", "path": "src/"},
+                },
+            },
+        }
+        arg_summary = workflow_tui.summarize_tool_call(arg_event)
+        self.assertIn("grep", arg_summary)
+        self.assertIn("running", arg_summary)
+
+    def test_json_activity_preserves_tool_call_order(self) -> None:
+        """Tool calls should appear in the order they were first seen."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                json.dumps({
+                    "type": "tool_use",
+                    "part": {"type": "tool", "tool": "read", "callID": "c1", "state": {"status": "completed", "input": {"path": "a.rs"}}},
+                }),
+                json.dumps({
+                    "type": "tool_use",
+                    "part": {"type": "tool", "tool": "bash", "callID": "c2", "state": {"status": "completed", "input": {"command": "ls"}}},
+                }),
+                json.dumps({
+                    "type": "tool_use",
+                    "part": {"type": "tool", "tool": "write", "callID": "c3", "state": {"status": "completed", "input": {"path": "b.rs"}}},
+                }),
+            ]
+        )
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertEqual(activity["tool_call_count"], 3)
+        self.assertIn("read", activity["tool_calls"][0])
+        self.assertIn("bash", activity["tool_calls"][1])
+        self.assertIn("write", activity["tool_calls"][2])
+
+    def test_json_activity_deduplicates_same_tool_call_id(self) -> None:
+        """Multiple events with the same callID should update, not duplicate."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                json.dumps({
+                    "type": "tool_use",
+                    "part": {"type": "tool", "tool": "bash", "callID": "call_1", "state": {"status": "running", "input": {"command": "sleep 5"}}},
+                }),
+                json.dumps({
+                    "type": "tool_use",
+                    "part": {"type": "tool", "tool": "bash", "callID": "call_1", "state": {"status": "completed", "input": {"command": "sleep 5"}}},
+                }),
+            ]
+        )
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertEqual(activity["tool_call_count"], 1)
+        self.assertIn("completed", activity["tool_calls"][0])
+
+    def test_should_parse_json_activity_rejects_pure_text(self) -> None:
+        """Pure text without JSON markers should not be parsed as JSONL."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                "[assistant] Starting work",
+                "[tool:start] bash: echo ok",
+                "[tool:result] ok",
+            ]
+        )
+
+        self.assertFalse(workflow_tui.should_parse_json_activity(text, Path("output.txt")))
+
+    def test_tool_call_count_limited_to_last_six_in_output(self) -> None:
+        """Only the last 6 tool calls appear in the activity output."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        lines = []
+        for i in range(10):
+            lines.append(json.dumps({
+                "type": "tool_use",
+                "part": {
+                    "type": "tool",
+                    "tool": f"tool_{i}",
+                    "callID": f"call_{i}",
+                    "state": {"status": "completed", "input": {}},
+                },
+            }))
+
+        activity = workflow_tui.parse_json_activity("\n".join(lines))
+        self.assertEqual(activity["tool_call_count"], 10)
+        self.assertEqual(len(activity["tool_calls"]), 6)
+        # Should be the last 6 (tool_4 through tool_9)
+        self.assertIn("tool_4", activity["tool_calls"][0])
+        self.assertIn("tool_9", activity["tool_calls"][5])
+
+    def test_json_activity_increments_last_activity_epoch(self) -> None:
+        """last_activity_epoch should be the max timestamp across all events."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                json.dumps({"type": "text", "timestamp": 1781580291000, "part": {"text": "first"}}),
+                json.dumps({"type": "text", "timestamp": 1781580295000, "part": {"text": "second"}}),
+                json.dumps({"type": "text", "timestamp": 1781580293000, "part": {"text": "third"}}),
+            ]
+        )
+
+        activity = workflow_tui.parse_json_activity(text)
+        # 1781580295000 ms = 1781580295.0 seconds
+        self.assertAlmostEqual(activity["last_activity_epoch"], 1781580295.0, places=0)
+
+    def test_token_totals_with_zero_values_are_still_known(self) -> None:
+        """Provider events with zero token counts should still be marked known."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = json.dumps({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        })
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertTrue(activity["tokens"]["known"])
+        self.assertEqual(activity["tokens"]["total"], 0)
+
+    def test_text_activity_only_returns_last_six_tool_calls(self) -> None:
+        """Text parser should also limit tool_calls to last 6."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        lines = []
+        for i in range(8):
+            lines.append(f"[tool:start] tool_{i}: cmd")
+            lines.append(f"[tool:result] tool_{i} (ok)")
+
+        activity = workflow_tui.parse_text_activity("\n".join(lines))
+        self.assertEqual(activity["tool_call_count"], 8)
+        self.assertEqual(len(activity["tool_calls"]), 6)
+
+    def test_json_event_epoch_handles_iso_timestamps(self) -> None:
+        """ISO 8601 timestamps should be converted to epoch seconds."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        epoch = workflow_tui.json_event_epoch({"created_at": "2026-06-16T03:25:12Z"})
+        self.assertGreater(epoch, 0)
+        self.assertAlmostEqual(epoch, 1781580312.0, delta=2.0)
+
+    def test_json_event_epoch_handles_millisecond_timestamps(self) -> None:
+        """Millisecond timestamps should be divided by 1000."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        epoch = workflow_tui.json_event_epoch({"timestamp": 1781580291731})
+        self.assertAlmostEqual(epoch, 1781580291.731, places=1)
+
+    def test_json_event_epoch_handles_nested_time_dicts(self) -> None:
+        """Time dicts with start/end in part.state should be found."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        event = {
+            "part": {
+                "state": {
+                    "time": {"start": 1781580291000, "end": 1781580295000},
+                }
+            }
+        }
+        epoch = workflow_tui.json_event_epoch(event)
+        self.assertAlmostEqual(epoch, 1781580295.0, places=0)
+
+    def test_should_parse_json_activity_with_tool_type_field(self) -> None:
+        """Events with type containing 'tool' should be detected as JSONL."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                json.dumps({"type": "tool_use", "part": {"type": "tool", "tool": "bash"}}),
+                json.dumps({"type": "text", "part": {"text": "hello"}}),
+            ]
+        )
+
+        self.assertTrue(workflow_tui.should_parse_json_activity(text))
+
+    def test_should_parse_json_activity_rejects_when_mostly_text(self) -> None:
+        """When most lines are non-JSON, should return False even with some JSON."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                "plain text line 1",
+                "plain text line 2",
+                "plain text line 3",
+                json.dumps({"type": "text", "part": {"text": "one json"}}),
+            ]
+        )
+
+        self.assertFalse(workflow_tui.should_parse_json_activity(text))
+
+    def test_ccc_text_transcript_with_no_assistant_lines_uses_tail(self) -> None:
+        """When no [assistant] lines exist, output falls back to last 24 lines."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = "\n".join(
+            [
+                "[tool:start] bash: echo hello",
+                "[tool:result] hello",
+                "some output line",
+                "another output line",
+            ]
+        )
+
+        activity = workflow_tui.parse_text_activity(text)
+        self.assertEqual(activity["tool_call_count"], 1)
+        # Should contain the tail lines as output
+        self.assertIn("some output line", activity["latest_output"])
+
+    def test_json_activity_with_item_type_command_execution(self) -> None:
+        """Codex CLI items of type command_execution should be detected as tools."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = json.dumps({
+            "type": "item.completed",
+            "item": {
+                "id": "cmd-1",
+                "type": "command_execution",
+                "command": "cargo test",
+                "status": "completed",
+            },
+        })
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertEqual(activity["tool_call_count"], 1)
+        self.assertIn("cargo test", activity["tool_calls"][0])
+
+    def test_json_activity_with_item_type_tool_call(self) -> None:
+        """Items with type tool_call should also be detected."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        text = json.dumps({
+            "type": "item.completed",
+            "item": {
+                "id": "tc-1",
+                "type": "tool_call",
+                "name": "read_file",
+                "arguments": {"path": "src/main.rs"},
+                "status": "completed",
+            },
+        })
+
+        activity = workflow_tui.parse_json_activity(text)
+        self.assertEqual(activity["tool_call_count"], 1)
+        self.assertIn("read_file", activity["tool_calls"][0])
 
 
 class StateTruthfulnessTests(unittest.TestCase):
