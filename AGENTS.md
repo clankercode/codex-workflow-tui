@@ -3,3 +3,4 @@
 - all features should be tested; keep tests fast
 - all new additions must be reviewed and go through a review-and-fix loop
 - skills that aren't in your library might be found in ~/.claude/skills/ or ~/.agents/skills/ or ~/.config/opencode/skills/ or ~/.codex/skills/
+- do not hide output with `tail` unless you really mean it. it hides progress. 

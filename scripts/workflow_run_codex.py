@@ -13,6 +13,7 @@ import os
 import re
 import signal
 import shlex
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
@@ -660,6 +661,59 @@ def _resolve_agent_provider(
     return job_args, build_provider(job_args)
 
 
+def _ensure_worktree_lane(run_id: str, agent: dict[str, Any], cwd: str) -> str:
+    """Create a worktree lane lazily at launch time if it doesn't exist yet.
+
+    For dependent jobs (reviewers), resolves the base from the dependency's
+    worktree branch so the reviewer automatically sees the impl commits.
+    Returns the effective cwd (worktree path if created, else original cwd).
+    """
+    lane = agent.get("worktree")
+    if not lane or not lane.get("enabled", True):
+        return cwd
+    path = Path(str(lane["path"]))
+    if path.exists():
+        return str(path)
+    # Resolve base: for dependent jobs, branch from the dependency's worktree
+    base = str(lane.get("base") or "HEAD").strip()
+    depends_on = agent.get("depends_on") or ""
+    if depends_on:
+        run = workflow_state.load_run(run_id)
+        for dep_name in depends_on.split(","):
+            dep_name = dep_name.strip()
+            if not dep_name:
+                continue
+            dep_agent = next((a for a in run.get("agents", []) if a.get("name") == dep_name), None)
+            if dep_agent and dep_agent.get("worktree", {}).get("branch"):
+                base = dep_agent["worktree"]["branch"]
+                break
+    # Use source_cwd for git commands (the worktree path doesn't exist yet)
+    git_cwd = lane.get("source_cwd") or cwd
+    path.parent.mkdir(parents=True, exist_ok=True)
+    branch = str(lane["branch"])
+    command = ["git", "-C", git_cwd, "worktree", "add", "-b", branch, str(path), base]
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip()
+        if "already exists" in stderr:
+            # Branch exists from a prior run; try checking it out instead
+            command = ["git", "-C", git_cwd, "worktree", "add", str(path), branch]
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            if result.returncode != 0:
+                raise SystemExit(f"failed to attach worktree lane {branch}: {result.stderr.strip() or result.stdout.strip()}")
+        else:
+            raise SystemExit(f"failed to create worktree lane {branch}: {stderr}")
+    # Persist cwd and record event
+    update_agent(run_id, agent["agent_id"], cwd=str(path))
+    workflow_state.mutate_run(run_id, lambda run: workflow_state.add_event(
+        run, "info", f"worktree lane created: {agent.get('name', '')}",
+        kind="worktree", operation="created", source="workflow_run_codex.worktree",
+        phase_id=agent.get("phase_id"),
+        data={"job": agent.get("name", ""), "path": str(path), "branch": branch, "base": base},
+    ))
+    return str(path)
+
+
 async def run_worker(
     run_id: str,
     agent: dict[str, Any],
@@ -730,6 +784,9 @@ async def run_worker(
                     **timing_fields(started_epoch),
                 )
                 return
+
+            # Create worktree lazily if needed (dependent jobs branch from dependency)
+            agent["cwd"] = _ensure_worktree_lane(run_id, agent, agent.get("cwd", args.cwd))
 
             jsonl_path = Path(agent["jsonl_path"])
             stderr_path = Path(agent["log_path"])

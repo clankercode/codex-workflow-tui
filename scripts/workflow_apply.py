@@ -159,7 +159,7 @@ def resolve_job_execution_fields(
 
 
 def prepare_worktree_lanes(run_id: str, jobs: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
-    """Resolve and optionally create per-job worktree lanes before workers launch."""
+    """Resolve per-job worktree lane metadata. Creation is deferred to launch time."""
     run = workflow_state.load_run(run_id)
     worktree_root = Path(run["paths"]["run_dir"]) / "worktrees"
     prepared: list[dict[str, Any]] = []
@@ -171,11 +171,7 @@ def prepare_worktree_lanes(run_id: str, jobs: list[dict[str, Any]], args: argpar
         updated = dict(job)
         updated["worktree"] = lane
         updated["cwd"] = lane["path"]
-        if not args.dry_run and lane.get("create", True):
-            create_worktree_lane(args.cwd, lane)
-            record_worktree_lane_event(run_id, updated, lane, operation="created")
-        else:
-            record_worktree_lane_event(run_id, updated, lane, operation="planned")
+        record_worktree_lane_event(run_id, updated, lane, operation="planned")
         prepared.append(updated)
     return prepared
 
