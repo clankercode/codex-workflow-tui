@@ -1,0 +1,57 @@
+{
+  "kind": "workflow-plan",
+  "title": "Bug fixes: auto-commit workers (#21), attach-run scoping (#13), tab bar offset (#19)",
+  "prompt": "Fix three concrete bugs in the workflow skill. All work must pass WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'.",
+  "cwd": "/home/xertrov/.llm-general/ai-coding/codex/skills/workflow",
+  "runner": "ccc",
+  "ccc_runner": "@mimo25p",
+  "max_agents": 2,
+  "phases": [
+    {
+      "phase_id": "phase-fixes",
+      "name": "Fixes",
+      "jobs": [
+        {
+          "name": "fix-runner-flow",
+          "prompt": "Fix TWO related bugs in the worker runner. Both live in scripts/workflow_run_codex.py. Do NOT launch ccc or other runners — edit the file directly.\n\nBUG #1: WORKERS DON'T COMMIT TO WORKTREE BRANCHES (#21)\nWhen a worker process exits successfully (exit_code 0) its changes are often left uncommitted in the worktree working tree, so merge-lanes finds empty branches (HEAD == base).\n\nFix: add a helper `_commit_worktree_changes(agent)` near `_ensure_worktree_lane` and call it from `run_worker()`. The helper MUST be a strict no-op unless the agent actually has a worktree lane: only act when `agent.get('worktree', {}).get('path')` is set AND that path exists on disk, and in that case operate on `agent['cwd']` (which equals the worktree path after `_ensure_worktree_lane` runs). NEVER run git in the run-level `args.cwd` for a non-worktree agent (an agent with no 'worktree' key must trigger no git call at all). Inside the helper: run `git -C <path> status --porcelain`; if empty, return (nothing to commit). Otherwise run `git -C <path> add -A` then `git -C <path> commit -m 'wip: <agent_name> implementation'` via subprocess. If the commit returns non-zero, skip silently — do NOT fail the worker. Log a success event via update_agent (e.g. append to summary).\n\nPlacement: call `_commit_worktree_changes(agent)` in `run_worker()`'s MAIN process path, ONLY when `exit_code == 0`, immediately after `status = 'completed' if exit_code == 0 else 'failed'` and before the final `update_agent(...)` that records status. Do NOT call it on the mock or dry-run early-return paths (they never reach this point and produce no worktree changes).\n\nBUG #2: --attach-run RE-LAUNCHES ALL JOBS (#13)\n`run_all()` seeds its queue with `for agent in run.get('agents', []): enqueue_agent(agent, 0)`, so on `--attach-run` it re-processes every pre-existing agent, including ones already launched.\n\nFix: when `args.attach_run` is set, skip any agent whose `started_at` is already set — only enqueue agents with `started_at is None`. This is correct because newly-added agents (created this session via `add_agent`) have status 'pending' and no `started_at`, while previously-launched agents (running/completed/failed/cancelled) had `started_at` recorded by `update_agent`. Concretely, at the top of that seed loop: `if getattr(args, 'attach_run', None) and agent.get('started_at'): continue`. (Edge case: an old never-launched pending agent also has started_at=None and will be re-enqueued — that is acceptable resume behavior.) Do not add a separate jobs-provided check; the started_at filter alone is the fix.\n\nAdd tests in a NEW file tests/test_workflow_runner.py with this sys.path bootstrap at the top BEFORE importing the module:\n    import sys, unittest\n    from pathlib import Path\n    ROOT = Path(__file__).resolve().parents[1]\n    SCRIPTS = ROOT / 'scripts'\n    sys.path.insert(0, str(SCRIPTS))\nTests (use temp git repos / mocks; NO real model calls):\n1. `_commit_worktree_changes` commits uncommitted changes when the agent has a worktree lane whose path is a real temp git repo (create a file under it first); assert HEAD advances and `git log` shows the commit.\n2. `_commit_worktree_changes` is a no-op when the worktree is clean (HEAD unchanged, no commit).\n3. `_commit_worktree_changes` is a no-op when the agent has NO worktree lane — assert no subprocess git call is made against any run-level cwd.\n4. attach-run scoping: monkeypatch `workflow_run_codex.run_worker` with a recorder that sets started_at on the agent it processes; build a run dict containing one completed agent (started_at set) plus one new pending agent (started_at None), set `args.attach_run`; run `asyncio.run(run_all(run, args, provider))`; assert ONLY the started_at-None agent was processed.\n\nRun `WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'` and fix until all pass.",
+          "write_scope": ["scripts/workflow_run_codex.py", "tests/test_workflow_runner.py"],
+          "worktree": {"branch": "workflow/p2/fix-runner-flow", "base": "HEAD", "merge_target": "main"}
+        },
+        {
+          "name": "fix-tab-bar",
+          "prompt": "Fix the graph tab bar offset (#19). Do NOT launch ccc or other runners — edit files directly.\n\nCURRENT STATE — read scripts/workflow_tui.py render_dashboard() first. The graph tab already uses a narrower sidebar (`left_width = max(28, min(34, width // 3))` for graph vs `max(40, min(46, (width*2)//5))` otherwise) and the code ALREADY computes `graph_title_pad = max(0, (normal_left_width - left_width) // 2) if tab == 'graph' else 0` and prepends that many spaces to the detail-panel title Text. The detail and focus Panels still pass `title_align='left'`. There is an EXISTING test `test_graph_tab_title_is_padded_for_alignment` (~line 9434 in tests/test_workflow.py) that hardcodes 6 leading spaces at width 110, and tests/snapshots/snapshot-graph.txt pins the current render. So the padding machinery already EXISTS; your job is to make alignment actually correct and pin it with a strict test — do NOT re-add padding that is already there.\n\nHARD REQUIREMENT: the active-tab marker '●' must render at the SAME character column for `--tab runs` and `--tab graph`. Add a test that renders the fixture at widths 100, 110, 120, AND 140 for both tabs, locates the column of '● <tab>' on the tab-bar line (line index 1), and asserts the runs and graph marker columns are equal.\n\nEMPIRICAL REALITY — verify by rendering before choosing an approach: with `title_align='left'` + pad `(normal_left_width - left_width)//2`, the markers are already within 0-2 columns (exact at widths 120 and 140). Switching to `title_align='center'` makes alignment WORSE, not better — centered titles in differently-sized detail panels shift by a width-dependent amount, so no single pad value aligns them across widths. The user's stated preference is 'centered', but DO NOT switch to centered if it breaks the strict alignment test. Recommended path: KEEP `title_align='left'` and TUNE `graph_title_pad` (e.g. try rounding `(normal_left_width - left_width + 1)//2`, or a value derived by measuring the rendered marker columns) until the strict multi-width test passes with the smallest achievable diff — ideally diff == 0 at every width. If integer clamping makes exact 0 impossible at some width, assert the tightest bound you actually measured (e.g. diff <= 1) and add a comment explaining why. You may use centered ONLY if you can still satisfy the strict test at all four widths; otherwise keep left-align and note the tradeoff in a code comment.\n\nTHEN: update/replace `test_graph_tab_title_is_padded_for_alignment` so its hardcoded leading-space expectation matches whatever pad value you land on (do not leave a stale 6-space assertion), and regenerate tests/snapshots/snapshot-graph.txt (only the graph snapshot changes; other tabs are unaffected).\n\nRun `WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'` and fix until all pass.",
+          "write_scope": ["scripts/workflow_tui.py", "tests/test_workflow.py", "tests/snapshots/"],
+          "worktree": {"branch": "workflow/p2/fix-tab-bar", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-review-semantic",
+      "name": "Review (semantic)",
+      "depends_on": ["fix-runner-flow", "fix-tab-bar"],
+      "jobs": [
+        {
+          "name": "review-semantic",
+          "ccc_runner": "@glm51",
+          "prompt": "Semantic review. Verify: (1) auto-commit only fires on successful exit (exit_code 0) with a real worktree lane whose path exists, and never touches a run-level cwd for non-worktree agents, (2) attach-run scoping skips every agent whose started_at is already set, (3) tab bar marker column matches between runs and graph tabs at widths 100/110/120/140. Run WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'. Fix issues or file findings. Return strict JSON: status, findings, tests_passed. Do NOT launch ccc or other runners.",
+          "write_scope": ["scripts/", "tests/"],
+          "worktree": {"branch": "workflow/p2/review-semantic", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-review-standards",
+      "name": "Review (standards)",
+      "depends_on": ["review-semantic"],
+      "jobs": [
+        {
+          "name": "review-standards",
+          "ccc_runner": "@mimo25p",
+          "prompt": "Standards review of the cumulative changes (you run after the semantic review has merged). Check LOC limits, no duplication, meaningful names, test quality, snapshot freshness (snapshot-graph.txt and the updated tab-bar tests). Run WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'. Fix issues. Return strict JSON: status, findings, tests_passed. Do NOT launch ccc or other runners.",
+          "write_scope": ["scripts/", "tests/"],
+          "worktree": {"branch": "workflow/p2/review-standards", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    }
+  ]
+}
