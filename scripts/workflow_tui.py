@@ -419,7 +419,10 @@ def render_dashboard(
     else:
         left_width = max(40, min(46, (width * 2) // 5))
     normal_left_width = max(40, min(46, (width * 2) // 5))
-    graph_title_pad = max(0, (normal_left_width - left_width) // 2) if tab == "graph" else 0
+    # Pad so the active-tab marker ● renders at the same column in graph and runs tabs.
+    # Runs tab ● is at title index 10 ("overview  ●"), graph tab at 16 ("overview  runs  ●").
+    # Compensating for both the sidebar-width gap and the 6-char index shift:
+    graph_title_pad = max(0, normal_left_width - left_width - 6) if tab == "graph" else 0
     right_width = max(20, width - left_width)
     visible = max(1, pane_height - 5)
     if tab == "runs":
