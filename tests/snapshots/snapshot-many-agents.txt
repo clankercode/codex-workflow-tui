@@ -12,7 +12,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
 │     PEND               Agent 06          ││ │ tokens      unknown  tail tools 0       parse errs 0       │ │
 │     DONE               Agent 07          ││ │ elapsed              status     paused  thread             │ │
 │     RUN                Agent 08          ││ ╰────────────────────────────────────────────────────────────╯ │
-│     FAIL               Agent 09          ││ ╭─────────────────────── Live Output ────────────────────────╮ │
+│     FAIL               Agent 09          ││ ╭────────────────── Live Output — Agent 11 ──────────────────╮ │
 │     BLCK               Agent 10          ││ │ slice 11 summary                                           │ │
 │   ▸ PAUS               Agent 11          ││ ╰────────────────────────────────────────────────────────────╯ │
 │                                          ││                                                                │

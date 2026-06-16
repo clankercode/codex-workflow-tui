@@ -519,12 +519,13 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
     ]
     live_stats = Panel(make_facts_grid(live_rows), title="Live Stats", border_style="magenta", box=box.ROUNDED)
     tool_text = "\n".join(live.get("latest_tool_calls", [])[-8:]) or "No tool calls recorded yet."
-    latest = Panel(Text(live.get("latest_output") or "No live output yet.", overflow="fold"), title="Live Output", border_style="yellow", box=box.ROUNDED)
+    output_label = f"Live Output — {live.get('latest_output_agent', '')}" if live.get("latest_output_agent") else "Live Output"
+    latest = Panel(Text(live.get("latest_output") or "No live output yet.", overflow="fold"), title=output_label, border_style="yellow", box=box.ROUNDED)
     panels: list[Any] = [facts, live_stats, latest]
     if detail_height is None or detail_height >= 28:
-        running_text = workflow_tui_live.running_agents_text(live, format_duration_seconds)
-        if running_text:
-            panels.append(Panel(Text(running_text, overflow="fold"), title="Running Agents", border_style="green", box=box.ROUNDED))
+        running_table = workflow_tui_live.running_agents_table(live, format_duration_seconds)
+        if running_table is not None:
+            panels.append(Panel(running_table, title="Running Agents", border_style="green", box=box.ROUNDED))
         if live.get("latest_tool_calls"):
             panels.append(Panel(Text(tool_text, overflow="fold"), title="Latest Tool Calls", border_style="cyan", box=box.ROUNDED))
         if live.get("latest_todos"):
@@ -611,10 +612,11 @@ def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None
         ("model", agent_model(agent)),
         ("phase", agent.get("phase_id", "")),
     ]
+    agent_name = str(agent.get("name") or agent.get("agent_id") or "agent")
     body = (
-        Panel(Text(str(agent.get("prompt", "")) or "No prompt recorded.", overflow="fold"), title="Prompt", border_style="yellow", box=box.ROUNDED)
+        Panel(Text(str(agent.get("prompt", "")) or "No prompt recorded.", overflow="fold"), title=f"Prompt — {agent_name}", border_style="yellow", box=box.ROUNDED)
         if agent_view == "prompt"
-        else Panel(Text(str(output_text), overflow="fold"), title="Live Output", border_style="yellow", box=box.ROUNDED)
+        else Panel(Text(str(output_text), overflow="fold"), title=f"Live Output — {agent_name}", border_style="yellow", box=box.ROUNDED)
     )
     panels: list[Any] = [
         Panel(make_mapping_table(info_rows), title="Agent", border_style="blue", box=box.ROUNDED),

@@ -761,6 +761,7 @@ def collect_run_activity(run: dict[str, Any]) -> dict[str, Any]:
         "tool_call_count": sum(token_value(activity.get("tool_call_count")) for activity in activities),
         "latest_tool_calls": [call for activity in ordered_activities for call in activity.get("tool_calls", [])][-8:],
         "latest_output": next((activity["latest_output"] for activity in reversed(ordered_activities) if activity.get("latest_output")), ""),
+        "latest_output_agent": next((str(activity.get("name") or activity.get("agent_id") or "") for activity in reversed(ordered_activities) if activity.get("latest_output")), ""),
         "latest_todos": next((activity["todos"] for activity in reversed(ordered_activities) if activity.get("todos")), []),
         "latest_thinking": next((activity["latest_thinking"] for activity in reversed(ordered_activities) if activity.get("latest_thinking")), ""),
         "longest_running": longest_running,

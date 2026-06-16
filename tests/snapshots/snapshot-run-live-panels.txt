@@ -2,7 +2,7 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 ╭─────────────────── Runs ───────────────────╮╭──── overview  ● runs  phases  agents  events  decisions  artifacts ────╮
 │    Workflow                                ││ id          wf-fixture-e2e-live                                        │
 │ ▸  Live Telemetry Fixture                  ││ title       Live Telemetry Fixture                                     │
-│      > RUN > 0s > Live test worker         ││ status      running                                                    │
+│      > RUN > 125h 22m > Live test worker   ││ status      running                                                    │
 │                                            ││ mode        codex-direct                                               │
 │                                            ││ paused      no                                                         │
 │                                            ││ stop req    no                                                         │
@@ -14,14 +14,16 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ │ longest     Live test… agents     1          phases     1          │ │
 │                                            ││ │ checks      0                                                      │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││ ╭─────────────────────────── Live Output ────────────────────────────╮ │
+│                                            ││ ╭────────────────── Live Output — Live test worker ──────────────────╮ │
 │                                            ││ │ F(20) = 6765                                                       │ │
 │                                            ││ │                                                                    │ │
 │                                            ││ │ Worker is still streaming context, but the current artifact        │ │
 │                                            ││ │ already contains the answer.                                       │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭────────────────────────── Running Agents ──────────────────────────╮ │
-│                                            ││ │ Live test worker <1 us                                             │ │
+│                                            ││ │                                                                    │ │
+│                                            ││ │  ● Live test worker 125h 21m                                       │ │
+│                                            ││ │                                                                    │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────── Latest Tool Calls ─────────────────────────╮ │
 │                                            ││ │ command_execution · completed · /usr/bin/python3 -c "a,b=0,1\nfor  │ │
@@ -30,7 +32,5 @@ Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
 │                                            ││ ╭────────────────────────────── Prompt ──────────────────────────────╮ │
 │                                            ││ │ Fixture workflow for live TUI telemetry panels.                    │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││                                                                        │
-│                                            ││                                                                        │
 ╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
 path: run.json

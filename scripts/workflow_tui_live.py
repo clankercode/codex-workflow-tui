@@ -126,6 +126,39 @@ def running_agents_text(live: dict[str, Any], format_duration: Any) -> str:
     return "\n".join(lines)
 
 
+def running_agents_table(live: dict[str, Any], format_duration: Any, columns: int = 2) -> Any:
+    """Render running agents as a compact grid table."""
+    from rich import box
+    from rich.table import Table
+    from rich.text import Text
+
+    agents = live.get("running_agents", [])
+    if not agents:
+        return None
+    table = Table(box=box.SIMPLE, pad_edge=False, show_header=False, expand=True)
+    col_width = max(20, 80 // columns)
+    for _ in range(columns):
+        table.add_column(width=col_width, no_wrap=True)
+    row: list[Any] = []
+    for agent in agents:
+        name = str(agent.get("name") or agent.get("agent_id") or "agent")
+        elapsed = format_duration(agent.get("elapsed_seconds")) or ""
+        cell = Text()
+        cell.append("● ", style="green")
+        cell.append(name[:18], style="bold bright_white")
+        if elapsed:
+            cell.append(f" {elapsed}", style="bright_black")
+        row.append(cell)
+        if len(row) == columns:
+            table.add_row(*row)
+            row = []
+    if row:
+        while len(row) < columns:
+            row.append("")
+        table.add_row(*row)
+    return table
+
+
 def todo_status_text(todos: list[dict[str, str]]) -> str:
     lines = []
     for todo in todos[:8]:
