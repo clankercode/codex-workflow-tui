@@ -637,6 +637,48 @@ def cmd_merge_lanes(args: argparse.Namespace) -> None:
             )
 
         workflow_state.mutate_run(args.run, conflict_mutator)
+
+        # Auto-resolve: dispatch an agent to fix the conflict
+        no_resolve = getattr(args, "no_resolve", False) or os.environ.get("WORKFLOW_NO_RESOLVE") == "1"
+        if not no_resolve:
+            resolve_agent = next((a for a in lanes if a.get("agent_id") == conflict["agent_id"]), None)
+            if resolve_agent:
+                check = next((c for c in run.get("checks", []) if c.get("check_id") == conflict.get("check_id")), {})
+                conflict_files: list[str] = []
+                status_result = git_checked(cwd, "status", "--porcelain")
+                if status_result.returncode == 0:
+                    for line in status_result.stdout.strip().splitlines():
+                        line = line.strip()
+                        if line and line[:2] in {"UU", "AA", "DD", "AU", "UA", "DU", "UD"}:
+                            conflict_files.append(line[3:])
+                prompt = build_merger_prompt(run, resolve_agent, check, conflict_files, cwd)
+                print(f"auto-resolving merge conflict for {conflict['agent_id']}...", file=sys.stderr)
+                runner = getattr(args, "ccc_runner", None) or "@mimo25p"
+                cmd = ["ccc", "--yolo", runner, "--", prompt]
+                try:
+                    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=300)
+                    if result.returncode == 0:
+                        # Re-attempt the merge (should be clean now)
+                        retry = git_checked(cwd, "merge", "--no-edit", conflict["branch"])
+                        if retry.returncode == 0:
+                            merge_commit = git_checked(cwd, "rev-parse", "HEAD").stdout.strip()
+                            record_merge_check(args.run, conflict["agent_id"], conflict["branch"], cwd=cwd, status="passed", exit_code=0, output=f"auto-resolved merge conflict", merge_commit=merge_commit)
+                            def resolved_mutator(data: dict[str, Any]) -> None:
+                                state_agent = workflow_state.find_item(data.setdefault("agents", []), "agent_id", conflict["agent_id"])
+                                worktree = state_agent.setdefault("worktree", {})
+                                worktree["merged_at"] = workflow_state.now()
+                                worktree["merge_status"] = "merged"
+                                worktree["merge_commit"] = merge_commit
+                                workflow_state.add_event(data, "info", f"merge conflict auto-resolved: {state_agent.get('name', conflict['agent_id'])}", kind="worktree", operation="merge-resolved", source="workflow_ops.merge_lanes", agent_id=conflict["agent_id"], data={"branch": conflict["branch"], "merge_commit": merge_commit})
+                            workflow_state.mutate_run(args.run, resolved_mutator)
+                            conflicts.clear()
+                        else:
+                            print(f"auto-resolve succeeded but re-merge still conflicts", file=sys.stderr)
+                    else:
+                        print(f"auto-resolve agent failed (exit {result.returncode})", file=sys.stderr)
+                except (subprocess.TimeoutExpired, OSError) as exc:
+                    print(f"auto-resolve error: {exc}", file=sys.stderr)
+
     result_payload: dict[str, Any] = {"run_id": args.run, "merged": merged, "skipped": skipped, "conflicts": conflicts}
     if scope_warnings:
         result_payload["scope_warnings"] = scope_warnings
@@ -1057,6 +1099,7 @@ def build_parser() -> argparse.ArgumentParser:
     merge_lanes.add_argument("--agent", action="append", help="agent id or name to merge; repeat to select several")
     merge_lanes.add_argument("--target", help="target branch to require instead of the current branch")
     merge_lanes.add_argument("--leave-conflicts", action="store_true", help="leave conflicted merge state in place instead of aborting")
+    merge_lanes.add_argument("--no-resolve", action="store_true", help="skip automatic conflict resolution agent")
     merge_lanes.add_argument("--dry-run", action="store_true")
     merge_lanes.set_defaults(func=cmd_merge_lanes)
 

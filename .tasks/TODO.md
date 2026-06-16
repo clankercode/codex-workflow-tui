@@ -38,3 +38,4 @@
 8. Stale worker detection — dead processes shown as running forever → fixed with retry + 30s grace
 9. TUI shows `RUN!` in red for stale workers → fixed
 10. Tool call gap: ccc `cache.read` tokens not captured (documented in test_codex_jsonl_cache_read_tokens_gap)
+11. Merge conflict auto-resolution — `merge-lanes` should dispatch an agent to resolve conflicts instead of failing

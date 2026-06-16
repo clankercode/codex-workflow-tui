@@ -17,6 +17,8 @@ from unittest import mock
 
 # Force workflow apply to block in tests (no detached subprocess)
 os.environ.setdefault("WORKFLOW_DETACH", "0")
+# Skip auto-resolve in tests (no ccc available)
+os.environ.setdefault("WORKFLOW_NO_RESOLVE", "1")
 import argparse
 import contextlib
 import io
