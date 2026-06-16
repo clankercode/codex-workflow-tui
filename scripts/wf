@@ -66,6 +66,7 @@ Usage:
   $PROG block <run-id> <reason>
   $PROG backlog <run-id> [--append '<finding>']
   $PROG preview [workflow_ops.py preview args...]
+  $PROG watch-emit [<run-id>] [--interval 30s] [--loop] [--state-dir PATH]
 USAGE
 }
 
@@ -120,6 +121,9 @@ case "$cmd" in
     ;;
   state)
     exec python3 "$SCRIPT_DIR/workflow_state.py" "$@"
+    ;;
+  watch-emit)
+    exec python3 "$SCRIPT_DIR/workflow_watch_emit.py" "$@"
     ;;
   list|show|init|add-phase|update-phase|add-agent|update-agent|event|decision|artifact|set-status|demo)
     exec python3 "$SCRIPT_DIR/workflow_state.py" "$cmd" "$@"
