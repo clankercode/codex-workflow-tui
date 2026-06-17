@@ -40,6 +40,12 @@ from workflow_tui_update import (  # noqa: F401
     unavailable_update,
     parse_ls_remote_head,
     short_head,
+    ATTENTION_SEEN_AGE_SECONDS,
+    ATTENTION_TOAST_TTL_SECONDS,
+    ATTENTION_TOAST_HEIGHT,
+    refresh_attention_toasts,
+    build_attention_toast_panel,
+    attention_unread_keys,
 )
 from workflow_tui_activity import (  # noqa: F401
     TAIL_BYTES,
@@ -274,11 +280,11 @@ def rows_for_tab(
     return []
 
 
-def make_sidebar(tab: str, rows: list[dict[str, Any]], selected: int, visible: int, *, filter_text: str = "") -> Any:
+def make_sidebar(tab: str, rows: list[dict[str, Any]], selected: int, visible: int, *, filter_text: str = "", unread_keys: set[str] | None = None) -> Any:
     if not rows and active_filter(filter_text):
         return Text(filter_empty_message(filter_text), style="dim")
     if tab == "overview":
-        return make_attention_table(rows, selected, visible)
+        return make_attention_table(rows, selected, visible, unread_keys=unread_keys)
     if tab in ("runs", "graph"):
         return make_runs_table(rows, selected, visible)
     if tab == "phases":
@@ -413,7 +419,22 @@ def render_dashboard(
 
     selected_run_index = clamp_index(run_index, len(runs))
     base_run = runs[selected_run_index] if runs else None
-    pane_height = height - 2 if chrome else height
+
+    # Attention toasts appear only on the overview tab, above the header. The
+    # panel is single-line so its height is fixed; shrink the panes so the
+    # footer stays anchored when a toast is visible.
+    toast_panel = None
+    toast_height = 0
+    overview_unread: set[str] = set()
+    if tab == "overview":
+        attention_rows = rows_for_tab(base_run, "overview", runs)
+        refresh_attention_toasts(attention_rows)
+        overview_unread = attention_unread_keys(attention_rows)
+        toast_panel = build_attention_toast_panel(width=width)
+        if toast_panel is not None:
+            toast_height = ATTENTION_TOAST_HEIGHT
+
+    pane_height = (height - 2 if chrome else height) - toast_height
     if tab == "graph":
         # Give the graph tab a narrower sidebar so the DAG has more room.
         left_width = max(28, min(34, width // 3))
@@ -461,8 +482,12 @@ def render_dashboard(
                 height=pane_height,
             )
         if not chrome:
-            return focused
-        return Group(make_header(tab, width=width, filter_text=filter_text), focused, make_footer(run, width))
+            return Group(toast_panel, focused) if toast_panel is not None else focused
+        parts: list[Any] = []
+        if toast_panel is not None:
+            parts.append(toast_panel)
+        parts.extend([make_header(tab, width=width, filter_text=filter_text), focused, make_footer(run, width)])
+        return Group(*parts)
 
     layout = Table.grid(expand=True)
     layout.add_column(width=left_width)
@@ -474,7 +499,7 @@ def render_dashboard(
         detail_widget = detail
     layout.add_row(
         Panel(
-            make_sidebar(tab, rows, selected_row_index, visible, filter_text=filter_text),
+            make_sidebar(tab, rows, selected_row_index, visible, filter_text=filter_text, unread_keys=overview_unread),
             title=Text(sidebar_title, style="bold cyan"),
             border_style="cyan",
             box=box.ROUNDED,
@@ -489,8 +514,12 @@ def render_dashboard(
         ),
     )
     if not chrome:
-        return layout
-    return Group(make_header(tab, width=width, filter_text=filter_text), layout, make_footer(run, width))
+        return Group(toast_panel, layout) if toast_panel is not None else layout
+    chrome_parts: list[Any] = []
+    if toast_panel is not None:
+        chrome_parts.append(toast_panel)
+    chrome_parts.extend([make_header(tab, width=width, filter_text=filter_text), layout, make_footer(run, width)])
+    return Group(*chrome_parts)
 
 
 # ---------------------------------------------------------------------------

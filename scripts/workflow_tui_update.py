@@ -1,4 +1,4 @@
-"""Git update checking, skill pulling, and workflow control for the TUI."""
+"""Git update checking, skill pulling, workflow control, and attention toasts for the TUI."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import io
 import json
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -190,3 +191,130 @@ def workflow_control_action(run_id: str, action: str, reason: str = "TUI command
         return WorkflowControlResult(action, False, f"{action.title()} failed: {exc}")
     verb = {"pause": "paused", "resume": "resumed", "stop": "stopped"}[action]
     return WorkflowControlResult(action, True, f"Workflow {run_id} {verb}.")
+
+
+# ---------------------------------------------------------------------------
+# Attention toast notifications
+# ---------------------------------------------------------------------------
+#
+# The overview tab lists health "attention" items.  When a brand-new item
+# appears we surface a compact toast at the top of the TUI for a few seconds
+# and flag the row as unread in the sidebar.  State lives here so the live TUI
+# (one long-running process, many refreshes) can remember what it has already
+# announced.  The clock is sourced from ``workflow_tui_render.snapshot_reference_time``
+# (env-driven via WORKFLOW_TUI_SNAPSHOT_NOW) so tests can drive it deterministically.
+
+ATTENTION_SEEN_AGE_SECONDS = 15.0  # item counts as "seen"/read once this old
+ATTENTION_TOAST_TTL_SECONDS = 7.5  # an active toast stays visible this long
+ATTENTION_TOAST_HEIGHT = 3  # border + single content line + border
+
+# item_key -> epoch seconds the TUI first observed the item.
+_ATTENTION_FIRST_SEEN: dict[str, float] = {}
+# Active toast payload: {"items": [...], "shown_at": epoch} or None.
+_ACTIVE_ATTENTION_TOAST: dict[str, Any] | None = None
+
+
+def _toast_reference_epoch() -> float:
+    """Return the reference clock as epoch seconds (env-driven for tests)."""
+    from workflow_tui_render import snapshot_reference_time  # lazy: avoid import cycle
+
+    reference = snapshot_reference_time()
+    return datetime.now().timestamp() if reference is None else reference.timestamp()
+
+
+def _attention_item_epoch(item: dict[str, Any]) -> float | None:
+    """Return the epoch an attention item arose, or None when its ts is unknown."""
+    from workflow_tui_render import parse_local_datetime  # lazy: avoid import cycle
+
+    parsed = parse_local_datetime(item.get("ts"))
+    return None if parsed is None else parsed.timestamp()
+
+
+def _attention_item_key(item: dict[str, Any], index: int) -> str:
+    """Stable key for an attention item (mirrors item_key for the overview tab)."""
+    return str(item.get("attention_id") or f"item-{index}")
+
+
+def reset_attention_toast_state() -> None:
+    """Clear toast tracking (fresh TUI sessions and tests)."""
+    global _ACTIVE_ATTENTION_TOAST
+    _ATTENTION_FIRST_SEEN.clear()
+    _ACTIVE_ATTENTION_TOAST = None
+
+
+def attention_unread_keys(items: list[dict[str, Any]]) -> set[str]:
+    """Return keys for items still fresh enough to count as unread."""
+    if not items:
+        return set()
+    now_epoch = _toast_reference_epoch()
+    unread: set[str] = set()
+    for index, item in enumerate(items):
+        item_epoch = _attention_item_epoch(item)
+        if item_epoch is not None and now_epoch - item_epoch < ATTENTION_SEEN_AGE_SECONDS:
+            unread.add(_attention_item_key(item, index))
+    return unread
+
+
+def refresh_attention_toasts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Record first-seen timestamps and return brand-new items to toast.
+
+    An item toasts when it is fresh (younger than ``ATTENTION_SEEN_AGE_SECONDS``)
+    AND has not been observed in a previous refresh.  The new items also become
+    the active toast, which ``active_attention_toast_items`` keeps visible for
+    ``ATTENTION_TOAST_TTL_SECONDS``.
+    """
+    global _ACTIVE_ATTENTION_TOAST
+    now_epoch = _toast_reference_epoch()
+    current_keys = {_attention_item_key(item, index) for index, item in enumerate(items)}
+    for stale in [key for key in _ATTENTION_FIRST_SEEN if key not in current_keys]:
+        _ATTENTION_FIRST_SEEN.pop(stale, None)
+
+    new_items: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        key = _attention_item_key(item, index)
+        if key in _ATTENTION_FIRST_SEEN:
+            continue  # observed in a prior refresh -> no re-toast
+        item_epoch = _attention_item_epoch(item)
+        age = None if item_epoch is None else now_epoch - item_epoch
+        _ATTENTION_FIRST_SEEN[key] = item_epoch if item_epoch is not None else now_epoch
+        if age is None or age < ATTENTION_SEEN_AGE_SECONDS:
+            new_items.append(item)
+    if new_items:
+        _ACTIVE_ATTENTION_TOAST = {"items": new_items, "shown_at": now_epoch}
+    return new_items
+
+
+def active_attention_toast_items() -> list[dict[str, Any]] | None:
+    """Return items for the currently visible toast, or None once it expires."""
+    global _ACTIVE_ATTENTION_TOAST
+    if not _ACTIVE_ATTENTION_TOAST:
+        return None
+    now_epoch = _toast_reference_epoch()
+    if now_epoch - _ACTIVE_ATTENTION_TOAST["shown_at"] >= ATTENTION_TOAST_TTL_SECONDS:
+        _ACTIVE_ATTENTION_TOAST = None
+        return None
+    return _ACTIVE_ATTENTION_TOAST.get("items")
+
+
+def build_attention_toast_panel(width: int = 100) -> Any:
+    """Return a compact single-line Rich panel for the active toast, or None."""
+    from rich import box
+    from rich.panel import Panel
+    from rich.text import Text
+
+    items = active_attention_toast_items()
+    if not items:
+        return None
+    labels = [str(item.get("title") or item.get("kind") or "attention") for item in items]
+    body = Text("  ".join(f"\u25cf {label}" for label in labels), no_wrap=True, overflow="ellipsis")
+    count = "" if len(items) == 1 else f" ({len(items)})"
+    return Panel(
+        body,
+        title=f"New attention{count}",
+        title_align="left",
+        border_style="dim yellow",
+        box=box.ROUNDED,
+        width=width,
+        expand=True,
+        padding=(0, 1),
+    )
