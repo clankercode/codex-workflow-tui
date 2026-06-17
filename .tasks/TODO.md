@@ -36,6 +36,7 @@
 
 ## IN PROGRESS / UNTESTED
 - [ ] #16 attention notifications — toast/unread notification system (graph tab done, notifications not)
+- [ ] Stale worker sweep re-launches manually cancelled agents — the sweep checks if process is dead but does NOT check if the agent was manually set to cancelled/failed by the operator. It should respect terminal states and not retry agents that were explicitly cancelled.
 
 ## DOGFOOD FINDINGS (this session)
 1. Worktree lane deduplication — prepare_worktree_lanes created same branch N times → fixed
