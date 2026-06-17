@@ -1,5 +1,5 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
-╭─────────── Agents: Many rows ────────────╮╭─ overview  runs  graph  phases  ● agents  events  decisions  a─╮
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q ovr  run  grf  pha  ● agt  evt  dec  a
+╭─────────── Agents: Many rows ────────────╮╭───────────────────────── Agent Detail ─────────────────────────╮
 │                                          ││ ╭────────────────────────── Agent ───────────────────────────╮ │
 │   State     Time       Name              ││ │ agent_id      agent-08                                     │ │
 │  ──────────────────────────────────────  ││ │ name          Agent 08                                     │ │

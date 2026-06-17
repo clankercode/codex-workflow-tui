@@ -5732,6 +5732,38 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("dec", rendered)
         self.assertIn("wf-fixture-rich/run.json", rendered)
 
+    def test_tab_bar_marker_column_is_stable_across_tabs(self) -> None:
+        """The active-tab marker ● must be at the same column for every tab at a given width."""
+        test_tabs = ("runs", "graph", "phases", "agents")
+        for width in (100, 120, 140):
+            columns: list[int] = []
+            for tab in test_tabs:
+                rendered = self.run_script(
+                    "workflow_tui.py",
+                    "--snapshot",
+                    "--fixture",
+                    str(FIXTURE),
+                    "--tab",
+                    tab,
+                    "--width",
+                    str(width),
+                    "--height",
+                    "12",
+                    env=self.snapshot_env(),
+                ).stdout
+                header_line = rendered.split("\n", 1)[0]
+                marker_col = header_line.find("\u25cf")
+                self.assertGreaterEqual(
+                    marker_col, 0,
+                    f"tab={tab} width={width}: ● not found in header line",
+                )
+                columns.append(marker_col)
+            self.assertEqual(
+                len(set(columns)), 1,
+                f"width={width}: ● column varies across tabs: "
+                + ", ".join(f"{t}={c}" for t, c in zip(test_tabs, columns)),
+            )
+
     def test_selected_row_stays_visible_in_snapshot_tables(self) -> None:
         """Render a long table and confirm a selected lower row is kept on screen."""
         rendered = self.run_script(
@@ -9432,7 +9464,7 @@ n        This documents a known gap: merge_token_max does not handle ccc's
         self.assertNotIn("down ", result)
 
     def test_graph_tab_title_is_padded_for_alignment(self) -> None:
-        """Graph tab detail panel title should have leading spaces to align with other tabs."""
+        """Graph tab detail panel title shows contextual 'Dependency Graph' label."""
         rendered = self.run_script(
             "workflow_tui.py",
             "--snapshot",
@@ -9448,11 +9480,7 @@ n        This documents a known gap: merge_token_max does not handle ccc's
             "0",
             env=self.snapshot_env(),
         ).stdout
-        # The graph tab title should have leading spaces before "overview"
-        lines = rendered.splitlines()
-        detail_line = lines[1] if len(lines) > 1 else ""
-        # At width 110: graph_title_pad = 4, Rich adds 1 space after border = 5 total
-        self.assertIn("     overview", detail_line)
+        self.assertIn("Dependency Graph", rendered)
 
     def test_graph_and_runs_tab_marker_same_column(self) -> None:
         """The active-tab marker ● must render at the same character column for runs and graph tabs."""
@@ -9475,9 +9503,10 @@ n        This documents a known gap: merge_token_max does not handle ccc's
                         "0",
                         env=self.snapshot_env(),
                     ).stdout
-                    tab_line = rendered.splitlines()[1] if len(rendered.splitlines()) > 1 else ""
+                    # The tab bar is now in the header (first line).
+                    tab_line = rendered.splitlines()[0] if rendered.splitlines() else ""
                     col = tab_line.find("\u25cf")
-                    self.assertGreaterEqual(col, 0, f"marker not found on tab bar at width={width} tab={tab}")
+                    self.assertGreaterEqual(col, 0, f"marker not found on header at width={width} tab={tab}")
                     col_by_tab[tab] = col
                 self.assertEqual(
                     col_by_tab["runs"],

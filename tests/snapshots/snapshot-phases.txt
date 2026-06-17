@@ -1,5 +1,5 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭───────────────── Phases ─────────────────╮╭─ overview  runs  graph  ● phases  agents  events  decisions  a─╮
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q                       ovr  run  grf  ● pha  agt  evt  d
+╭───────────────── Phases ─────────────────╮╭───────────────────────── Phase Detail ─────────────────────────╮
 │                                          ││ ╭────────────────────────── Review ──────────────────────────╮ │
 │       State   Name                       ││ │ phase       phase-review                                   │ │
 │  ──────────────────────────────────────  ││ │ status      running                                        │ │

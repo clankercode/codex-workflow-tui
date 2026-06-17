@@ -1,5 +1,5 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭─────────────── Decisions ────────────────╮╭─ overview  runs  graph  phases  agents  events  ● decisions  a─╮
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q                  ovr  run  grf  pha  agt  evt  ● dec  a
+╭─────────────── Decisions ────────────────╮╭─────────────────────── Decision Detail ────────────────────────╮
 │                                          ││ ╭───────────────────────── Decision ─────────────────────────╮ │
 │       Summary                            ││ │ decision_id   dec-default                                  │ │
 │  ──────────────────────────────────────  ││ │ title         Default workers to read-only                 │ │

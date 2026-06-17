@@ -1,5 +1,5 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭─────────────── Attention ────────────────╮╭─ ● overview  runs  graph  phases  agents  events  decisions  a─╮
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q                                      ● ovr  run  grf  p
+╭─────────────── Attention ────────────────╮╭──────────────────────────── Detail ────────────────────────────╮
 │                                          ││ ╭───────────────── Check failed: unit tests ─────────────────╮ │
 │       Sev    Kind        Title           ││ │ severity      critical                                     │ │
 │  ──────────────────────────────────────  ││ │ kind          check-failed                                 │ │

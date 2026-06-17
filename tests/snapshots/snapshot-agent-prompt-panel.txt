@@ -1,5 +1,5 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
-╭─────────── Agents: Calculation ────────────╮╭─ overview  runs  graph  phases  ● agents  events  decisions  artifacts─╮
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q ovr  run  grf  pha  ● agt  evt  dec  art
+╭─────────── Agents: Calculation ────────────╮╭───────────────────────────── Agent Detail ─────────────────────────────╮
 │                                            ││ ╭────────────────────────────── Agent ───────────────────────────────╮ │
 │   State     Time       Name                ││ │ agent_id      agent-live-tests                                     │ │
 │  ────────────────────────────────────────  ││ │ name          Live test worker                                     │ │

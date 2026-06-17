@@ -1,5 +1,5 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭───────────────── Events ─────────────────╮╭─ overview  runs  graph  phases  agents  ● events  decisions  a─╮
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q                  ovr  run  grf  pha  agt  ● evt  dec  a
+╭───────────────── Events ─────────────────╮╭───────────────────────── Event Detail ─────────────────────────╮
 │                                          ││ ╭────────────────────────── Event ───────────────────────────╮ │
 │   Time               Type                ││ │ event_id      evt-synthesis                                │ │
 │  ──────────────────────────────────────  ││ │ type          artifact recorded                            │ │

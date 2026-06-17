@@ -1,8 +1,8 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭────────────────── Runs ──────────────────╮╭─ overview  ● runs  graph  phases  agents  events  decisions  a─╮
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q                                 ovr  ● run  grf  pha  a
+╭────────────────── Runs ──────────────────╮╭────────────────────────── Run Detail ──────────────────────────╮
 │    Workflow                              ││ id          wf-fixture-rich                                    │
 │ ▸  Fixture Workflow With Parallel Review ││ title       Fixture Workflow With Parallel Review              │
-│      > RUN > 6m 00s > Security reviewer  ││ status      running                                            │
+│      > RUN > 6m 00s > Security reviewer… ││ status      running                                            │
 │    Completed Smoke Fixture               ││ mode        hybrid                                             │
 │      > DONE > 30m 00s                    ││ paused      no                                                 │
 │    Failed Worker Fixture                 ││ stop req    no                                                 │

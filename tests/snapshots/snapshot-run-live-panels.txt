@@ -1,8 +1,8 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q
-╭─────────────────── Runs ───────────────────╮╭─ overview  ● runs  graph  phases  agents  events  decisions  artifacts─╮
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q                                 ovr  ● run  grf  pha  agt  evt  d
+╭─────────────────── Runs ───────────────────╮╭────────────────────────────── Run Detail ──────────────────────────────╮
 │    Workflow                                ││ id          wf-fixture-e2e-live                                        │
 │ ▸  Live Telemetry Fixture                  ││ title       Live Telemetry Fixture                                     │
-│      > RUN > 0s > Live test worker         ││ status      running                                                    │
+│      > RUN > 0s > Live test worker (pid:5… ││ status      running                                                    │
 │                                            ││ mode        codex-direct                                               │
 │                                            ││ paused      no                                                         │
 │                                            ││ stop req    no                                                         │

@@ -333,14 +333,56 @@ def filter_empty_message(filter_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def make_header(tab: str) -> Text:
-    header = Text()
-    hints = ["\u2191/\u2193 rows", "\u2190/\u2192 tabs", "y id", "p path"]
-    if tab == "agents":
-        hints.extend(["a scope", "v view"])
-    hints.append("r/q")
-    header.append("Agent Workflows", style="bold bright_cyan")
-    header.append(f"  {'  '.join(hints)}", style="dim")
+def make_header(tab: str, *, width: int = 110, filter_text: str = "") -> Text:
+    compact = width < 130
+    tabs = make_tabs_title(tab, compact=compact)
+    tabs_len = len(tabs.plain)
+
+    # Build the left portion with hints.
+    if width < 100:
+        hints = ["\u2191\u2193\u2190\u2192", "y/p", "r/q"]
+    else:
+        hints = ["\u2191/\u2193 rows", "\u2190/\u2192 tabs", "y id", "p path"]
+        if tab == "agents":
+            hints.extend(["a scope", "v view"])
+        hints.append("r/q")
+    left = Text()
+    left.append("Agent Workflows", style="bold bright_cyan")
+    left.append(f"  {'  '.join(hints)}", style="dim")
+    normalized = active_filter(filter_text)
+    if normalized:
+        left.append("  ")
+        left.append(f"filter: {normalized}", style="bold yellow")
+
+    if width >= 100:
+        # Pad left to the agents-tab width so every tab's header starts at the
+        # same column.  This must be independent of the current tab.
+        max_hints = ["\u2191/\u2193 rows", "\u2190/\u2192 tabs", "y id", "p path", "a scope", "v view", "r/q"]
+        agents_left_len = len(f"Agent Workflows  {'  '.join(max_hints)}")
+        max_left_len = max(len(left.plain), agents_left_len)
+        # Pad the left section to max_left_len.
+        gap = max_left_len - len(left.plain)
+        if gap > 0:
+            left.append(" " * gap)
+        # Per-tab padding so ● lands at a stable column across tabs.
+        marker_idx = tabs.plain.find("\u25cf")
+        if compact:
+            max_test_offset = 20
+        else:
+            max_test_offset = 31
+        target_col = max_left_len + max_test_offset + 1
+        if marker_idx >= 0:
+            pad = max(1, target_col - max_left_len - marker_idx)
+        else:
+            pad = max(1, 1)
+    else:
+        # Narrow: simple right-alignment, no per-tab compensation.
+        pad = max(1, width - len(left.plain) - tabs_len)
+
+    header = Text(no_wrap=True)
+    header.append_text(left)
+    header.append(" " * pad)
+    header.append_text(tabs)
     return header
 
 
@@ -381,6 +423,21 @@ def make_panel_title(tab: str, *, compact: bool = False, filter_text: str = "") 
         title.append("  ")
         title.append(f"filter: {normalized}", style="bold yellow")
     return title
+
+
+def detail_panel_title(tab: str) -> str:
+    """Return a contextual detail panel title (not the tab bar)."""
+    labels = {
+        "overview": "Detail",
+        "runs": "Run Detail",
+        "graph": "Dependency Graph",
+        "phases": "Phase Detail",
+        "agents": "Agent Detail",
+        "events": "Event Detail",
+        "decisions": "Decision Detail",
+        "artifacts": "Artifact Detail",
+    }
+    return labels.get(tab, tab.capitalize())
 
 
 def make_mapping_table(rows: list[tuple[str, Any]]) -> Table:

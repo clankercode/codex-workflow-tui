@@ -134,6 +134,7 @@ from workflow_tui_render import (  # noqa: F401
     make_footer,
     make_tabs_title,
     make_panel_title,
+    detail_panel_title,
     make_mapping_table,
     make_attention_table,
     make_attention_detail,
@@ -418,11 +419,6 @@ def render_dashboard(
         left_width = max(28, min(34, width // 3))
     else:
         left_width = max(40, min(46, (width * 2) // 5))
-    normal_left_width = max(40, min(46, (width * 2) // 5))
-    # Pad so the active-tab marker ● renders at the same column in graph and runs tabs.
-    # Runs tab ● is at title index 10 ("overview  ●"), graph tab at 16 ("overview  runs  ●").
-    # Compensating for both the sidebar-width gap and the 6-char index shift:
-    graph_title_pad = max(0, normal_left_width - left_width - 6) if tab == "graph" else 0
     right_width = max(20, width - left_width)
     visible = max(1, pane_height - 5)
     if tab == "runs":
@@ -446,18 +442,13 @@ def render_dashboard(
         filter_text=filter_text,
     )
     use_scroll = scroll_offset > 0
-    detail_title = make_panel_title(tab, compact=width < 100, filter_text=filter_text)
-    if graph_title_pad:
-        padded = Text(" " * graph_title_pad)
-        padded.append_text(detail_title)
-        detail_title = padded
+    detail_title = detail_panel_title(tab)
     if focus:
         if use_scroll:
             clipped = _clip_content_to_height(detail, pane_height, scroll_offset)
             focused = Panel(
                 Text(clipped),
                 title=detail_title,
-                title_align="left",
                 border_style="green",
                 box=box.ROUNDED,
             )
@@ -465,14 +456,13 @@ def render_dashboard(
             focused = Panel(
                 detail,
                 title=detail_title,
-                title_align="left",
                 border_style="green",
                 box=box.ROUNDED,
                 height=pane_height,
             )
         if not chrome:
             return focused
-        return Group(make_header(tab), focused, make_footer(run, width))
+        return Group(make_header(tab, width=width, filter_text=filter_text), focused, make_footer(run, width))
 
     layout = Table.grid(expand=True)
     layout.add_column(width=left_width)
@@ -493,7 +483,6 @@ def render_dashboard(
         Panel(
             detail_widget,
             title=detail_title,
-            title_align="left",
             border_style="green",
             box=box.ROUNDED,
             height=pane_height,
@@ -501,7 +490,7 @@ def render_dashboard(
     )
     if not chrome:
         return layout
-    return Group(make_header(tab), layout, make_footer(run, width))
+    return Group(make_header(tab, width=width, filter_text=filter_text), layout, make_footer(run, width))
 
 
 # ---------------------------------------------------------------------------

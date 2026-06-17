@@ -1,24 +1,24 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q
-╭───────── Agents: Many rows ──────────╮╭─ ovr  run  grf  pha  ● agt  evt  dec─╮
+Agent Workflows  ↑↓←→  y/p  r/q         ovr  run  grf  pha  ● agt  evt  dec  art
+╭─────────── Agents: Review ───────────╮╭──────────── Agent Detail ────────────╮
 │                                      ││ ╭───────────── Agent ──────────────╮ │
-│   State     Time       Name          ││ │ agent_id      agent-05           │ │
-│  ──────────────────────────────────  ││ │ name          Agent 05           │ │
-│     DONE               Agent 00      ││ │ role          review             │ │
-│     RUN                Agent 01      ││ │ type          native-subagent    │ │
-│     FAIL               Agent 02      ││ │ model         gpt-5.5            │ │
-│     BLCK               Agent 03      ││ │ phase         phase-many         │ │
-│     PAUS               Agent 04      ││ ╰──────────────────────────────────╯ │
-│   ▸ CNCL               Agent 05      ││ ╭─────────── Live Stats ───────────╮ │
-│     PEND               Agent 06      ││ │ tokens      tail too… parse errs │ │
-│     DONE               Agent 07      ││ │ duration    status    thread     │ │
-│     RUN                Agent 08      ││ ╰──────────────────────────────────╯ │
-│     FAIL               Agent 09      ││ ╭───── Live Output — Agent 05 ─────╮ │
-│     BLCK               Agent 10      ││ │ slice 05 summary                 │ │
-│     PAUS               Agent 11      ││ ╰──────────────────────────────────╯ │
-│                                      ││                                      │
-│                                      ││                                      │
+│   State     Time       Name          ││ │ agent_id      agent-tests        │ │
+│  ──────────────────────────────────  ││ │ name          Test coverage      │ │
+│     RUN     4m 40s     Security r…   ││ │               reviewer           │ │
+│   ▸ DONE    1m 38s     Test cover…   ││ │ role          test review        │ │
+│                                      ││ │ type          codex-exec         │ │
+│                                      ││ │ model         gpt-5.4-mini       │ │
+│                                      ││ │ phase         phase-review       │ │
+│                                      ││ ╰──────────────────────────────────╯ │
+│                                      ││ ╭─────────── Live Stats ───────────╮ │
+│                                      ││ │ tokens      tail too… parse errs │ │
+│                                      ││ │ duration    finished  status     │ │
+│                                      ││ │ thread      pid                  │ │
+│                                      ││ ╰──────────────────────────────────╯ │
+│                                      ││ ╭─ Live Output — Test coverage rev─╮ │
+│                                      ││ │ Found one missing negative case  │ │
+│                                      ││ ╰──────────────────────────────────╯ │
 │                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
 ╰──────────────────────────────────────╯╰──────────────────────────────────────╯
-path: /tmp/wf-fixture-many/run.json
+path: …neral/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json
