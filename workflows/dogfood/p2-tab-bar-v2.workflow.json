@@ -1,0 +1,37 @@
+{
+  "kind": "workflow-plan",
+  "title": "Fix tab bar movement: move tabs into full-width header (#19)",
+  "prompt": "Fix the tab bar so it does NOT move when switching tabs. The root cause is that the tab title is rendered as the DETAIL PANEL title, and the detail panel has a different width for the graph tab (narrower sidebar → wider panel → centered title shifts). The fix moves the tab bar into the full-width header row so it is consistent across all tabs. All work must pass WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'.",
+  "cwd": "/home/xertrov/.llm-general/ai-coding/codex/skills/workflow",
+  "runner": "ccc",
+  "ccc_runner": "@mimo25p",
+  "max_agents": 1,
+  "phases": [
+    {
+      "phase_id": "phase-impl",
+      "name": "Implementation",
+      "jobs": [
+        {
+          "name": "fix-tab-bar",
+          "prompt": "Fix the TUI tab bar so it stays centered and does NOT move when switching between tabs (especially the graph tab). Do NOT launch ccc or other runners — work directly.\n\nROOT CAUSE (read this carefully before coding):\nIn scripts/workflow_tui.py render_dashboard(), the tab title (make_panel_title / make_tabs_title) is currently rendered as the TITLE of the DETAIL PANEL (the right-hand Panel). The detail panel width differs per tab because the graph tab uses a narrower sidebar (left_width = max(28, min(34, width//3))) than other tabs (left_width = max(40, min(46, (width*2)//5))). Rich centers the panel title within the panel, so a wider panel shifts the centered title right. The current broken \"fix\" sets title_align='left' everywhere, which the user rejects (they want it centered like the original).\n\nThe graph tab MUST keep its narrower sidebar (the DAG needs the room; focus mode gives full width). So the only robust fix is to move the TAB BAR OUT of the per-panel title and into the FULL-WIDTH HEADER row.\n\nREQUIRED APPROACH — move the tab bar into the header:\n1. The dashboard already renders a full-width header via `Group(make_header(tab), layout, make_footer(run, width))` (and the focus branch uses `Group(make_header(tab), focused, make_footer(run, width))`). The header spans the entire terminal width.\n2. Change make_header() in scripts/workflow_tui_render.py to ALSO include the tab bar. Concretely: build a single header line (or two-line header) where the tab bar (make_tabs_title(tab, compact=width<100)) is rendered and JUSTIFIED/CENTERED across the full terminal width. Use Rich Text/Panel justify or manual padding so the tab bar sits at a CONSISTENT horizontal position for every tab.\n   - Preferred: render the existing hints ('Agent Workflows  ↑/↓ rows ... r/q') on the left, and the tab bar on the right (or centered) of the SAME full-width header line. Use `Text` with `justify` or build a 2-column layout. The key invariant: the active-tab marker (●) must land at the SAME column for every tab at a given terminal width.\n   - Accept the make_header signature may need the `width` argument added (and filter_text if you want the filter state visible). Update all call sites.\n3. REMOVE the tab bar from the detail panel title entirely. Replace make_panel_title(tab, ...) usage in render_dashboard() with a CONTEXTUAL panel title that is NOT the tab bar — e.g. the phase name, 'Runs', 'Dependency Graph', 'Events', 'Agents', etc. (derive a short label per tab). This panel title can be centered or left-aligned; it no longer affects the tab bar.\n4. Remove all the now-dead graph_title_pad logic (normal_left_width, graph_title_pad, the padded Text block) from render_dashboard(). Also remove title_align='left' from the Panel constructors (let them default to centered, since the panel title is now contextual not the tab bar).\n5. Update the focus branch too: in focus mode there is no sidebar, so the full-width header still carries the tab bar consistently.\n\nACCEPTANCE CRITERIA (all must hold):\n- At terminal widths 100, 120, and 140, rendering with --tab runs and --tab graph (and --tab phases) must place the active tab marker (●) at the SAME column index in the output. This is the core fix.\n- The graph tab keeps its narrower sidebar (left_width in 28..34 range) — do NOT widen it.\n- The tab bar must be visible and readable (not clipped) at width 100 in both focus and non-focus modes.\n- All existing TUI tests pass; update snapshots as needed. The header now contains tabs, so many snapshots will change — regenerate them.\n\nTEST (add to tests/test_workflow.py, near the other snapshot tests):\nAdd `test_tab_bar_marker_column_is_stable_across_tabs`: render the fixture at widths 100, 120, 140 for tabs runs, graph, phases (and agents if cheap). For each width, find the column of the active-tab '●' marker and assert it is IDENTICAL across the tabs. CRITICAL: scan ONLY the header line (the first rendered line, produced by make_header) — do NOT scan the whole output. The '●' (U+25CF) glyph is emitted by three sources in this codebase: the tab marker in make_tabs_title (the one we want), the agents panel body (agents_text appends '● ' per running agent in workflow_tui_render.py), and the graph DAG completed-node glyph (U+25CF in workflow_tui_graph.py). A global scan therefore finds MULTIPLE '●' on the agents and graph tabs and is non-deterministic. The header hints use only arrows and r/q/y/p (no '●'), so the header line contains exactly one '●' — the tab marker; record that column. Make the test deterministic (use the snapshot env: WORKFLOW_TUI_SNAPSHOT_NOW and the TZ/Australia/Sydney conventions already used by other snapshot tests).\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py' and fix until all pass. Regenerate every changed snapshot with the same env vars the existing snapshot tests use.",
+          "write_scope": ["scripts/workflow_tui.py", "scripts/workflow_tui_render.py", "tests/test_workflow.py", "tests/snapshots/"],
+          "worktree": {"branch": "workflow/p2/fix-tab-bar-v2", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-review",
+      "name": "Review",
+      "depends_on": ["fix-tab-bar"],
+      "jobs": [
+        {
+          "name": "review-semantic",
+          "ccc_runner": "@glm51",
+          "prompt": "Semantic review. Verify the tab bar now lives in the full-width header and the active-tab marker (●) lands at the SAME column for every tab at widths 100/120/140. Verify the graph tab still has its narrow sidebar. Verify the new test actually asserts column stability and scans ONLY the header line for the ● marker (the ● glyph also appears in the agents panel body and the graph DAG completed nodes, so a whole-output scan is non-deterministic). Run WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'. Fix issues or file findings. Return strict JSON: status, findings, tests_passed. Do NOT launch ccc or other runners.",
+          "write_scope": ["scripts/", "tests/"],
+          "worktree": {"branch": "workflow/p2/review-tab-bar-v2", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    }
+  ]
+}
