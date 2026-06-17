@@ -3714,6 +3714,101 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("Dependency Graph", rendered)
         self.assertIn("Install phart for graph view", rendered)
 
+    def test_attention_toast_for_new_items_then_dismisses_when_seen(self) -> None:
+        """A new attention item surfaces a toast that vanishes once it is seen.
+
+        Each ``run_script`` is a fresh process standing in for a TUI refresh. The
+        clock is driven deterministically via WORKFLOW_TUI_SNAPSHOT_NOW: T0 for the
+        first refresh (item is fresh -> toast), T0+16s for the second (item older
+        than the 15s seen threshold -> no toast). No real-time sleep is used.
+        """
+        t0 = "2026-06-11T00:06:00Z"
+        fixture = {
+            "run_id": "wf-toast-demo",
+            "title": "Toast Demo",
+            "status": "failed",  # produces a run-failed attention item at t0
+            "created_at": t0,
+            "updated_at": t0,
+            "events": [],
+            "agents": [],
+            "phases": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture_path = Path(tmp) / "toast-fixture.json"
+            fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+
+            def render_at(clock: str) -> str:
+                env = self.snapshot_env()
+                env["WORKFLOW_TUI_SNAPSHOT_NOW"] = clock
+                return self.run_script(
+                    "workflow_tui.py",
+                    "--snapshot",
+                    "--fixture",
+                    str(fixture_path),
+                    "--tab",
+                    "overview",
+                    "--width",
+                    "80",
+                    "--height",
+                    "24",
+                    env=env,
+                ).stdout
+
+            first_render = render_at(t0)
+            self.assertIn("New attention", first_render)
+            self.assertIn("Run failed", first_render)
+
+            second_render = render_at("2026-06-11T00:06:16Z")
+            self.assertNotIn("New attention", second_render)
+
+    def test_attention_unread_keys_flags_fresh_items_only(self) -> None:
+        """attention_unread_keys flags fresh items and drops them once they age out."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_update as upd  # pylint: disable=import-outside-toplevel
+
+        now = "2026-06-11T00:06:00Z"
+        old_now = os.environ.get("WORKFLOW_TUI_SNAPSHOT_NOW")
+        os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = now
+        try:
+            fresh = {"attention_id": "run-failed:w1:w1", "ts": now}
+            stale = {"attention_id": "run-failed:w2:w2", "ts": "2026-06-11T00:04:00Z"}  # 120s old
+            unread = upd.attention_unread_keys([fresh, stale])
+            self.assertIn("run-failed:w1:w1", unread)
+            self.assertNotIn("run-failed:w2:w2", unread)
+        finally:
+            if old_now is None:
+                os.environ.pop("WORKFLOW_TUI_SNAPSHOT_NOW", None)
+            else:
+                os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = old_now
+
+    def test_attention_toast_does_not_re_trigger_seen_item(self) -> None:
+        """An item present in a prior refresh is not re-toasted (in-process dedup).
+
+        Mirrors the live TUI, where one long-running process refreshes many
+        times: the first refresh toasts a fresh item, but a later refresh that
+        still sees the same item must NOT toast it again. State is reset around
+        the test because ``refresh_attention_toasts`` mutates module-level state.
+        """
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui_update as upd  # pylint: disable=import-outside-toplevel
+
+        now = "2026-06-11T00:06:00Z"
+        old_now = os.environ.get("WORKFLOW_TUI_SNAPSHOT_NOW")
+        os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = now
+        try:
+            upd.reset_attention_toast_state()
+            item = {"attention_id": "run-failed:w1:w1", "ts": now}
+            first = upd.refresh_attention_toasts([item])
+            second = upd.refresh_attention_toasts([item])
+            self.assertEqual(len(first), 1, "brand-new item should toast once")
+            self.assertEqual(second, [], "already-seen item must not re-toast")
+        finally:
+            upd.reset_attention_toast_state()
+            if old_now is None:
+                os.environ.pop("WORKFLOW_TUI_SNAPSHOT_NOW", None)
+            else:
+                os.environ["WORKFLOW_TUI_SNAPSHOT_NOW"] = old_now
+
     @unittest.skipUnless(_phart_available(), "phart not installed")
     def test_graph_tab_width_respects_panel_and_does_not_fold(self) -> None:
         """Graph output must fit within the detail panel and not wrap mid-line."""

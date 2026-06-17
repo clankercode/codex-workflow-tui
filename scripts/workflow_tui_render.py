@@ -459,8 +459,14 @@ def make_mapping_table(rows: list[tuple[str, Any]]) -> Table:
     return table
 
 
-def make_attention_table(items: list[dict[str, Any]], selected: int, visible: int) -> Table:
-    """Render the overview attention list."""
+def make_attention_table(items: list[dict[str, Any]], selected: int, visible: int, *, unread_keys: set[str] | None = None) -> Table:
+    """Render the overview attention list.
+
+    ``unread_keys`` flags brand-new items with a bold title so operators can spot
+    rows they have not yet seen.  The styling is stripped from text snapshots, so
+    it only affects the live, colorized TUI.
+    """
+    unread_keys = unread_keys or set()
     table = Table(box=box.SIMPLE_HEAD, expand=True, header_style="bold bright_black")
     table.add_column("", width=1, no_wrap=True)
     table.add_column("Sev", width=4, no_wrap=True)
@@ -473,11 +479,14 @@ def make_attention_table(items: list[dict[str, Any]], selected: int, visible: in
     start = window_start(selected, len(items), visible)
     for index, item in enumerate(items[start : start + visible], start=start):
         style = "reverse" if index == selected else ""
+        key = str(item.get("attention_id") or f"item-{index}")
+        title_style = "bold" if key in unread_keys else ""
+        title_text = Text(str(item.get("title", "")), style=title_style)
         table.add_row(
             marker_text(index == selected),
             severity_text(str(item.get("severity", ""))),
             str(item.get("kind", "")),
-            str(item.get("title", "")),
+            title_text,
             style=style,
         )
     return table
