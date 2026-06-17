@@ -111,6 +111,13 @@ Right-size and right-shape the fan-out before launching it.
 
 Read `references/workflow-patterns.md` for the full pattern library (adversarial verify, perspective-diverse verify, judge panel, loop-until-dry, multi-modal sweep, completeness critic, no-silent-caps, structured returns) and worked compositions.
 
+### Advanced Patterns (plan-file forms)
+
+When a pattern earns a durable, re-runnable plan, express it as a multi-phase `workflow-plan` JSON and launch it with `workflow apply`:
+
+- **Layered review** — one impl phase plus an ordered multi-model review stack, using **phase-level `ccc_runner` overrides** so each layer runs on a different model (root < phase < job precedence). The layered stack is defense in depth, not a guarantee — keep lead-level review mandatory. See `references/layered-review-workflows.md`.
+- **Multi-agent phase fan-out** — several implementation agents in the **same phase**, each on a disjoint scope with its own `worktree` lane, then a synthesis phase (barrier over the full set) and a review phase. All jobs in a phase run in parallel; phase N+1 waits on all of phase N. See `references/multi-agent-phase-dogfood.md`.
+
 ## State Contract
 
 State lives under:
