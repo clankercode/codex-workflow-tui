@@ -22,19 +22,20 @@
 - [ ] Test for merge-lanes auto-resolve
 
 ## BACKLOG (from dogfood-backlog.md)
-- [ ] #12: Event rollover visibility
-- [ ] #13: First-class dogfood/backlog support
-- [ ] #14: Ergonomic layered review workflows
-- [ ] #15: Real multi-agent phase dogfood
-- [x] #16: Runs overview graph + attention notifications (graph tab done; attention notifications not done)
-- [x] #17: TUI pane scrolling + run-list bounds (impl-tui worktree claims done)
-- [ ] #18: Runs detail layout for live output/running agents
-- [x] #19: Live throughput stats + smoothed counters (impl-tui worktree claims done)
-- [ ] #20: Finished-ago field for completed runs/agents
-- [x] #21: Add pi coding CLI as runner
+- [x] #12: Event rollover visibility — implemented by impl-12-event-rollover worker
+- [x] #13: First-class dogfood/backlog support — `workflow backlog` command exists (workflow_ops.py cmd_backlog)
+- [ ] #14: Ergonomic layered review workflows — docs/templates for single-plan impl+multi-model review
+- [ ] #15: Real multi-agent phase dogfood — templates/guidance for phase fan-out with disjoint worktrees
+- [x] #16: Runs overview graph + attention notifications — graph tab done (phart); attention notifications not done
+- [x] #17: TUI pane scrolling + run-list bounds — implemented by impl-tui worker
+- [x] #18: Runs detail layout for live output/running agents — implemented by impl-18 worker
+- [x] #19: Live throughput stats + smoothed counters — implemented by impl-tui worker
+- [x] #20: Finished-ago field for completed runs/agents — implemented by impl-20 worker
+- [x] #21: Add pi coding CLI as runner — PiDirectProvider implemented + tests
+- [x] #22: Auto-resolve merge conflicts — merge-lanes dispatches resolver agent, integration test exists
 
 ## IN PROGRESS / UNTESTED
-- [ ] Integration test for merge-lanes auto-resolve (#22)
+- [ ] #16 attention notifications — toast/unread notification system (graph tab done, notifications not)
 
 ## DOGFOOD FINDINGS (this session)
 1. Worktree lane deduplication — prepare_worktree_lanes created same branch N times → fixed

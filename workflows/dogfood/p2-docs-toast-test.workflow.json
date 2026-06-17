@@ -1,0 +1,64 @@
+{
+  "kind": "workflow-plan",
+  "title": "P2 docs + attention toast + merge-lanes test: mixed runners",
+  "prompt": "Complete remaining P2 backlog: layered review docs (#14), phase fanout templates (#15), attention toast (#16), merge-lanes integration test (#22). Uses mixed runners to dogfood pi-direct with different models. All work must pass WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'.",
+  "cwd": "/home/xertrov/.llm-general/ai-coding/codex/skills/workflow",
+  "runner": "pi-direct",
+  "model": "minimax/MiniMax-M2.7-highspeed",
+  "max_agents": 3,
+  "phases": [
+    {
+      "phase_id": "phase-impl",
+      "name": "Implementation",
+      "jobs": [
+        {
+          "name": "impl-attention-toast",
+          "prompt": "Implement attention toast notifications for the workflow TUI (#16). Do NOT launch ccc or other runners — work directly.\n\nWHAT TO BUILD:\nThe TUI overview tab already shows attention items (health warnings). Now add a TOAST NOTIFICATION system:\n1. When NEW attention items appear (items not seen in the previous TUI refresh), show a compact toast/notification at the top of the TUI for about 7.5 seconds, then auto-dismiss.\n2. Track 'seen' state: on each TUI refresh, compare current attention items to the previous refresh. New items get a toast. Items that were already present do NOT re-trigger.\n3. The toast should be a Rich Panel (maybe with a yellow/dim border) showing the new attention item message. Position it at the top of the layout, above the header.\n4. In the overview sidebar (make_attention_table), mark NEW/unread items with a visual indicator (e.g., a bullet or bold styling) until they are 'seen' (i.e., have been present for at least one refresh cycle).\n5. The toast state MUST live in scripts/workflow_tui_update.py (do NOT create a new module — a new file would be outside write_scope and fail merge-back). Use a simple dict tracking item_key → first_seen_timestamp. Items older than 15 seconds are 'seen' and no longer toast-eligible. Source the current time from workflow_tui_render.snapshot_reference_time() (which reads the WORKFLOW_TUI_SNAPSHOT_NOW env var) so tests can drive the clock; fall back to datetime.now() only when that env var is unset.\n6. Keep it under 200 LOC for the toast system itself.\n\nAdd a test in tests/test_workflow.py: create a fixture with attention items, render the TUI twice — first render shows the toast for new items, second render (after items age past 15s) does not. The test MUST be deterministic: drive the clock via WORKFLOW_TUI_SNAPSHOT_NOW (the env var backing snapshot_reference_time()) — set it to T0 for the first render, then advance it to T0+16s for the second render. Do NOT sleep in real time. Use snapshot_env() conventions.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py' and fix until all pass.",
+          "runner": "pi-direct",
+          "model": "minimax/MiniMax-M2.7-highspeed",
+          "write_scope": ["scripts/workflow_tui.py", "scripts/workflow_tui_render.py", "scripts/workflow_tui_update.py", "tests/test_workflow.py", "tests/snapshots/"],
+          "worktree": {"branch": "workflow/p2/attention-toast", "base": "HEAD", "merge_target": "main"}
+        },
+        {
+          "name": "impl-merge-lanes-test",
+          "prompt": "Add a comprehensive integration test for merge-lanes auto-resolve (#22). Do NOT launch ccc or other runners — work directly.\n\nWHAT TO BUILD:\nThere is already a test `test_merge_lanes_auto_resolve_dispatches_resolver_agent` but it uses WORKFLOW_NO_RESOLVE=1 and only checks that the resolver is dispatched, not that it actually resolves. Add a NEW test that exercises the full auto-resolve path WITHOUT the no-resolve flag:\n1. Create a workflow run with two worktree lanes that both edit the SAME file (different parts).\n2. Call merge-lanes (without WORKFLOW_NO_RESOLVE=1).\n3. Mock the resolver agent (don't use a real ccc process — use a fake that resolves by accepting the conflict markers).\n4. Verify the merge succeeds and the lane is marked merged.\n5. Also add a test for the edge case where the resolver FAILS (mock returns non-zero) — verify the merge is aborted and the lane stays conflicted.\n6. Use mocks/fakes — no real model calls.\n\nAdd tests in a NEW file tests/test_workflow_merge_resolve.py (do NOT edit tests/test_workflow.py — a parallel job owns it and merge-back would conflict). Run: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py' and fix until all pass.",
+          "runner": "pi-direct",
+          "model": "kimi-coding/k2p7",
+          "write_scope": ["tests/test_workflow_merge_resolve.py"],
+          "worktree": {"branch": "workflow/p2/merge-lanes-test", "base": "HEAD", "merge_target": "main"}
+        },
+        {
+          "name": "write-docs",
+          "prompt": "Write documentation for two remaining P2 backlog items. Do NOT launch ccc or other runners — work directly.\n\n#14: ERGONOMIC LAYERED REVIEW WORKFLOWS\nCreate references/layered-review-workflows.md documenting:\n- How to declare an implementation + ordered multi-model review stack in ONE workflow-plan JSON\n- The preferred pattern: phase-level ccc_runner overrides (impl phase uses @mimo25p, review-1 uses @glm51, review-2 uses @mm3)\n- Example workflow-plan JSON with 3 phases: impl, semantic-review, standards-review\n- The 'layered model stack can still miss edge cases' warning from the backlog — keep lead-level review mandatory\n- How to rotate review model order between runs for diversity\n\n#15: REAL MULTI-AGENT PHASE DOGFOOD\nCreate references/multi-agent-phase-dogfood.md documenting:\n- How to declare multiple implementation agents in the SAME phase with disjoint worktrees/scopes\n- Example workflow-plan JSON with a fan-out phase (3 parallel impl agents) → synthesis phase → review phase\n- Guidance on when to use phase fan-out vs sequential phases\n- How worktree lanes prevent merge conflicts between parallel agents\n- The dependency graph: all jobs in a phase become deps for the next phase\n\nBoth docs should reference the existing workflow-patterns.md for the fan-out/layered patterns. Keep docs concise (under 200 lines each). Include working JSON examples that use ONLY real schema fields (kind, title, cwd, runner, ccc_runner, model, max_agents, phases[].phase_id/name/depends_on/jobs, and per-job name/prompt/runner/ccc_runner/model/write_scope/worktree) — verify each example loads cleanly through workflow_plan.normalize_workflow before finishing.\n\nAlso add brief pointers to SKILL.md under 'Delegation Rules' or a new 'Advanced Patterns' section.\n\nRun: WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py' to ensure nothing broke.",
+          "runner": "pi-direct",
+          "model": "minimax/MiniMax-M3",
+          "write_scope": ["references/layered-review-workflows.md", "references/multi-agent-phase-dogfood.md", "SKILL.md"],
+          "worktree": {"branch": "workflow/p2/p2-docs", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    },
+    {
+      "phase_id": "phase-review",
+      "name": "Review",
+      "depends_on": ["impl-attention-toast", "impl-merge-lanes-test", "write-docs"],
+      "jobs": [
+        {
+          "name": "review-semantic",
+          "runner": "ccc",
+          "ccc_runner": "@glm51",
+          "prompt": "Semantic review. Verify: (1) attention toast triggers on new items and dismisses after ~7.5s, (2) merge-lanes integration test covers both success and failure paths, (3) docs are accurate with working JSON examples. Run WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'. Fix issues or file findings. Return strict JSON: status, findings, tests_passed. Do NOT launch ccc or other runners.",
+          "write_scope": ["scripts/", "tests/", "references/", "SKILL.md"],
+          "worktree": {"branch": "workflow/p2/review-semantic", "base": "HEAD", "merge_target": "main"}
+        },
+        {
+          "name": "review-standards",
+          "runner": "ccc",
+          "ccc_runner": "@mimo25p",
+          "prompt": "Standards review. Check LOC limits, no duplication, meaningful names, test quality, snapshot freshness, docs quality. Run WORKFLOW_TEST_MODE=fast python3 -m unittest discover -s tests -p 'test_*.py'. Fix issues. Return strict JSON: status, findings, tests_passed. Do NOT launch ccc or other runners.",
+          "write_scope": ["scripts/", "tests/", "references/", "SKILL.md"],
+          "worktree": {"branch": "workflow/p2/review-standards", "base": "HEAD", "merge_target": "main"}
+        }
+      ]
+    }
+  ]
+}
