@@ -728,4 +728,3 @@ def cmd_merge_conflicts(args: argparse.Namespace) -> None:
     if not has_markers:
         result["hint"] = _conflict_hint(has_markers, has_unrelated)
     print(json.dumps(result, indent=2, sort_keys=True))
-

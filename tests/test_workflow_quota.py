@@ -106,6 +106,7 @@ def _make_args(**overrides: object) -> argparse.Namespace:
         "cwd": "/tmp",
         "mock": False,
         "dry_run": False,
+        "runner": "codex-direct",
         "max_agents": 1,
         "startup_delay": 0.0,
         "quota_retries": 2,
@@ -253,6 +254,51 @@ class TestRunWorkerQuotaFailFast(unittest.TestCase):
                         run = workflow_state.load_run(run_id)
                         agent = workflow_state.find_item(run["agents"], "agent_id", agent_id)
                         await workflow_run_codex.run_worker(run_id, agent, args, provider, semaphore, limiter)
+
+                asyncio.run(exercise())
+
+                run = workflow_state.load_run(run_id)
+                agent = workflow_state.find_item(run["agents"], "agent_id", agent_id)
+                self.assertEqual(agent["status"], "failed")
+                self.assertIn("fail-fast", agent["summary"])
+                self.assertEqual(agent.get("quota_retry_count", 0), 0)
+
+    def test_agent_execution_args_quota_fail_fast_overrides_run_defaults(self) -> None:
+        """Per-job quota settings should be honored after execution_args rebuild."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = str(tmp_path / "state")
+            quota_stderr = b"Error 429: Too Many Requests\n"
+            fake_proc = _FakeProcess(stderr_bytes=quota_stderr, exit_code=1)
+
+            with mock.patch.dict(os.environ, {
+                "WORKFLOW_STATE_DIR": state_dir,
+                "WORKFLOW_QUOTA_RETRY_POLL_SECS": "0.01",
+                "WORKFLOW_QUOTA_RETRY_SLEEP_OVERRIDE_SECS": "0",
+            }):
+                run_id, agent_id = _setup_run(tmp_path, {})
+                workflow_run_codex.update_agent(
+                    run_id,
+                    agent_id,
+                    execution_args={
+                        "quota_fail_fast": True,
+                        "quota_retries": 0,
+                        "quota_retry_buffer_secs": 0.0,
+                        "failure_retries": 0,
+                    },
+                )
+
+                args = _make_args(cwd=str(tmp_path), quota_fail_fast=False, quota_retries=2)
+                provider = workflow_run_codex.CodexDirectProvider()
+                semaphore = asyncio.Semaphore(1)
+                limiter = workflow_run_codex.StartupRateLimiter(0.0)
+
+                async def exercise() -> None:
+                    with mock.patch.object(limiter, "create_process", return_value=fake_proc) as create_process:
+                        run = workflow_state.load_run(run_id)
+                        agent = workflow_state.find_item(run["agents"], "agent_id", agent_id)
+                        await workflow_run_codex.run_worker(run_id, agent, args, provider, semaphore, limiter)
+                        self.assertEqual(create_process.call_count, 1)
 
                 asyncio.run(exercise())
 

@@ -22,6 +22,7 @@ EXECUTION_FIELDS = {
     "cli_agent",
     "timeout_secs",
     "quota_retries",
+    "quota_fail_fast",
     "quota_retry_buffer_secs",
     "failure_retries",
     "result_schema",

@@ -7636,6 +7636,122 @@ class WorkflowScriptTests(unittest.TestCase):
             self.assertEqual(agents_by_name["dry-job"]["summary"], "dry run; worker not launched")
             self.assertIn("Dry run only", agents_by_name["dry-job"]["result"])
 
+    def test_wf_apply_global_dry_run_does_not_detach_or_launch_workers(self) -> None:
+        """Global dry-run must stay virtual even when apply would normally detach."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            args_log = tmp_path / "codex-args.json"
+            plan_path = tmp_path / "dry-run.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Global Dry Run",
+                        "runner": "codex-direct",
+                        "jobs": [{"name": "dry-job", "prompt": "Should not launch."}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env.pop("WORKFLOW_DETACH", None)
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CODEX_FAKE_ARGS"] = str(args_log)
+
+            result = self.run_wf("apply", str(plan_path), "--dry-run", "--startup-delay", "0", env=env, check=False)
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            summary = json.loads(result.stdout.split("\ndry run:", 1)[0])
+            run = json.loads(Path(summary["path"]).read_text(encoding="utf-8"))
+            self.assertFalse(args_log.exists(), msg="fake codex should not have launched")
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(run["agents"][0]["status"], "completed")
+            self.assertEqual(run["agents"][0]["summary"], "dry run; worker not launched")
+
+    def test_wf_apply_detached_global_mock_preserves_virtual_worker_flag(self) -> None:
+        """Detached apply must pass --mock to the child worker process."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            self.install_fake_codex(fake_bin)
+            args_log = tmp_path / "codex-args.json"
+            plan_path = tmp_path / "mock-run.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Global Mock",
+                        "runner": "codex-direct",
+                        "jobs": [{"name": "mock-job", "prompt": "Should not launch."}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env.pop("WORKFLOW_DETACH", None)
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["WORKFLOW_STATE_DIR"] = str(tmp_path / "state")
+            env["CODEX_FAKE_ARGS"] = str(args_log)
+
+            result = self.run_wf("apply", str(plan_path), "--mock", "--startup-delay", "0", env=env, check=False)
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            summary = json.loads(result.stdout.split("\ncommand:", 1)[0])
+            run_path = Path(summary["path"])
+            for _ in range(50):
+                run = json.loads(run_path.read_text(encoding="utf-8"))
+                if run["status"] == "completed":
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail("detached mock worker did not complete")
+            self.assertFalse(args_log.exists(), msg="fake codex should not have launched")
+            self.assertEqual(run["agents"][0]["status"], "completed")
+            self.assertEqual(run["agents"][0]["summary"], "mock worker completed")
+
+    def test_wf_apply_detached_worker_command_preserves_run_execution_flags(self) -> None:
+        """Detached apply child argv should mirror effective run-level execution args."""
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_apply  # pylint: disable=import-outside-toplevel
+
+        args = argparse.Namespace(
+            runner="ccc",
+            cwd="/tmp/work",
+            sandbox="workspace-write",
+            approval="on-request",
+            max_agents=3,
+            max_round=2,
+            max_job=5,
+            startup_delay=0.25,
+            quota_retries=0,
+            quota_fail_fast=True,
+            quota_retry_buffer_secs=1.5,
+            failure_retries=2,
+            kimi_max_steps_per_turn=7,
+            ccc_output_mode="stream-json",
+            ccc_runner="@mm",
+            ccc_control=["+3"],
+            permission_mode="safe",
+            cli_agent="reviewer",
+            timeout_secs=60,
+            result_schema="/tmp/schema.json",
+            model="gpt-test",
+            mock=True,
+        )
+
+        command = workflow_apply.detached_worker_command(args, "wf-test")
+
+        self.assertIn("--_worker-run", command)
+        self.assertEqual(command[command.index("--runner") + 1], "ccc")
+        self.assertEqual(command[command.index("--cwd") + 1], "/tmp/work")
+        self.assertEqual(command[command.index("--max-agents") + 1], "3")
+        self.assertEqual(command[command.index("--max-job") + 1], "5")
+        self.assertEqual(command[command.index("--quota-retries") + 1], "0")
+        self.assertIn("--quota-fail-fast", command)
+        self.assertEqual(command[command.index("--result-schema") + 1], "/tmp/schema.json")
+        self.assertIn("--mock", command)
+
     def test_wf_apply_runs_per_job_with_plan_runner(self) -> None:
         """Per-job providers must actually launch the configured runner, not just stamp agent_type."""
         with tempfile.TemporaryDirectory() as tmp:

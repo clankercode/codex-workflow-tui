@@ -315,10 +315,13 @@ def _serialize_job_execution_args(
     for field in JOB_EXECUTION_OVERRIDE_FIELDS:
         value = getattr(job_args, field, None)
         baseline = getattr(args, field, None)
-        if field in ("timeout_secs", "kimi_max_steps_per_turn"):
+        if field in ("timeout_secs", "quota_retries", "failure_retries", "kimi_max_steps_per_turn"):
             if value is not None and value != baseline:
                 overrides[field] = int(value)
-        elif field in ("dry_run", "mock"):
+        elif field == "quota_retry_buffer_secs":
+            if value is not None and value != baseline:
+                overrides[field] = float(value)
+        elif field in ("dry_run", "mock", "quota_fail_fast"):
             if value is not None and value != baseline:
                 overrides[field] = bool(value)
         elif value and value != baseline:
@@ -802,7 +805,8 @@ async def run_worker(
                 return
             # Create worktree lazily if needed (after dry-run check, before mock)
             if not job_args.dry_run:
-                agent["cwd"] = _ensure_worktree_lane(run_id, agent, agent.get("cwd", args.cwd))
+                fallback_cwd = getattr(args, "cwd", os.getcwd())
+                agent["cwd"] = _ensure_worktree_lane(run_id, agent, agent.get("cwd") or fallback_cwd)
             if job_args.mock:
                 await startup_limiter.mark_virtual_start()
                 started_epoch = time.time()
@@ -844,8 +848,8 @@ async def run_worker(
 
             jsonl_path = Path(agent["jsonl_path"])
             stderr_path = Path(agent["log_path"])
-            quota_retries = max(0, int(getattr(args, "quota_retries", 2)))
-            failure_retries = max(0, int(getattr(args, "failure_retries", 0)))
+            quota_retries = max(0, int(getattr(job_args, "quota_retries", 2)))
+            failure_retries = max(0, int(getattr(job_args, "failure_retries", 0)))
             quota_retry_count = 0
             failure_retry_count = 0
             attempt = 0
@@ -935,7 +939,7 @@ async def run_worker(
                         stderr_text += f"\nschema validation failed: {validation_error}\n"
 
                 if exit_code != 0 and quota_limit_detected(stdout_text, stderr_text):
-                    if quota_fail_fast(args):
+                    if quota_fail_fast(job_args):
                         quota_fail_fast_triggered = True
                         update_agent(
                             run_id,
@@ -949,7 +953,7 @@ async def run_worker(
                         break
                     if quota_retry_count < quota_retries:
                         quota_retry_count += 1
-                        sleep_seconds = quota_retry_sleep_seconds(args)
+                        sleep_seconds = quota_retry_sleep_seconds(job_args)
                         update_agent(
                             run_id,
                             agent["agent_id"],
@@ -1576,6 +1580,7 @@ def main() -> None:
     # Hidden flag: detached child runs workers to completion
     if args._worker_run:
         run_id = args._worker_run
+        args.result_schema_obj = _resolve_schema(args.result_schema) if args.result_schema else None
         provider = build_provider(args)
         status = asyncio.run(run_all(workflow_state.load_run(run_id), args, provider))
         sys.exit(0 if status == "completed" else 1)

@@ -35,7 +35,7 @@ Job `name` values are dependency keys, so keep them unique and stable across the
 
 ### Per-Job Runner Configuration
 
-Jobs and phases may override execution settings such as `runner`, `ccc_runner`, `model`, `sandbox`, `approval`, `permission_mode`, `cli_agent`, `timeout_secs`, `kimi_max_steps_per_turn`, and `result_schema`. The precedence is: root plan defaults < phase values < job values. Explicit CLI flags still override all plan-provided values when the operator forces a run-wide setting.
+Jobs and phases may override execution settings such as `runner`, `ccc_runner`, `model`, `sandbox`, `approval`, `permission_mode`, `cli_agent`, `timeout_secs`, `quota_retries`, `quota_fail_fast`, `quota_retry_buffer_secs`, `failure_retries`, `kimi_max_steps_per_turn`, and `result_schema`. The precedence is: root plan defaults < phase values < job values. Explicit CLI flags still override all plan-provided values when the operator forces a run-wide setting.
 
 ```json
 {

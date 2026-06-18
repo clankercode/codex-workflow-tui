@@ -74,13 +74,14 @@ def merge_plan_options(args: argparse.Namespace, plan: dict[str, Any], source_di
         "cli_agent",
         "result_schema",
         "cwd",
+        "quota_fail_fast",
         "dry_run",
         "mock",
     ):
         value = getattr(args, field, None)
         if value is not None:
             _cli_explicit[field] = value
-    for field in ("timeout_secs", "kimi_max_steps_per_turn"):
+    for field in ("timeout_secs", "quota_retries", "quota_retry_buffer_secs", "failure_retries", "kimi_max_steps_per_turn"):
         value = getattr(args, field, None)
         if value is not None:
             _cli_explicit[field] = value
@@ -96,6 +97,7 @@ def merge_plan_options(args: argparse.Namespace, plan: dict[str, Any], source_di
     args.cli_agent = args.cli_agent or plan.get("cli_agent")
     args.timeout_secs = args.timeout_secs if args.timeout_secs is not None else plan.get("timeout_secs")
     args.quota_retries = args.quota_retries if args.quota_retries is not None else int(plan.get("quota_retries", 2))
+    args.quota_fail_fast = args.quota_fail_fast if args.quota_fail_fast is not None else bool(plan.get("quota_fail_fast", False))
     args.quota_retry_buffer_secs = args.quota_retry_buffer_secs if args.quota_retry_buffer_secs is not None else float(plan.get("quota_retry_buffer_secs", 5.0))
     args.failure_retries = args.failure_retries if args.failure_retries is not None else int(plan.get("failure_retries", 0))
     args.result_schema = args.result_schema or plan.get("result_schema")
@@ -351,6 +353,61 @@ def record_plan_decisions(run_id: str, plan: dict[str, Any]) -> None:
     workflow_state.mutate_run(run_id, mutator)
 
 
+def detached_worker_command(args: argparse.Namespace, run_id: str) -> list[str]:
+    """Build the worker child argv from the effective run-level execution args."""
+    command = [
+        sys.executable,
+        str(Path(__file__).parent / "workflow_run_codex.py"),
+        "--_worker-run",
+        run_id,
+        "--runner",
+        args.runner,
+        "--cwd",
+        args.cwd,
+        "--sandbox",
+        args.sandbox,
+        "--approval",
+        args.approval,
+        "--max-agents",
+        str(args.max_agents),
+        "--max-round",
+        str(args.max_round),
+        "--startup-delay",
+        str(args.startup_delay),
+        "--quota-retries",
+        str(args.quota_retries),
+        "--quota-retry-buffer-secs",
+        str(args.quota_retry_buffer_secs),
+        "--failure-retries",
+        str(args.failure_retries),
+        "--kimi-max-steps-per-turn",
+        str(args.kimi_max_steps_per_turn),
+        "--ccc-output-mode",
+        args.ccc_output_mode,
+    ]
+    if args.max_job is not None:
+        command.extend(["--max-job", str(args.max_job)])
+    if args.ccc_runner:
+        command.extend(["--ccc-runner", args.ccc_runner])
+    for token in args.ccc_control or []:
+        command.extend(["--ccc-control", token])
+    if args.quota_fail_fast:
+        command.append("--quota-fail-fast")
+    for field, flag in (
+        ("permission_mode", "--permission-mode"),
+        ("cli_agent", "--cli-agent"),
+        ("timeout_secs", "--timeout-secs"),
+        ("result_schema", "--result-schema"),
+        ("model", "--model"),
+    ):
+        value = getattr(args, field, None)
+        if value not in (None, ""):
+            command.extend([flag, str(value)])
+    if args.mock:
+        command.append("--mock")
+    return command
+
+
 def apply_workflow(args: argparse.Namespace) -> int:
     """Create a normal workflow run from one normalized plan."""
     source = source_path(args.plan_source)
@@ -392,14 +449,12 @@ def apply_workflow(args: argparse.Namespace) -> int:
             replay.extend(["--ccc-runner", args.ccc_runner])
         print("command:", shlex.join(replay))
     # Detach by default so apply returns immediately. Set WORKFLOW_DETACH=0 to block.
-    should_detach = os.environ.get("WORKFLOW_DETACH", "1") != "0" and not args.no_detach
+    should_detach = os.environ.get("WORKFLOW_DETACH", "1") != "0" and not args.no_detach and not args.dry_run
     if not should_detach:
         status = asyncio.run(workflow_run_codex.run_all(workflow_state.load_run(run["run_id"]), args, default_provider))
         return 0 if status == "completed" else 1
     else:
-        worker_cmd = [sys.executable, str(Path(__file__).parent / "workflow_run_codex.py"), "--_worker-run", run["run_id"], "--runner", args.runner]
-        if args.ccc_runner:
-            worker_cmd.extend(["--ccc-runner", args.ccc_runner])
+        worker_cmd = detached_worker_command(args, run["run_id"])
         subprocess.Popen(worker_cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return 0
 
@@ -416,6 +471,10 @@ JOB_EXECUTION_OVERRIDE_FIELDS = (
     "permission_mode",
     "cli_agent",
     "timeout_secs",
+    "quota_retries",
+    "quota_fail_fast",
+    "quota_retry_buffer_secs",
+    "failure_retries",
     "result_schema",
     "kimi_max_steps_per_turn",
     "dry_run",
@@ -442,10 +501,13 @@ def _build_job_args(
             if field == "cwd":
                 if value not in (None, ""):
                     setattr(job_args, field, resolve_cwd(value, source_dir=source_dir))
-            elif field in ("timeout_secs", "kimi_max_steps_per_turn"):
+            elif field in ("timeout_secs", "quota_retries", "failure_retries", "kimi_max_steps_per_turn"):
                 if value is not None:
                     setattr(job_args, field, value)
-            elif field in ("dry_run", "mock"):
+            elif field == "quota_retry_buffer_secs":
+                if value is not None:
+                    setattr(job_args, field, value)
+            elif field in ("dry_run", "mock", "quota_fail_fast"):
                 if value is not None:
                     setattr(job_args, field, bool(value))
             elif value:
@@ -460,10 +522,13 @@ def _job_execution_differs(args: argparse.Namespace, job_args: argparse.Namespac
     for field in JOB_EXECUTION_OVERRIDE_FIELDS:
         jv = getattr(job_args, field, None)
         av = getattr(args, field, None)
-        if field in ("timeout_secs", "kimi_max_steps_per_turn"):
+        if field in ("timeout_secs", "quota_retries", "failure_retries", "kimi_max_steps_per_turn"):
             if jv is not None and jv != av:
                 return True
-        elif field in ("dry_run", "mock"):
+        elif field == "quota_retry_buffer_secs":
+            if jv is not None and jv != av:
+                return True
+        elif field in ("dry_run", "mock", "quota_fail_fast"):
             if jv is not None and jv != av:
                 return True
         elif (jv or av) and jv != av:
@@ -504,6 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cli-agent")
     parser.add_argument("--timeout-secs", type=workflow_run_codex.positive_int)
     parser.add_argument("--quota-retries", type=workflow_run_codex.nonnegative_int)
+    parser.add_argument("--quota-fail-fast", action="store_true", default=None)
     parser.add_argument("--quota-retry-buffer-secs", type=workflow_run_codex.nonnegative_float)
     parser.add_argument("--failure-retries", type=workflow_run_codex.nonnegative_int)
     parser.add_argument("--result-schema")

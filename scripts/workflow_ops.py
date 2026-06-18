@@ -155,7 +155,13 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     checks: list[dict[str, Any]] = []
     state = workflow_state.state_root()
     checks.append({"name": "state-dir", "ok": writable_dir(state), "path": str(state), "required": True})
-    checks.append({"name": "workflow-home", "ok": writable_dir(workflow_state.workflow_root()), "path": str(workflow_state.workflow_root()), "required": True})
+    workflow_home_required = "WORKFLOW_STATE_DIR" not in os.environ
+    checks.append({
+        "name": "workflow-home",
+        "ok": writable_dir(workflow_state.workflow_root()),
+        "path": str(workflow_state.workflow_root()),
+        "required": workflow_home_required,
+    })
     for command in ("workflow", "wf", "codex", "ccc", "opencode", "tmux", "git"):
         checks.append(command_status(command, required=False))
     for command in ("workflow", "wf"):
