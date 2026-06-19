@@ -3767,7 +3767,11 @@ class WorkflowScriptTests(unittest.TestCase):
             "34",
             env=self.snapshot_env(),
         ).stdout
-        self.assertIn(run["agents"][1]["name"], rendered)
+        first_agent_line = next(line for line in rendered.splitlines() if run["agents"][0]["name"] in line)
+        selected_agent_line = next(line for line in rendered.splitlines() if run["agents"][1]["name"] in line)
+        self.assertIn("RUN", first_agent_line)
+        self.assertNotIn("▸", first_agent_line)
+        self.assertIn("▸ DONE", selected_agent_line)
 
     def test_active_header_tab_is_visible_at_supported_widths(self) -> None:
         sys.path.insert(0, str(SCRIPTS))
@@ -4446,6 +4450,9 @@ class WorkflowScriptTests(unittest.TestCase):
                 self.action_nav_right()
                 observations["after_right_tab"] = self.tab
                 observations["after_right_row"] = self.selected_row_ids["agents"]
+                observations["after_right_scope"] = self.agent_scope
+                observations["after_right_scope_index"] = self.agent_scope_index
+                observations["after_right_row_index"] = self.row_index
                 self.tab_index = FakeTui.TABS.index("runs")
                 self.run_focus = "agents"
                 self.action_nav_left()
@@ -4553,6 +4560,9 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(observations["selected_run_agent_id"], "agent-b")
         self.assertEqual(observations["after_right_tab"], "agents")
         self.assertEqual(observations["after_right_row"], "agent-b")
+        self.assertEqual(observations["after_right_scope"], "all")
+        self.assertEqual(observations["after_right_scope_index"], FakeTui.AGENT_SCOPES.index("all"))
+        self.assertEqual(observations["after_right_row_index"], 1)
         self.assertEqual(observations["after_left_focus"], "runs")
         self.assertEqual(observations["after_escape_focus"], "runs")
 
