@@ -15,6 +15,17 @@ from typing import Any
 import workflow_state
 
 
+def initial_layout_mode(tui: Any) -> str:
+    """Return the persisted layout mode when the backend supports preferences."""
+    load_preferences = getattr(tui, "load_tui_preferences", None)
+    if load_preferences is None:
+        return "command"
+    preferences = load_preferences()
+    if not isinstance(preferences, dict):
+        return "command"
+    return str(preferences.get("layout_mode") or "command")
+
+
 def copy_to_system_clipboard(value: str) -> tuple[bool, str]:
     """Copy to the regular desktop clipboard used by Ctrl+V."""
     commands = [
@@ -119,7 +130,7 @@ def run_textual_app(tui: Any) -> None:
             self.filter_index = 0
             self.filter_presets = ("", "failed", "blocked", "running", "artifact")
             self.focus_mode = False
-            self.layout_mode = tui.load_tui_preferences()["layout_mode"]
+            self.layout_mode = initial_layout_mode(tui)
             self.selected_run_id: str | None = None
             self.selected_row_ids: dict[str, str | None] = {tab: None for tab in tui.TABS}
             self.fallback_indexes: dict[str, int] = {tab: 0 for tab in tui.TABS}

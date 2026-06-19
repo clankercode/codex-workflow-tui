@@ -4451,12 +4451,13 @@ class WorkflowScriptTests(unittest.TestCase):
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("`!`: jump to the `attention` tab.", operations)
-        self.assertIn("`L`: reserved layout-mode affordance", operations)
+        self.assertIn("`L`: cycle global layout mode", operations)
         self.assertIn("`layout: command  L`", operations)
         self.assertNotIn("attention overview", operations)
         self.assertIn("default TUI home tab is `runs`", skill)
         self.assertIn("visible `attention` tab", skill)
         self.assertIn("press `!` to jump there", skill)
+        self.assertIn("`L` cycles global layout mode", skill)
         self.assertIn("`layout: command  L`", skill)
 
     def test_live_tui_palette_exposes_workflow_control_actions(self) -> None:
