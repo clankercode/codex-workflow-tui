@@ -1,35 +1,35 @@
 Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q  layout: command  L     ● run  grf  pha  agt  evt  dec  art  attn
 ╭─────────────────── Runs ───────────────────╮╭────────────────────────────── Run Detail ──────────────────────────────╮
-│    Workflow                                ││ id          wf-fixture-e2e-live                                        │
-│ ▸  Live Telemetry Fixture                  ││ title       Live Telemetry Fixture                                     │
-│      > RUN > 0s > Live test worker (pid:5… ││ status      running                                                    │
-│                                            ││ mode        codex-direct                                               │
-│                                            ││ paused      no                                                         │
-│                                            ││ stop req    no                                                         │
-│                                            ││ cwd         /home/xertrov/tmp/custom-wf-test                           │
-│                                            ││ updated     Jun 11 10:09 AEST                                          │
-│                                            ││ state       run.json                                                   │
+│    Workflow                                ││ ╭─────────────────────────────── Run ────────────────────────────────╮ │
+│ ▸  Live Telemetry Fixture                  ││ │ id          wf-fixture-e2e-live                                    │ │
+│      > RUN > 0s > Live test worker (pid:5… ││ │ title       Live Telemetry Fixture                                 │ │
+│                                            ││ │ status      running                                                │ │
+│                                            ││ │ mode        codex-direct                                           │ │
+│                                            ││ │ paused      no                                                     │ │
+│                                            ││ │ stop req    no                                                     │ │
+│                                            ││ │ cwd         /home/xertrov/tmp/custom-wf-test                       │ │
+│                                            ││ │ updated     Jun 11 10:09 AEST                                      │ │
+│                                            ││ │ state       run.json                                               │ │
+│                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
 │                                            ││ ╭──────────────────────────── Live Stats ────────────────────────────╮ │
 │                                            ││ │ elapsed     0s         tokens     1234       tail tools 1          │ │
 │                                            ││ │ active      1          longest    Live test… agents     1          │ │
 │                                            ││ │ phases      1          checks     0                                │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││ ╭────────────── Merged Live Output — Live test worker ───────────────╮ │
+│                                            ││ ╭──────────────────────────── Run Agents ────────────────────────────╮ │
+│                                            ││ │                                                                    │ │
+│                                            ││ │   State     Time       Name                                        │ │
+│                                            ││ │  ────────────────────────────────────────────────────────────────  │ │
+│                                            ││ │   ▸ RUN!    0s         Live test worker                            │ │
+│                                            ││ │                                                                    │ │
+│                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
+│                                            ││ ╭───────────────────────────── Live Ops ─────────────────────────────╮ │
 │                                            ││ │ ● Live test worker <1 us                                           │ │
 │                                            ││ │ F(20) = 6765                                                       │ │
 │                                            ││ │                                                                    │ │
 │                                            ││ │ Worker is still streaming context, but the current artifact        │ │
 │                                            ││ │ already contains the answer.                                       │ │
 │                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││ ╭──────────────────────── Latest Tool Calls ─────────────────────────╮ │
-│                                            ││ │ command_execution · completed · /usr/bin/python3 -c "a,b=0,1\nfor  │ │
-│                                            ││ │ _ in range(20): a,b=b,a+b\nprint(a)"                               │ │
-│                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││ ╭────────────────────────────── Prompt ──────────────────────────────╮ │
-│                                            ││ │ Fixture workflow for live TUI telemetry panels.                    │ │
-│                                            ││ ╰────────────────────────────────────────────────────────────────────╯ │
-│                                            ││                                                                        │
-│                                            ││                                                                        │
 │                                            ││                                                                        │
 │                                            ││                                                                        │
 ╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯

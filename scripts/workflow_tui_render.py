@@ -709,9 +709,11 @@ def make_run_command_detail(run: dict[str, Any], *, detail_height: int | None = 
     panels: list[Any] = [
         make_run_facts_panel(run),
         make_run_live_stats_panel(run, live),
-        Panel(make_run_agents_table(run, selected_agent, 8), title="Run Agents", border_style="cyan", box=box.ROUNDED),
-        Panel(make_run_live_strip(run, live), title="Live Ops", border_style="yellow", box=box.ROUNDED),
     ]
+    if detail_height is None or detail_height >= 28:
+        panels.append(Panel(make_run_agents_table(run, selected_agent, 8), title="Run Agents", border_style="cyan", box=box.ROUNDED))
+    if detail_height is None or detail_height >= 34:
+        panels.append(Panel(make_run_live_strip(run, live), title="Live Ops", border_style="yellow", box=box.ROUNDED))
     return Group(*panels)
 
 

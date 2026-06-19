@@ -5998,7 +5998,7 @@ class WorkflowScriptTests(unittest.TestCase):
 
     @slow_test
     def test_snapshot_run_live_panels_match_fixture(self) -> None:
-        """Keep run-level live output visible above prompt and metrics panels."""
+        """Keep command-mode run operations and agents visible for live runs."""
         rendered = self.run_script(
             "workflow_tui.py",
             "--snapshot",
@@ -6014,8 +6014,7 @@ class WorkflowScriptTests(unittest.TestCase):
         ).stdout
         expected = (SNAPSHOTS / "snapshot-run-live-panels.txt").read_text(encoding="utf-8")
         self.assertEqual(rendered, expected)
-        self.assertLess(rendered.index("Merged Live Output"), rendered.index("Latest Tool Calls"))
-        self.assertLess(rendered.index("Merged Live Output"), rendered.index("Prompt"))
+        self.assertLess(rendered.index("Run Agents"), rendered.index("Live Ops"))
         self.assertIn("F(20) = 6765", rendered)
 
     def test_e2e_fixture_paths_resolve_under_fixture_dir(self) -> None:

@@ -25,6 +25,6 @@ Agent Workflows  ↑/↓  ←/→  y  p  r/q  layout: command  L             ●
 │                                          ││ │     PEND               Synthesis writer                    │ │
 │                                          ││ │                                                            │ │
 │                                          ││ ╰────────────────────────────────────────────────────────────╯ │
-│                                          ││ ╭───────────────────────── Live Ops ─────────────────────────╮ │
+│                                          ││                                                                │
 ╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
 path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json
