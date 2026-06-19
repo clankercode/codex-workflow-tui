@@ -355,7 +355,12 @@ def make_header(tab: str, *, width: int = 110, filter_text: str = "", layout_mod
 
     # Build the left portion with hints.
     if width < 100:
-        hints = ["\u2191\u2193\u2190\u2192", "y/p", "r/q"]
+        hints = ["\u2191\u2193\u2190\u2192", "y/p"]
+    elif compact:
+        hints = ["\u2191/\u2193", "\u2190/\u2192", "y", "p"]
+        if tab == "agents":
+            hints.extend(["a", "v"])
+        hints.append("r/q")
     else:
         hints = ["\u2191/\u2193 rows", "\u2190/\u2192 tabs", "y id", "p path"]
         if tab == "agents":
@@ -373,11 +378,11 @@ def make_header(tab: str, *, width: int = 110, filter_text: str = "", layout_mod
     left.append(f"layout: {layout_label}", style="green")
     left.append("  L", style="dim")
 
-    if width >= 100:
+    if width >= 130:
         # Pad left to the agents-tab width so every tab's header starts at the
         # same column.  This must be independent of the current tab.
         max_hints = ["\u2191/\u2193 rows", "\u2190/\u2192 tabs", "y id", "p path", "a scope", "v view", "r/q"]
-        agents_left_len = len(f"Agent Workflows  {'  '.join(max_hints)}")
+        agents_left_len = len(f"Agent Workflows  {'  '.join(max_hints)}  layout: {layout_label}  L")
         max_left_len = max(len(left.plain), agents_left_len)
         # Pad the left section to max_left_len.
         gap = max_left_len - len(left.plain)

@@ -1,4 +1,4 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q                  ovr  run  grf  pha  agt  evt  ● dec  a
+Agent Workflows  ↑/↓  ←/→  y  p  r/q  layout: command  L             run  grf  pha  agt  evt  ● dec  art  attn
 ╭─────────────── Decisions ────────────────╮╭─────────────────────── Decision Detail ────────────────────────╮
 │                                          ││ ╭───────────────────────── Decision ─────────────────────────╮ │
 │       Summary                            ││ │ decision_id   dec-default                                  │ │

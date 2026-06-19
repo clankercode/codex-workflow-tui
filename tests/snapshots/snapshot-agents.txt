@@ -1,4 +1,4 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  a scope  v view  r/q ovr  run  grf  pha  ● agt  evt  dec  a
+Agent Workflows  ↑/↓  ←/→  y  p  a  v  r/q  layout: command  L       run  grf  pha  ● agt  evt  dec  art  attn
 ╭───────────── Agents: Review ─────────────╮╭───────────────────────── Agent Detail ─────────────────────────╮
 │                                          ││ ╭────────────────────────── Agent ───────────────────────────╮ │
 │   State     Time       Name              ││ │ agent_id      agent-tests                                  │ │

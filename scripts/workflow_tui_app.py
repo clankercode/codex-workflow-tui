@@ -451,7 +451,7 @@ def run_textual_app(tui: Any) -> None:
 
         def action_show_attention(self) -> None:
             self.capture_selection()
-            self.tab_index = tui.TABS.index("overview")
+            self.tab_index = tui.TABS.index(tui.normalize_tab("overview"))
             self.focus_mode = False
             self.detail_scroll_offset = 0
             self.restore_selection()

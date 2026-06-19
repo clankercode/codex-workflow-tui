@@ -1,4 +1,4 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q                            ovr  run  ● grf  pha  agt  e
+Agent Workflows  ↑/↓  ←/→  y  p  r/q  layout: command  L             run  ● grf  pha  agt  evt  dec  art  attn
 ╭──────── Agents: Review ────────╮╭──────────────────────────── Dependency Graph ────────────────────────────╮
 │    Workflow                    ││ ╭────────────────────────── Dependency Graph ──────────────────────────╮ │
 │ ▸  Fixture Workflow With Para… ││ │                                    ┌────────────────────────┐        │ │

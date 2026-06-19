@@ -1,4 +1,4 @@
-Agent Workflows  ↑↓←→  y/p  r/q         ovr  run  grf  pha  agt  ● evt  dec  art
+Agent Workflows  ↑↓←→  y/p  layout: command  L run  grf  pha  agt  ● evt  dec  a
 ╭─────────────── Events ───────────────╮╭──────────── Event Detail ────────────╮
 │                                      ││ ╭───────────── Event ──────────────╮ │
 │   Time               Type            ││ │ event_id      evt-synthesis      │ │

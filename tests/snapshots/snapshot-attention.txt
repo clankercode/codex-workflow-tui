@@ -1,7 +1,7 @@
 ╭─ New attention ────────────────────────────────────────────────────────────────────────────────────────────╮
 │ ● Check failed: unit tests                                                                                 │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q                                      ● ovr  run  grf  p
+Agent Workflows  ↑/↓  ←/→  y  p  r/q  layout: command  L             run  grf  pha  agt  evt  dec  art  ● attn
 ╭─────────────── Attention ────────────────╮╭──────────────────────────── Detail ────────────────────────────╮
 │                                          ││ ╭───────────────── Check failed: unit tests ─────────────────╮ │
 │       Sev    Kind        Title           ││ │ severity      critical                                     │ │
