@@ -152,7 +152,14 @@ from workflow_tui_render import (  # noqa: F401
     make_runs_table,
     make_facts_table,
     make_facts_grid,
+    make_run_facts_panel,
+    make_run_live_stats_panel,
+    make_run_live_strip,
+    make_run_command_detail,
+    make_run_ops_detail,
+    make_run_timeline_detail,
     make_run_detail,
+    make_run_agents_table,
     merged_live_output_text,
     make_phase_table,
     make_agent_table,
@@ -350,8 +357,11 @@ def make_detail_body(
     agent_view: str = "live",
     agent_scope: str = "phase",
     filter_text: str = "",
+    layout_mode: str = DEFAULT_LAYOUT_MODE,
+    selected_run_agent_index: int = 0,
 ) -> Any:
     tab = normalize_tab(tab)
+    layout_mode = normalize_layout_mode(layout_mode)
     if not rows and active_filter(filter_text):
         return Text(filter_empty_message(filter_text), style="dim")
     if tab == "attention":
@@ -361,7 +371,24 @@ def make_detail_body(
     if tab == "runs":
         if not rows:
             return Text("No run selected.", style="dim")
-        return make_run_detail(rows[clamp_index(selected, len(rows))], detail_height=detail_height)
+        selected_run = rows[clamp_index(selected, len(rows))]
+        if layout_mode == "ops":
+            return make_run_ops_detail(
+                selected_run,
+                detail_height=detail_height,
+                selected_agent=selected_run_agent_index,
+            )
+        if layout_mode == "timeline":
+            return make_run_timeline_detail(
+                selected_run,
+                detail_height=detail_height,
+                selected_agent=selected_run_agent_index,
+            )
+        return make_run_command_detail(
+            selected_run,
+            detail_height=detail_height,
+            selected_agent=selected_run_agent_index,
+        )
     if tab == "graph":
         if not rows:
             return Text("No run selected.", style="dim")
@@ -448,6 +475,7 @@ def render_dashboard(
     focus: bool = False,
     scroll_offset: int = 0,
     layout_mode: str = DEFAULT_LAYOUT_MODE,
+    selected_run_agent_index: int = 0,
 ) -> Any:
     tab = normalize_tab(tab)
     layout_mode = normalize_layout_mode(layout_mode)
@@ -502,6 +530,8 @@ def render_dashboard(
         agent_view=agent_view,
         agent_scope=agent_scope,
         filter_text=filter_text,
+        layout_mode=layout_mode,
+        selected_run_agent_index=selected_run_agent_index,
     )
     use_scroll = scroll_offset > 0
     detail_title = detail_panel_title(tab)
@@ -592,6 +622,7 @@ def render_snapshot(
     focus: bool = False,
     detail_scroll: int = 0,
     layout_mode: str | None = None,
+    selected_run_agent_index: int = 0,
 ) -> str:
     """Render the TUI as deterministic text for snapshot tests."""
     tab = normalize_tab(tab)
@@ -623,6 +654,7 @@ def render_snapshot(
             focus=focus,
             scroll_offset=detail_scroll,
             layout_mode=layout_mode,
+            selected_run_agent_index=selected_run_agent_index,
         )
     )
     return normalize_snapshot(console.export_text(styles=False), width, height)

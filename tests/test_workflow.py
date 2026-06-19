@@ -3701,6 +3701,30 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(workflow_tui.next_layout_mode("timeline"), "command")
         self.assertEqual(workflow_tui.next_layout_mode("bad"), "ops")
 
+    def test_runs_snapshot_supports_layout_modes(self) -> None:
+        for layout, expected_text in [
+            ("command", "Run Agents"),
+            ("ops", "Live Console"),
+            ("timeline", "Timeline"),
+        ]:
+            with self.subTest(layout=layout):
+                rendered = self.run_script(
+                    "workflow_tui.py",
+                    "--snapshot",
+                    "--fixture",
+                    str(FIXTURE),
+                    "--tab",
+                    "runs",
+                    "--layout",
+                    layout,
+                    "--width",
+                    "120",
+                    "--height",
+                    "34",
+                    env=self.snapshot_env(),
+                ).stdout
+                self.assertIn(expected_text, rendered)
+
     def test_active_header_tab_is_visible_at_supported_widths(self) -> None:
         sys.path.insert(0, str(SCRIPTS))
         import workflow_tui  # pylint: disable=import-outside-toplevel
@@ -3730,17 +3754,19 @@ class WorkflowScriptTests(unittest.TestCase):
     def test_snapshot_fixtures_match_checked_in_screens(self) -> None:
         """Render every TUI tab from fixtures and compare to text snapshots."""
         cases = [
-            ("attention", "snapshot-attention.txt", "0"),
-            ("runs", "snapshot-runs.txt", "0"),
-            ("graph", "snapshot-graph.txt", "0"),
-            ("phases", "snapshot-phases.txt", "1"),
-            ("agents", "snapshot-agents.txt", "1"),
-            ("events", "snapshot-events.txt", "0"),
-            ("decisions", "snapshot-decisions.txt", "0"),
-            ("artifacts", "snapshot-artifacts.txt", "0"),
+            ("attention", "snapshot-attention.txt", "0", "command"),
+            ("runs", "snapshot-runs.txt", "0", "command"),
+            ("runs", "snapshot-runs-ops.txt", "0", "ops"),
+            ("runs", "snapshot-runs-timeline.txt", "0", "timeline"),
+            ("graph", "snapshot-graph.txt", "0", "command"),
+            ("phases", "snapshot-phases.txt", "1", "command"),
+            ("agents", "snapshot-agents.txt", "1", "command"),
+            ("events", "snapshot-events.txt", "0", "command"),
+            ("decisions", "snapshot-decisions.txt", "0", "command"),
+            ("artifacts", "snapshot-artifacts.txt", "0", "command"),
         ]
-        for tab, snapshot_name, row_index in cases:
-            with self.subTest(tab=tab):
+        for tab, snapshot_name, row_index, layout in cases:
+            with self.subTest(tab=tab, layout=layout):
                 rendered = self.run_script(
                     "workflow_tui.py",
                     "--snapshot",
@@ -3754,6 +3780,8 @@ class WorkflowScriptTests(unittest.TestCase):
                     "30",
                     "--row-index",
                     row_index,
+                    "--layout",
+                    layout,
                     env=self.snapshot_env(),
                 ).stdout
                 expected = (SNAPSHOTS / snapshot_name).read_text(encoding="utf-8")

@@ -1,0 +1,30 @@
+Agent Workflows  ↑/↓  ←/→  y  p  r/q  layout: timeline  L            ● run  grf  pha  agt  evt  dec  art  attn
+╭────────────────── Runs ──────────────────╮╭────────────────────────── Run Detail ──────────────────────────╮
+│    Workflow                              ││ ╭───────────────────────── Timeline ─────────────────────────╮ │
+│ ▸  Fixture Workflow With Parallel Review ││ │                                                            │ │
+│      > RUN > 6m 00s > Security reviewer… ││ │       State   Name                                         │ │
+│    Completed Smoke Fixture               ││ │  ────────────────────────────────────────────────────────  │ │
+│      > DONE > 30m 00s                    ││ │   ▸   DONE    Research                                     │ │
+│    Failed Worker Fixture                 ││ │       RUN     Review                                       │ │
+│      > FAIL > 30m 00s                    ││ │       PEND    Synthesis                                    │ │
+│    Blocked Decision Fixture              ││ │                                                            │ │
+│      > BLCK > 3h 06m                     ││ ╰────────────────────────────────────────────────────────────╯ │
+│    Paused Operator Fixture               ││ ╭──────────────────────── Run Agents ────────────────────────╮ │
+│      > PAUS > 4h 06m                     ││ │                                                            │ │
+│    Cancelled Scope Fixture               ││ │   State     Time       Name                                │ │
+│      > CNCL > 30m 00s                    ││ │  ────────────────────────────────────────────────────────  │ │
+│    Pending Dispatch Fixture              ││ │   ▸ RUN     4m 40s     Security reviewer                   │ │
+│      > PEND > 6h 06m                     ││ │     DONE    1m 38s     Test coverage reviewer              │ │
+│                                          ││ │     PEND               Synthesis writer                    │ │
+│                                          ││ │                                                            │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
+│                                          ││ │ elapsed     6m 00s   tokens     unknown tail tools 0       │ │
+│                                          ││ │ active      1        longest    Securi… agents     3       │ │
+│                                          ││ │ phases      3        checks     1                          │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
+path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json

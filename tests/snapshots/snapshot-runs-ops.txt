@@ -1,0 +1,30 @@
+Agent Workflows  ↑/↓  ←/→  y  p  r/q  layout: ops  L                 ● run  grf  pha  agt  evt  dec  art  attn
+╭────────────────── Runs ──────────────────╮╭────────────────────────── Run Detail ──────────────────────────╮
+│    Workflow                              ││ ╭─────────────────────── Live Console ───────────────────────╮ │
+│ ▸  Fixture Workflow With Parallel Review ││ │ ● Security reviewer 4m 40s                                 │ │
+│      > RUN > 6m 00s > Security reviewer… ││ │ No live output yet.                                        │ │
+│    Completed Smoke Fixture               ││ ╰────────────────────────────────────────────────────────────╯ │
+│      > DONE > 30m 00s                    ││ ╭──────────────────────── Live Stats ────────────────────────╮ │
+│    Failed Worker Fixture                 ││ │ elapsed     6m 00s   tokens     unknown tail tools 0       │ │
+│      > FAIL > 30m 00s                    ││ │ active      1        longest    Securi… agents     3       │ │
+│    Blocked Decision Fixture              ││ │ phases      3        checks     1                          │ │
+│      > BLCK > 3h 06m                     ││ ╰────────────────────────────────────────────────────────────╯ │
+│    Paused Operator Fixture               ││ ╭────────────────────── Active Agents ───────────────────────╮ │
+│      > PAUS > 4h 06m                     ││ │                                                            │ │
+│    Cancelled Scope Fixture               ││ │   State     Time       Name                                │ │
+│      > CNCL > 30m 00s                    ││ │  ────────────────────────────────────────────────────────  │ │
+│    Pending Dispatch Fixture              ││ │   ▸ RUN     4m 40s     Security reviewer                   │ │
+│      > PEND > 6h 06m                     ││ │     DONE    1m 38s     Test coverage reviewer              │ │
+│                                          ││ │     PEND               Synthesis writer                    │ │
+│                                          ││ │                                                            │ │
+│                                          ││ ╰────────────────────────────────────────────────────────────╯ │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+│                                          ││                                                                │
+╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────╯
+path: /home/xertrov/.llm-general/ai-coding/codex/workflow-system/state/runs/wf-fixture-rich/run.json

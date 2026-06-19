@@ -635,31 +635,26 @@ def merged_live_output_text(
     return result
 
 
-def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) -> Group:
-    live = collect_run_activity(run)
-    metrics = run.get("metrics", {})
+def make_run_facts_panel(run: dict[str, Any]) -> Panel:
     control = run.get("control") or {}
+    rows = [
+        ("id", run.get("run_id", "")),
+        ("title", run.get("title", "")),
+        ("status", run.get("status", "")),
+        ("mode", run.get("mode", "")),
+        ("paused", "yes" if control.get("paused") else "no"),
+        ("stop req", "yes" if control.get("stop_requested") else "no"),
+        ("cwd", run.get("cwd", "")),
+        ("updated", display_timestamp(run.get("updated_at", ""))),
+        ("state", path_text(run)),
+    ]
+    return Panel(make_facts_table(rows), title="Run", border_style="blue", box=box.ROUNDED)
+
+
+def make_run_live_stats_panel(run: dict[str, Any], live: dict[str, Any]) -> Panel:
+    metrics = run.get("metrics", {})
     run_is_live = str(run.get("status", "")) not in workflow_state.TERMINAL_STATUS_VALUES
     run_ago = finished_ago_text(run)
-    facts = make_facts_table(
-        [
-            ("id", run.get("run_id", "")),
-            ("title", run.get("title", "")),
-            ("status", run.get("status", "")),
-            ("mode", run.get("mode", "")),
-            ("paused", "yes" if control.get("paused") else "no"),
-            ("stop req", "yes" if control.get("stop_requested") else "no"),
-            ("cwd", run.get("cwd", "")),
-            ("updated", display_timestamp(run.get("updated_at", ""))),
-            ("state", path_text(run)),
-        ]
-    )
-    prompt = Panel(
-        Text(str(run.get("prompt", "")), overflow="fold"),
-        title="Prompt",
-        border_style="blue",
-        box=box.ROUNDED,
-    )
     token_display = format_token_total_with_throughput(
         live.get("tokens", {}),
         started_at=run.get("started_at") or run.get("created_at"),
@@ -680,12 +675,13 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
         live_rows.insert(0, (label, run_duration))
     if run_ago:
         live_rows.insert(1, ("finished", run_ago))
-    live_stats = Panel(make_facts_grid(live_rows), title="Live Stats", border_style="magenta", box=box.ROUNDED)
-    tool_text = "\n".join(live.get("latest_tool_calls", [])[-8:]) or "No tool calls recorded yet."
+    return Panel(make_facts_grid(live_rows), title="Live Stats", border_style="magenta", box=box.ROUNDED)
+
+
+def make_run_live_strip(run: dict[str, Any], live: dict[str, Any]) -> Text:
     merged_output = merged_live_output_text(
         live.get("activities", []), run.get("agents", [])
     )
-    output_label = f"Merged Live Output — {live.get('latest_output_agent', '')}" if live.get("latest_output_agent") else "Merged Live Output"
     running_agents = live.get("running_agents", [])
     if running_agents:
         agents_text = Text()
@@ -705,7 +701,52 @@ def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) ->
             live.get("activities", []), run.get("agents", [])
         )
         merged_output.append_text(output_lines)
-    panels: list[Any] = [facts, live_stats, Panel(merged_output, title=output_label, border_style="yellow", box=box.ROUNDED)]
+    return merged_output
+
+
+def make_run_command_detail(run: dict[str, Any], *, detail_height: int | None = None, selected_agent: int = 0) -> Group:
+    live = collect_run_activity(run)
+    panels: list[Any] = [
+        make_run_facts_panel(run),
+        make_run_live_stats_panel(run, live),
+        Panel(make_run_agents_table(run, selected_agent, 8), title="Run Agents", border_style="cyan", box=box.ROUNDED),
+        Panel(make_run_live_strip(run, live), title="Live Ops", border_style="yellow", box=box.ROUNDED),
+    ]
+    return Group(*panels)
+
+
+def make_run_ops_detail(run: dict[str, Any], *, detail_height: int | None = None, selected_agent: int = 0) -> Group:
+    live = collect_run_activity(run)
+    return Group(
+        Panel(make_run_live_strip(run, live), title="Live Console", border_style="yellow", box=box.ROUNDED),
+        make_run_live_stats_panel(run, live),
+        Panel(make_run_agents_table(run, selected_agent, 6), title="Active Agents", border_style="cyan", box=box.ROUNDED),
+    )
+
+
+def make_run_timeline_detail(run: dict[str, Any], *, detail_height: int | None = None, selected_agent: int = 0) -> Group:
+    return Group(
+        Panel(make_phase_table(ordered_phases(run), 0, 8), title="Timeline", border_style="green", box=box.ROUNDED),
+        Panel(make_run_agents_table(run, selected_agent, 6), title="Run Agents", border_style="cyan", box=box.ROUNDED),
+        make_run_live_stats_panel(run, collect_run_activity(run)),
+    )
+
+
+def make_run_detail(run: dict[str, Any], *, detail_height: int | None = None) -> Group:
+    live = collect_run_activity(run)
+    prompt = Panel(
+        Text(str(run.get("prompt", "")), overflow="fold"),
+        title="Prompt",
+        border_style="blue",
+        box=box.ROUNDED,
+    )
+    tool_text = "\n".join(live.get("latest_tool_calls", [])[-8:]) or "No tool calls recorded yet."
+    output_label = f"Merged Live Output — {live.get('latest_output_agent', '')}" if live.get("latest_output_agent") else "Merged Live Output"
+    panels: list[Any] = [
+        make_run_facts_panel(run),
+        make_run_live_stats_panel(run, live),
+        Panel(make_run_live_strip(run, live), title=output_label, border_style="yellow", box=box.ROUNDED),
+    ]
     if detail_height is None or detail_height >= 28:
         if live.get("latest_tool_calls"):
             panels.append(Panel(Text(tool_text, overflow="fold"), title="Latest Tool Calls", border_style="cyan", box=box.ROUNDED))
@@ -759,6 +800,11 @@ def make_agent_table(agents: list[dict[str, Any]], selected: int, visible: int, 
             style=style,
         )
     return table
+
+
+def make_run_agents_table(run: dict[str, Any], selected: int = 0, visible: int = 8) -> Table:
+    agents = list(run.get("agents", []))
+    return make_agent_table(agents, selected, visible, "No agents for this run.")
 
 
 def make_agent_activity_detail(agent: dict[str, Any], run: dict[str, Any] | None = None, agent_view: str = "live") -> Group:
