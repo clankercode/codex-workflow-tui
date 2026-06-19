@@ -256,6 +256,15 @@ class WatchEmitTests(unittest.TestCase):
         lines_after_first = output.strip().splitlines()
         self.assertEqual(len(lines_after_first), 1)
 
+    def test_zero_interval_uses_minimum_sleep(self) -> None:
+        """A zero interval must not turn watch-emit into a busy loop."""
+        args = _make_args(interval=0.0, state_dir=str(self.state_dir), max_iters=2)
+
+        with mock.patch("workflow_watch_emit.time.sleep") as sleep:
+            workflow_watch_emit.cmd_watch_emit(args)
+
+        sleep.assert_called_once_with(workflow_watch_emit.MIN_POLL_INTERVAL)
+
     def test_run_id_mode_watches_terminal_run(self) -> None:
         """Watching a terminal run by ID still emits its minimal baseline."""
         run_id = self._init_run(status="completed")

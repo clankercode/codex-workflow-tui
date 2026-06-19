@@ -29,6 +29,7 @@ import workflow_state
 
 _SNAPSHOT_NAME = "watch-state.json"
 _MAX_EVENT_LINES = 3
+MIN_POLL_INTERVAL = 0.05
 _shutdown = False
 
 
@@ -53,6 +54,11 @@ def _parse_interval(raw: str) -> float:
         raise argparse.ArgumentTypeError(
             f"invalid interval value: {raw!r} (expected seconds, e.g. 30 or 30s)"
         )
+
+
+def _poll_sleep_seconds(interval: float) -> float:
+    """Return a sleep interval that cannot busy-loop the watcher."""
+    return max(interval, MIN_POLL_INTERVAL)
 
 
 def _snapshot_path(run_dir: Path) -> Path:
@@ -201,7 +207,7 @@ def _watch_single(
             return
         if _shutdown:
             return
-        time.sleep(interval)
+        time.sleep(_poll_sleep_seconds(interval))
         if _shutdown:
             return
 
@@ -259,7 +265,7 @@ def _watch_all(
             return
         if _shutdown:
             return
-        time.sleep(interval)
+        time.sleep(_poll_sleep_seconds(interval))
         if _shutdown:
             return
 
