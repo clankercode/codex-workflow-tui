@@ -355,7 +355,7 @@ def make_header(tab: str, *, width: int = 110, filter_text: str = "", layout_mod
 
     # Build the left portion with hints.
     if width < 100:
-        hints = ["\u2191\u2193\u2190\u2192", "y/p"]
+        hints = []
     elif compact:
         hints = ["\u2191/\u2193", "\u2190/\u2192", "y", "p"]
         if tab == "agents":
@@ -368,7 +368,8 @@ def make_header(tab: str, *, width: int = 110, filter_text: str = "", layout_mod
         hints.append("r/q")
     left = Text()
     left.append("Agent Workflows", style="bold bright_cyan")
-    left.append(f"  {'  '.join(hints)}", style="dim")
+    if hints:
+        left.append(f"  {'  '.join(hints)}", style="dim")
     normalized = active_filter(filter_text)
     if normalized:
         left.append("  ")

@@ -370,7 +370,8 @@ Use `--dry-run` to print the key/capture plan without starting tmux.
 - `Enter`: focus the selected detail full-width.
 - `Escape`: leave focus mode, or quit when not focused.
 - `/`: cycle common filters.
-- `!`: jump back to the attention overview.
+- `!`: jump to the `attention` tab.
+- `L`: reserved layout-mode affordance shown in the header as `layout: command  L`; Task 1 displays the current layout mode but does not yet cycle modes in the live TUI.
 - `c`: clear the active filter.
 - `a`: toggle Agents between selected-phase scope and all agents.
 - `v`: toggle the selected agent detail between live output and prompt.

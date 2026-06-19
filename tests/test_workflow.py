@@ -3679,8 +3679,10 @@ class WorkflowScriptTests(unittest.TestCase):
         sys.path.insert(0, str(SCRIPTS))
         import workflow_tui  # pylint: disable=import-outside-toplevel
 
-        header = workflow_tui.make_header("attention", width=110)
-        self.assertIn("attn", header.plain[:110])
+        for width in (80, 110):
+            with self.subTest(width=width):
+                header = workflow_tui.make_header("attention", width=width)
+                self.assertIn("attn", header.plain[:width])
 
     @slow_test
     def test_snapshot_fixtures_match_checked_in_screens(self) -> None:
@@ -4294,6 +4296,15 @@ class WorkflowScriptTests(unittest.TestCase):
 
         self.assertEqual(observations["tab"], "attention")
         self.assertEqual(observations["tab_index"], FakeTui.TABS.index("attention"))
+
+    def test_operations_docs_include_attention_and_layout_keys(self) -> None:
+        """Keep operator key docs aligned with visible Task 1 TUI labels."""
+        text = (ROOT / "references" / "operations.md").read_text(encoding="utf-8")
+
+        self.assertIn("`!`: jump to the `attention` tab.", text)
+        self.assertIn("`L`: reserved layout-mode affordance", text)
+        self.assertIn("`layout: command  L`", text)
+        self.assertNotIn("attention overview", text)
 
     def test_live_tui_palette_exposes_workflow_control_actions(self) -> None:
         """Make pause, resume, and stop discoverable through the Textual command palette."""
