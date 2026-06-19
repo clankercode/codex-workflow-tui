@@ -91,6 +91,7 @@ def run_textual_app(tui: Any) -> None:
             binding("/", "cycle_filter", "Filter"),
             binding("!", "show_attention", "Attn"),
             binding("c", "clear_filter", "Clear"),
+            binding("l", "cycle_layout", "Layout"),
             binding("tab", "next_tab", "Next", show=False),
             binding("shift+tab", "previous_tab", "Prev", show=False),
             binding("right", "next_tab", "Next", show=False),
@@ -118,6 +119,7 @@ def run_textual_app(tui: Any) -> None:
             self.filter_index = 0
             self.filter_presets = ("", "failed", "blocked", "running", "artifact")
             self.focus_mode = False
+            self.layout_mode = tui.load_tui_preferences()["layout_mode"]
             self.selected_run_id: str | None = None
             self.selected_row_ids: dict[str, str | None] = {tab: None for tab in tui.TABS}
             self.fallback_indexes: dict[str, int] = {tab: 0 for tab in tui.TABS}
@@ -351,6 +353,7 @@ def run_textual_app(tui: Any) -> None:
                     filter_text=self.filter_text,
                     focus=self.focus_mode,
                     scroll_offset=self.detail_scroll_offset,
+                    layout_mode=self.layout_mode,
                 )
             )
 
@@ -447,6 +450,15 @@ def run_textual_app(tui: Any) -> None:
             self.filter_index = 0
             self.restore_selection()
             self.notify("Filter cleared", title="Workflow", timeout=0.8)
+            self.update_dashboard()
+
+        def action_cycle_layout(self) -> None:
+            self.layout_mode = tui.next_layout_mode(self.layout_mode)
+            try:
+                tui.save_tui_preferences({"layout_mode": self.layout_mode})
+                self.notify(f"Layout: {self.layout_mode}", title="Workflow", timeout=0.8)
+            except OSError as exc:
+                self.notify(f"Layout: {self.layout_mode} (not saved: {exc})", title="Workflow", severity="warning", timeout=2.0)
             self.update_dashboard()
 
         def action_show_attention(self) -> None:

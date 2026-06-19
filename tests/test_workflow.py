@@ -3675,6 +3675,32 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(workflow_tui.normalize_layout_mode("ops"), "ops")
         self.assertEqual(workflow_tui.normalize_layout_mode("bogus"), "command")
 
+    def test_tui_preferences_read_write_and_fallback(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "prefs.json"
+            self.assertEqual(workflow_tui.load_tui_preferences(path)["layout_mode"], "command")
+
+            workflow_tui.save_tui_preferences({"layout_mode": "ops"}, path)
+            self.assertEqual(workflow_tui.load_tui_preferences(path)["layout_mode"], "ops")
+
+            path.write_text("{bad json", encoding="utf-8")
+            self.assertEqual(workflow_tui.load_tui_preferences(path)["layout_mode"], "command")
+
+            path.write_text(json.dumps({"layout_mode": "nope"}), encoding="utf-8")
+            self.assertEqual(workflow_tui.load_tui_preferences(path)["layout_mode"], "command")
+
+    def test_layout_mode_cycle_order(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        self.assertEqual(workflow_tui.next_layout_mode("command"), "ops")
+        self.assertEqual(workflow_tui.next_layout_mode("ops"), "timeline")
+        self.assertEqual(workflow_tui.next_layout_mode("timeline"), "command")
+        self.assertEqual(workflow_tui.next_layout_mode("bad"), "ops")
+
     def test_active_header_tab_is_visible_at_supported_widths(self) -> None:
         sys.path.insert(0, str(SCRIPTS))
         import workflow_tui  # pylint: disable=import-outside-toplevel
@@ -4210,6 +4236,110 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertTrue(observations["return_agents_scope"])
         self.assertEqual(observations["back_phases_refreshes"], 4)
         self.assertFalse(observations["phases_scope"])
+
+    def test_live_layout_action_cycles_persists_and_renders(self) -> None:
+        import types
+
+        sys.path.insert(0, str(SCRIPTS))
+        module_names = ["textual", "textual.app", "textual.screen", "textual.worker", "textual.widgets", "workflow_tui_app"]
+        original_modules = {name: sys.modules.get(name) for name in module_names}
+        for name in module_names:
+            sys.modules.pop(name, None)
+
+        observations: dict[str, object] = {}
+
+        class FakeApp:
+            def __init__(self) -> None:
+                self.size = types.SimpleNamespace(width=110, height=30)
+
+            def notify(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def run(self) -> None:
+                self.dashboard = types.SimpleNamespace(size=types.SimpleNamespace(width=110, height=30), update=lambda value: observations.setdefault("rendered", value))
+                self.runs = [{"run_id": "run-1", "agents": []}]
+                self.action_cycle_layout()
+                observations["layout_mode"] = self.layout_mode
+
+        class FakeStatic:
+            pass
+
+        class FakeTui:
+            TABS = ("runs", "agents", "attention")
+            AGENT_SCOPES = ("phase", "all")
+            AGENT_VIEWS = ("live", "prompt")
+            LAYOUT_MODES = ("command", "ops", "timeline")
+            UPDATE_CHECK_INTERVAL = 999.0
+            UPDATE_CHECK_TIMEOUT = 1.0
+            UPDATE_PULL_TIMEOUT = 1.0
+            saved: list[dict[str, str]] = []
+
+            @staticmethod
+            def load_tui_preferences() -> dict[str, str]:
+                return {"layout_mode": "command"}
+
+            @staticmethod
+            def save_tui_preferences(preferences: dict[str, str]) -> None:
+                FakeTui.saved.append(preferences)
+
+            @staticmethod
+            def next_layout_mode(current: str) -> str:
+                return "ops" if current == "command" else "timeline"
+
+            @staticmethod
+            def render_dashboard(*_args: object, **kwargs: object) -> str:
+                observations["render_layout"] = kwargs["layout_mode"]
+                return f"layout={kwargs['layout_mode']}"
+
+            @staticmethod
+            def current_rows_for(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+                return []
+
+            @staticmethod
+            def index_for_key(*_args: object, **_kwargs: object) -> int:
+                return 0
+
+            @staticmethod
+            def clamp_index(index: int, length: int) -> int:
+                return 0 if length <= 0 else max(0, min(index, length - 1))
+
+            @staticmethod
+            def action_enabled_for_tab(_tab: str, _action: str) -> bool:
+                return True
+
+        try:
+            sys.modules["textual"] = types.ModuleType("textual")
+            app_module = types.ModuleType("textual.app")
+            app_module.App = FakeApp
+            app_module.ComposeResult = object
+            app_module.SystemCommand = object
+            sys.modules["textual.app"] = app_module
+            screen_module = types.ModuleType("textual.screen")
+            screen_module.Screen = object
+            sys.modules["textual.screen"] = screen_module
+            worker_module = types.ModuleType("textual.worker")
+            worker_module.Worker = type("Worker", (), {"StateChanged": object})
+            worker_module.WorkerState = types.SimpleNamespace(ERROR="error", SUCCESS="success")
+            sys.modules["textual.worker"] = worker_module
+            widgets_module = types.ModuleType("textual.widgets")
+            widgets_module.Footer = FakeStatic
+            widgets_module.Header = FakeStatic
+            widgets_module.Static = FakeStatic
+            sys.modules["textual.widgets"] = widgets_module
+
+            import workflow_tui_app  # pylint: disable=import-outside-toplevel
+
+            workflow_tui_app.run_textual_app(FakeTui)
+        finally:
+            for name, original in original_modules.items():
+                if original is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = original
+
+        self.assertEqual(observations["layout_mode"], "ops")
+        self.assertEqual(observations["render_layout"], "ops")
+        self.assertEqual(FakeTui.saved, [{"layout_mode": "ops"}])
 
     def test_live_tui_show_attention_action_targets_attention_tab(self) -> None:
         """The ! binding switches to the visible attention tab."""

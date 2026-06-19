@@ -197,6 +197,34 @@ def load_fixture(path: str) -> list[dict[str, Any]]:
     return data
 
 
+def tui_preferences_path() -> Path:
+    return workflow_state.workflow_root() / "tui-preferences.json"
+
+
+def load_tui_preferences(path: Path | None = None) -> dict[str, str]:
+    pref_path = path or tui_preferences_path()
+    try:
+        data = json.loads(pref_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    return {"layout_mode": normalize_layout_mode(data.get("layout_mode") if isinstance(data, dict) else None)}
+
+
+def save_tui_preferences(preferences: dict[str, str], path: Path | None = None) -> None:
+    pref_path = path or tui_preferences_path()
+    pref_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"layout_mode": normalize_layout_mode(preferences.get("layout_mode"))}
+    tmp = pref_path.with_suffix(pref_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(pref_path)
+
+
+def next_layout_mode(current: str) -> str:
+    current = normalize_layout_mode(current)
+    index = LAYOUT_MODES.index(current)
+    return LAYOUT_MODES[(index + 1) % len(LAYOUT_MODES)]
+
+
 # ---------------------------------------------------------------------------
 # Copy support
 # ---------------------------------------------------------------------------
