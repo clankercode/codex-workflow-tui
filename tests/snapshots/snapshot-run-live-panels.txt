@@ -1,4 +1,4 @@
-Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q                                 ovr  ● run  grf  pha  agt  evt  d
+Agent Workflows  ↑/↓ rows  ←/→ tabs  y id  p path  r/q  layout: command  L     ● run  grf  pha  agt  evt  dec  art  attn
 ╭─────────────────── Runs ───────────────────╮╭────────────────────────────── Run Detail ──────────────────────────────╮
 │    Workflow                                ││ id          wf-fixture-e2e-live                                        │
 │ ▸  Live Telemetry Fixture                  ││ title       Live Telemetry Fixture                                     │

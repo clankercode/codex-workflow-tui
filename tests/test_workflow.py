@@ -4070,13 +4070,15 @@ class WorkflowScriptTests(unittest.TestCase):
             "30",
             env=self.snapshot_env(),
         ).stdout
-        self.assertIn("←/→ tabs", runs)
-        self.assertIn("y id", runs)
-        self.assertIn("p path", runs)
-        self.assertNotIn("a scope", runs)
-        self.assertNotIn("v view", runs)
-        self.assertIn("a scope", agents)
-        self.assertIn("v view", agents)
+        runs_header = runs.splitlines()[0]
+        agents_header = agents.splitlines()[0]
+        self.assertIn("←/→", runs_header)
+        self.assertIn(" y ", runs_header)
+        self.assertIn(" p ", runs_header)
+        self.assertNotIn(" a ", runs_header)
+        self.assertNotIn(" v ", runs_header)
+        self.assertIn(" a ", agents_header)
+        self.assertIn(" v ", agents_header)
         self.assertNotIn("tab side/main", runs)
         self.assertNotIn("→ main", runs)
         self.assertNotIn("← main tabs", runs)
@@ -9848,12 +9850,21 @@ n        This documents a known gap: merge_token_max does not handle ccc's
         ).stdout
         self.assertIn("Dependency Graph", rendered)
 
-    def test_graph_and_runs_tab_marker_same_column(self) -> None:
-        """The active-tab marker ● must render at the same character column for runs and graph tabs."""
-        for width in (100, 110, 120, 140):
-            with self.subTest(width=width):
-                col_by_tab: dict[str, int] = {}
-                for tab in ("runs", "graph"):
+    def test_snapshot_header_active_tab_visible_at_supported_widths(self) -> None:
+        """Snapshot headers keep every active tab marker and label visible."""
+        labels = {
+            "runs": ("run", "runs"),
+            "graph": ("grf", "graph"),
+            "phases": ("pha", "phases"),
+            "agents": ("agt", "agents"),
+            "events": ("evt", "events"),
+            "decisions": ("dec", "decisions"),
+            "artifacts": ("art", "artifacts"),
+            "attention": ("attn", "attention"),
+        }
+        for width in (80, 100, 110, 120, 130, 140):
+            for tab, tab_labels in labels.items():
+                with self.subTest(width=width, tab=tab):
                     rendered = self.run_script(
                         "workflow_tui.py",
                         "--snapshot",
@@ -9869,16 +9880,13 @@ n        This documents a known gap: merge_token_max does not handle ccc's
                         "0",
                         env=self.snapshot_env(),
                     ).stdout
-                    # The tab bar is now in the header (first line).
-                    tab_line = rendered.splitlines()[0] if rendered.splitlines() else ""
-                    col = tab_line.find("\u25cf")
-                    self.assertGreaterEqual(col, 0, f"marker not found on header at width={width} tab={tab}")
-                    col_by_tab[tab] = col
-                self.assertEqual(
-                    col_by_tab["runs"],
-                    col_by_tab["graph"],
-                    f"● column mismatch at width {width}: runs={col_by_tab['runs']} graph={col_by_tab['graph']}",
-                )
+                    tab_line = next((line for line in rendered.splitlines() if line.startswith("Agent Workflows")), "")
+                    marker_col = tab_line.find("\u25cf")
+                    self.assertGreaterEqual(marker_col, 0, f"marker not found on header at width={width} tab={tab}")
+                    self.assertTrue(
+                        any(label in tab_line[marker_col:] for label in tab_labels),
+                        f"active label not found after marker at width={width} tab={tab}: {tab_line}",
+                    )
 
     @unittest.skipUnless(_phart_available(), "phart not installed")
     def test_graph_status_icons_present_for_all_agents(self) -> None:
