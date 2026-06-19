@@ -49,7 +49,10 @@ STATUS_META = {
     "cancelled": ("CNCL", "red"),
     "paused": ("PAUS", "yellow"),
 }
-TABS = ("overview", "runs", "graph", "phases", "agents", "events", "decisions", "artifacts")
+LAYOUT_MODES = ("command", "ops", "timeline")
+DEFAULT_LAYOUT_MODE = "command"
+TABS = ("runs", "graph", "phases", "agents", "events", "decisions", "artifacts", "attention")
+TAB_ALIASES = {"overview": "attention"}
 AGENT_SCOPES = ("phase", "all")
 AGENT_VIEWS = ("live", "prompt")
 AGENT_ONLY_ACTIONS = frozenset({"toggle_agent_scope", "toggle_agent_view"})
@@ -219,8 +222,18 @@ def json_renderable(value: Any) -> Syntax:
     return Syntax(payload, "json", theme="ansi_dark", word_wrap=True)
 
 
+def normalize_tab(tab: str) -> str:
+    return TAB_ALIASES.get(str(tab or ""), str(tab or ""))
+
+
+def normalize_layout_mode(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return text if text in LAYOUT_MODES else DEFAULT_LAYOUT_MODE
+
+
 def action_enabled_for_tab(tab: str, action: str) -> bool:
     """Return whether a live TUI action is meaningful for the active tab."""
+    tab = normalize_tab(tab)
     return tab == "agents" or action not in AGENT_ONLY_ACTIONS
 
 
@@ -252,6 +265,7 @@ def index_for_key(rows: list[dict[str, Any]], tab: str, key: str | None) -> int:
 
 def item_key(tab: str, item: dict[str, Any], index: int) -> str:
     """Return a stable selection key for a tab row."""
+    tab = normalize_tab(tab)
     if tab == "runs":
         return str(item.get("run_id") or item.get("id") or f"run-{index}")
     if tab == "phases":
@@ -264,7 +278,7 @@ def item_key(tab: str, item: dict[str, Any], index: int) -> str:
         return str(item.get("decision_id") or f"decision-{index}")
     if tab == "artifacts":
         return str(item.get("artifact_id") or f"artifact-{index}")
-    if tab == "overview":
+    if tab == "attention":
         return str(item.get("attention_id") or f"item-{index}")
     return f"row-{index}"
 
@@ -333,7 +347,8 @@ def filter_empty_message(filter_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def make_header(tab: str, *, width: int = 110, filter_text: str = "") -> Text:
+def make_header(tab: str, *, width: int = 110, filter_text: str = "", layout_mode: str = "command") -> Text:
+    tab = normalize_tab(tab)
     compact = width < 130
     tabs = make_tabs_title(tab, compact=compact)
     tabs_len = len(tabs.plain)
@@ -353,6 +368,10 @@ def make_header(tab: str, *, width: int = 110, filter_text: str = "") -> Text:
     if normalized:
         left.append("  ")
         left.append(f"filter: {normalized}", style="bold yellow")
+    layout_label = normalize_layout_mode(layout_mode)
+    left.append("  ")
+    left.append(f"layout: {layout_label}", style="green")
+    left.append("  L", style="dim")
 
     if width >= 100:
         # Pad left to the agents-tab width so every tab's header starts at the
@@ -393,8 +412,8 @@ def make_footer(run: dict[str, Any] | None, width: int) -> Text:
 
 
 def make_tabs_title(tab: str, compact: bool = False) -> Text:
+    tab = normalize_tab(tab)
     labels = {
-        "overview": "ovr",
         "runs": "run",
         "graph": "grf",
         "phases": "pha",
@@ -402,6 +421,7 @@ def make_tabs_title(tab: str, compact: bool = False) -> Text:
         "events": "evt",
         "decisions": "dec",
         "artifacts": "art",
+        "attention": "attn",
     }
     title = Text()
     for name in TABS:
@@ -427,8 +447,8 @@ def make_panel_title(tab: str, *, compact: bool = False, filter_text: str = "") 
 
 def detail_panel_title(tab: str) -> str:
     """Return a contextual detail panel title (not the tab bar)."""
+    tab = normalize_tab(tab)
     labels = {
-        "overview": "Detail",
         "runs": "Run Detail",
         "graph": "Dependency Graph",
         "phases": "Phase Detail",
@@ -436,6 +456,7 @@ def detail_panel_title(tab: str) -> str:
         "events": "Event Detail",
         "decisions": "Decision Detail",
         "artifacts": "Artifact Detail",
+        "attention": "Detail",
     }
     return labels.get(tab, tab.capitalize())
 

@@ -3658,6 +3658,23 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("positive integer", result.stderr)
 
+    def test_tui_visible_tabs_use_attention_not_overview(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        self.assertIn("attention", workflow_tui.TABS)
+        self.assertNotIn("overview", workflow_tui.TABS)
+        self.assertEqual(workflow_tui.TABS[0], "runs")
+        self.assertEqual(workflow_tui.TABS[-1], "attention")
+
+    def test_layout_mode_validation_defaults_to_command(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        self.assertEqual(workflow_tui.normalize_layout_mode(None), "command")
+        self.assertEqual(workflow_tui.normalize_layout_mode("ops"), "ops")
+        self.assertEqual(workflow_tui.normalize_layout_mode("bogus"), "command")
+
     @slow_test
     def test_snapshot_fixtures_match_checked_in_screens(self) -> None:
         """Render every TUI tab from fixtures and compare to text snapshots."""

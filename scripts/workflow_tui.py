@@ -97,7 +97,10 @@ from workflow_tui_activity import (  # noqa: F401
 )
 from workflow_tui_render import (  # noqa: F401
     STATUS_META,
+    LAYOUT_MODES,
+    DEFAULT_LAYOUT_MODE,
     TABS,
+    TAB_ALIASES,
     AGENT_SCOPES,
     AGENT_VIEWS,
     AGENT_ONLY_ACTIONS,
@@ -124,6 +127,8 @@ from workflow_tui_render import (  # noqa: F401
     path_text,
     marker_text,
     json_renderable,
+    normalize_tab,
+    normalize_layout_mode,
     action_enabled_for_tab,
     phase_rank,
     ordered_phases,
@@ -205,23 +210,24 @@ def copy_value_for_selection(
     mode: str,
 ) -> tuple[str, str]:
     """Return the label and value copied by the live TUI for the current row."""
+    tab = normalize_tab(tab)
     if not rows:
         return ("", "")
     item = rows[clamp_index(selected, len(rows))]
     id_labels = {
-        "overview": "attention_id",
         "runs": "run_id",
         "phases": "phase_id",
         "agents": "agent_id",
         "events": "event_id",
         "decisions": "decision_id",
         "artifacts": "artifact_id",
+        "attention": "attention_id",
     }
     if mode == "id":
         key = id_labels.get(tab, "id")
         return (key, str(item.get(key) or item.get("id") or ""))
     if mode == "path":
-        if tab == "overview":
+        if tab == "attention":
             run_id = str(item.get("run_id") or "")
             return ("state path", path_text({"paths": {"run_json": str(workflow_state.run_file(run_id))}}) if run_id else "")
         if tab == "runs":
@@ -254,7 +260,8 @@ def rows_for_tab(
     selected_phase_id: str | None = None,
     agent_scope: str = "phase",
 ) -> list[dict[str, Any]]:
-    if tab == "overview":
+    tab = normalize_tab(tab)
+    if tab == "attention":
         return workflow_health.attention_items(runs)
     if tab == "runs":
         return runs
@@ -281,9 +288,10 @@ def rows_for_tab(
 
 
 def make_sidebar(tab: str, rows: list[dict[str, Any]], selected: int, visible: int, *, filter_text: str = "", unread_keys: set[str] | None = None) -> Any:
+    tab = normalize_tab(tab)
     if not rows and active_filter(filter_text):
         return Text(filter_empty_message(filter_text), style="dim")
-    if tab == "overview":
+    if tab == "attention":
         return make_attention_table(rows, selected, visible, unread_keys=unread_keys)
     if tab in ("runs", "graph"):
         return make_runs_table(rows, selected, visible)
@@ -315,9 +323,10 @@ def make_detail_body(
     agent_scope: str = "phase",
     filter_text: str = "",
 ) -> Any:
+    tab = normalize_tab(tab)
     if not rows and active_filter(filter_text):
         return Text(filter_empty_message(filter_text), style="dim")
-    if tab == "overview":
+    if tab == "attention":
         if not rows:
             return Text("No attention items.", style="dim")
         return make_attention_detail(rows[clamp_index(selected, len(rows))])
@@ -357,8 +366,9 @@ def make_detail_body(
 
 def sidebar_title_for(tab: str, run: dict[str, Any] | None, selected_phase_id: str | None, agent_scope: str) -> str:
     """Return the contextual sidebar title."""
+    tab = normalize_tab(tab)
     if tab not in ("agents", "graph") or (tab == "agents" and agent_scope == "all"):
-        if tab == "overview":
+        if tab == "attention":
             return "Attention"
         if tab == "graph":
             return "Runs"
@@ -409,7 +419,10 @@ def render_dashboard(
     filter_text: str = "",
     focus: bool = False,
     scroll_offset: int = 0,
+    layout_mode: str = DEFAULT_LAYOUT_MODE,
 ) -> Any:
+    tab = normalize_tab(tab)
+    layout_mode = normalize_layout_mode(layout_mode)
     if tab not in TABS:
         raise SystemExit(f"invalid tab {tab!r}; expected one of {TABS}")
     min_width = MIN_WIDTH if chrome else MIN_WIDTH - 2
@@ -420,16 +433,16 @@ def render_dashboard(
     selected_run_index = clamp_index(run_index, len(runs))
     base_run = runs[selected_run_index] if runs else None
 
-    # Attention toasts appear only on the overview tab, above the header. The
+    # Attention toasts appear only on the attention tab, above the header. The
     # panel is single-line so its height is fixed; shrink the panes so the
     # footer stays anchored when a toast is visible.
     toast_panel = None
     toast_height = 0
-    overview_unread: set[str] = set()
-    if tab == "overview":
-        attention_rows = rows_for_tab(base_run, "overview", runs)
+    attention_unread: set[str] = set()
+    if tab == "attention":
+        attention_rows = rows_for_tab(base_run, "attention", runs)
         refresh_attention_toasts(attention_rows)
-        overview_unread = attention_unread_keys(attention_rows)
+        attention_unread = attention_unread_keys(attention_rows)
         toast_panel = build_attention_toast_panel(width=width)
         if toast_panel is not None:
             toast_height = ATTENTION_TOAST_HEIGHT
@@ -486,7 +499,7 @@ def render_dashboard(
         parts: list[Any] = []
         if toast_panel is not None:
             parts.append(toast_panel)
-        parts.extend([make_header(tab, width=width, filter_text=filter_text), focused, make_footer(run, width)])
+        parts.extend([make_header(tab, width=width, filter_text=filter_text, layout_mode=layout_mode), focused, make_footer(run, width)])
         return Group(*parts)
 
     layout = Table.grid(expand=True)
@@ -499,7 +512,7 @@ def render_dashboard(
         detail_widget = detail
     layout.add_row(
         Panel(
-            make_sidebar(tab, rows, selected_row_index, visible, filter_text=filter_text, unread_keys=overview_unread),
+            make_sidebar(tab, rows, selected_row_index, visible, filter_text=filter_text, unread_keys=attention_unread),
             title=Text(sidebar_title, style="bold cyan"),
             border_style="cyan",
             box=box.ROUNDED,
@@ -518,7 +531,7 @@ def render_dashboard(
     chrome_parts: list[Any] = []
     if toast_panel is not None:
         chrome_parts.append(toast_panel)
-    chrome_parts.extend([make_header(tab, width=width, filter_text=filter_text), layout, make_footer(run, width)])
+    chrome_parts.extend([make_header(tab, width=width, filter_text=filter_text, layout_mode=layout_mode), layout, make_footer(run, width)])
     return Group(*chrome_parts)
 
 
@@ -550,8 +563,11 @@ def render_snapshot(
     filter_text: str = "",
     focus: bool = False,
     detail_scroll: int = 0,
+    layout_mode: str | None = None,
 ) -> str:
     """Render the TUI as deterministic text for snapshot tests."""
+    tab = normalize_tab(tab)
+    layout_mode = normalize_layout_mode(layout_mode)
     if height < MIN_HEIGHT or width < MIN_WIDTH:
         return f"terminal too small; need at least {MIN_WIDTH}x{MIN_HEIGHT}\n"
     effective_row_index = row_index + max(0, scroll)
@@ -578,6 +594,7 @@ def render_snapshot(
             filter_text=filter_text,
             focus=focus,
             scroll_offset=detail_scroll,
+            layout_mode=layout_mode,
         )
     )
     return normalize_snapshot(console.export_text(styles=False), width, height)
@@ -600,6 +617,13 @@ def run_textual_app() -> None:
     run_app(sys.modules[__name__])
 
 
+def canonical_tab(value: str) -> str:
+    tab = normalize_tab(value)
+    if tab not in TABS:
+        raise argparse.ArgumentTypeError(f"invalid tab {value!r}; expected one of {TABS}")
+    return tab
+
+
 def print_summary() -> None:
     runs = load_runs()
     if not runs:
@@ -614,7 +638,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", action="store_true", help="render deterministic text snapshot and exit")
     parser.add_argument("--fixture", help="JSON fixture for snapshot mode")
-    parser.add_argument("--tab", choices=TABS, default="overview")
+    parser.add_argument("--tab", type=canonical_tab, default="runs")
+    parser.add_argument("--layout", choices=LAYOUT_MODES, default=None)
     parser.add_argument("--width", type=int, default=100)
     parser.add_argument("--height", type=int, default=28)
     parser.add_argument("--run-index", type=int, default=0)
@@ -650,6 +675,7 @@ def main() -> None:
                 filter_text=args.filter,
                 focus=args.focus,
                 detail_scroll=args.detail_scroll,
+                layout_mode=args.layout,
             )
         )
         return
