@@ -3701,6 +3701,16 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(workflow_tui.next_layout_mode("timeline"), "command")
         self.assertEqual(workflow_tui.next_layout_mode("bad"), "ops")
 
+    def test_agent_index_for_selected_run_agent_id(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run = workflow_tui.load_fixture(str(FIXTURE))[0]
+        agents = run["agents"]
+        target = agents[-1]["agent_id"]
+        self.assertEqual(workflow_tui.agent_index_for_id(run, target), len(agents) - 1)
+        self.assertEqual(workflow_tui.agent_index_for_id(run, "missing"), 0)
+
     def test_runs_snapshot_supports_layout_modes(self) -> None:
         for layout, expected_text in [
             ("command", "Run Agents"),
@@ -3724,6 +3734,40 @@ class WorkflowScriptTests(unittest.TestCase):
                     env=self.snapshot_env(),
                 ).stdout
                 self.assertIn(expected_text, rendered)
+
+    def test_run_agent_selection_key_transfers_to_agents_tab(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run = workflow_tui.load_fixture(str(FIXTURE))[0]
+        target = run["agents"][-1]["agent_id"]
+        rows = workflow_tui.rows_for_tab(run, "agents", [run], agent_scope="all")
+        index = workflow_tui.index_for_key(rows, "agents", target)
+        self.assertEqual(rows[index]["agent_id"], target)
+
+    def test_runs_detail_marks_selected_run_agent(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_tui  # pylint: disable=import-outside-toplevel
+
+        run = workflow_tui.load_fixture(str(FIXTURE))[0]
+        rendered = self.run_script(
+            "workflow_tui.py",
+            "--snapshot",
+            "--fixture",
+            str(FIXTURE),
+            "--tab",
+            "runs",
+            "--layout",
+            "command",
+            "--selected-run-agent-index",
+            "1",
+            "--width",
+            "120",
+            "--height",
+            "34",
+            env=self.snapshot_env(),
+        ).stdout
+        self.assertIn(run["agents"][1]["name"], rendered)
 
     def test_active_header_tab_is_visible_at_supported_widths(self) -> None:
         sys.path.insert(0, str(SCRIPTS))
@@ -4369,6 +4413,149 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(observations["render_layout"], "ops")
         self.assertEqual(FakeTui.saved, [{"layout_mode": "ops"}])
 
+    def test_live_run_agent_drilldown_navigation(self) -> None:
+        import types
+
+        sys.path.insert(0, str(SCRIPTS))
+        module_names = ["textual", "textual.app", "textual.screen", "textual.worker", "textual.widgets", "workflow_tui_app"]
+        original_modules = {name: sys.modules.get(name) for name in module_names}
+        for name in module_names:
+            sys.modules.pop(name, None)
+
+        observations: dict[str, object] = {}
+
+        class FakeApp:
+            def __init__(self) -> None:
+                self.size = types.SimpleNamespace(width=110, height=30)
+                self.refresh_binding_calls = 0
+
+            def refresh_bindings(self) -> None:
+                self.refresh_binding_calls += 1
+
+            def notify(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def run(self) -> None:
+                self.dashboard = types.SimpleNamespace(size=types.SimpleNamespace(width=110, height=30), update=lambda _value: None)
+                self.runs = [{"run_id": "run-1", "agents": [{"agent_id": "agent-a"}, {"agent_id": "agent-b"}]}]
+                self.selected_run_id = "run-1"
+                self.action_toggle_focus()
+                observations["after_enter_focus"] = self.run_focus
+                self.action_move_down()
+                observations["selected_run_agent_id"] = self.selected_run_agent_id
+                self.action_nav_right()
+                observations["after_right_tab"] = self.tab
+                observations["after_right_row"] = self.selected_row_ids["agents"]
+                self.tab_index = FakeTui.TABS.index("runs")
+                self.run_focus = "agents"
+                self.action_nav_left()
+                observations["after_left_focus"] = self.run_focus
+                self.run_focus = "agents"
+                self.action_escape_or_quit()
+                observations["after_escape_focus"] = self.run_focus
+
+        class FakeStatic:
+            pass
+
+        class FakeTui:
+            TABS = ("runs", "agents", "attention")
+            AGENT_SCOPES = ("phase", "all")
+            AGENT_VIEWS = ("live", "prompt")
+            UPDATE_CHECK_INTERVAL = 999.0
+            UPDATE_CHECK_TIMEOUT = 1.0
+            UPDATE_PULL_TIMEOUT = 1.0
+
+            @staticmethod
+            def load_tui_preferences() -> dict[str, str]:
+                return {"layout_mode": "command"}
+
+            @staticmethod
+            def render_dashboard(*_args: object, **_kwargs: object) -> str:
+                return ""
+
+            @staticmethod
+            def current_rows_for(
+                selected_run: dict[str, object] | None,
+                tab: str,
+                *_args: object,
+                agent_scope: str = "phase",
+                **_kwargs: object,
+            ) -> list[dict[str, object]]:
+                if tab == "agents":
+                    agents = list((selected_run or {}).get("agents", []))
+                    if agent_scope == "phase":
+                        return agents[:1]
+                    return agents
+                return [selected_run] if selected_run else []
+
+            @staticmethod
+            def item_key(tab: str, row: dict[str, object], index: int) -> str:
+                if tab == "runs":
+                    return str(row.get("run_id") or index)
+                if tab == "agents":
+                    return str(row.get("agent_id") or index)
+                return str(index)
+
+            @staticmethod
+            def index_for_key(rows: list[dict[str, object]], tab: str, key: str | None) -> int:
+                for index, row in enumerate(rows):
+                    if FakeTui.item_key(tab, row, index) == key:
+                        return index
+                return 0
+
+            @staticmethod
+            def agent_index_for_id(run: dict[str, object] | None, agent_id: str | None) -> int:
+                agents = list((run or {}).get("agents", []))
+                for index, agent in enumerate(agents):
+                    if str(agent.get("agent_id")) == str(agent_id):
+                        return index
+                return 0
+
+            @staticmethod
+            def clamp_index(index: int, length: int) -> int:
+                return 0 if length <= 0 else max(0, min(index, length - 1))
+
+            @staticmethod
+            def action_enabled_for_tab(_tab: str, _action: str) -> bool:
+                return True
+
+        try:
+            sys.modules["textual"] = types.ModuleType("textual")
+            app_module = types.ModuleType("textual.app")
+            app_module.App = FakeApp
+            app_module.ComposeResult = object
+            app_module.SystemCommand = object
+            sys.modules["textual.app"] = app_module
+            screen_module = types.ModuleType("textual.screen")
+            screen_module.Screen = object
+            sys.modules["textual.screen"] = screen_module
+            worker_module = types.ModuleType("textual.worker")
+            worker_module.Worker = type("Worker", (), {"StateChanged": object})
+            worker_module.WorkerState = types.SimpleNamespace(ERROR="error", SUCCESS="success")
+            sys.modules["textual.worker"] = worker_module
+            widgets_module = types.ModuleType("textual.widgets")
+            widgets_module.Footer = FakeStatic
+            widgets_module.Header = FakeStatic
+            widgets_module.Static = FakeStatic
+            sys.modules["textual.widgets"] = widgets_module
+
+            import workflow_tui_app  # pylint: disable=import-outside-toplevel
+
+            workflow_tui_app.run_textual_app(FakeTui)
+        finally:
+            for name, original in original_modules.items():
+                if original is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = original
+
+        self.assertEqual(observations["after_enter_focus"], "agents")
+        self.assertEqual(observations["selected_run_agent_id"], "agent-b")
+        self.assertEqual(observations["after_right_tab"], "agents")
+        self.assertEqual(observations["after_right_row"], "agent-b")
+        self.assertEqual(observations["after_left_focus"], "runs")
+        self.assertEqual(observations["after_escape_focus"], "runs")
+
     def test_live_tui_show_attention_action_targets_attention_tab(self) -> None:
         """The ! binding switches to the visible attention tab."""
         import types
@@ -4480,12 +4667,15 @@ class WorkflowScriptTests(unittest.TestCase):
 
         self.assertIn("`!`: jump to the `attention` tab.", operations)
         self.assertIn("`L`: cycle global layout mode", operations)
+        self.assertIn("On `runs`, `Enter` or `Right`", operations)
+        self.assertIn("On focused run agents, `Left` or `Escape`", operations)
         self.assertIn("`layout: command  L`", operations)
         self.assertNotIn("attention overview", operations)
         self.assertIn("default TUI home tab is `runs`", skill)
         self.assertIn("visible `attention` tab", skill)
         self.assertIn("press `!` to jump there", skill)
         self.assertIn("`L` cycles global layout mode", skill)
+        self.assertIn("`Enter`/`Right` on runs to drill into agents", skill)
         self.assertIn("`layout: command  L`", skill)
 
     def test_live_tui_palette_exposes_workflow_control_actions(self) -> None:

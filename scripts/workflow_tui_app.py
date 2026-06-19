@@ -105,8 +105,8 @@ def run_textual_app(tui: Any) -> None:
             binding("l", "cycle_layout", "Layout"),
             binding("tab", "next_tab", "Next", show=False),
             binding("shift+tab", "previous_tab", "Prev", show=False),
-            binding("right", "next_tab", "Next", show=False),
-            binding("left", "previous_tab", "Prev", show=False),
+            binding("right", "nav_right", "Next", show=False),
+            binding("left", "nav_left", "Prev", show=False),
             binding("j", "move_down", "Down", show=False),
             binding("k", "move_up", "Up", show=False),
             binding("down", "move_down", "Down", show=False),
@@ -134,6 +134,9 @@ def run_textual_app(tui: Any) -> None:
             self.selected_run_id: str | None = None
             self.selected_row_ids: dict[str, str | None] = {tab: None for tab in tui.TABS}
             self.fallback_indexes: dict[str, int] = {tab: 0 for tab in tui.TABS}
+            self.run_focus = "runs"
+            self.selected_run_agent_id: str | None = None
+            self.selected_run_agent_index = 0
             self.dashboard: Static | None = None
             self.update_status: tui.UpdateStatus | None = None
             self.notified_update_head: str | None = None
@@ -161,6 +164,51 @@ def run_textual_app(tui: Any) -> None:
                 self.run_index = tui.clamp_index(self.run_index, len(self.runs))
                 self.selected_run_id = tui.item_key("runs", self.runs[self.run_index], self.run_index)
             return self.runs[self.run_index]
+
+        def selected_run_agents(self) -> list[dict[str, Any]]:
+            return list((self.selected_run or {}).get("agents", []))
+
+        def set_selected_run_agent_index(self, index: int) -> None:
+            agents = self.selected_run_agents()
+            self.selected_run_agent_index = tui.clamp_index(index, len(agents))
+            self.selected_run_agent_id = str(agents[self.selected_run_agent_index].get("agent_id") or "") if agents else None
+
+        def move_run_agent_selection(self, delta: int) -> bool:
+            if self.tab != "runs" or self.run_focus != "agents":
+                return False
+            self.set_selected_run_agent_index(self.selected_run_agent_index + delta)
+            self.update_dashboard()
+            return True
+
+        def focus_run_agents(self) -> bool:
+            if self.tab != "runs" or self.run_focus == "agents":
+                return False
+            agents = self.selected_run_agents()
+            if not agents:
+                self.notify("Selected run has no agents.", title="Workflow", severity="warning", timeout=1.0)
+                return True
+            self.run_focus = "agents"
+            self.set_selected_run_agent_index(tui.agent_index_for_id(self.selected_run, self.selected_run_agent_id))
+            self.update_dashboard()
+            return True
+
+        def open_selected_run_agent(self) -> bool:
+            if self.tab != "runs" or self.run_focus != "agents":
+                return False
+            agents = list((self.selected_run or {}).get("agents", []))
+            if not agents:
+                return True
+            agent = agents[tui.clamp_index(self.selected_run_agent_index, len(agents))]
+            agent_id = str(agent.get("agent_id") or "")
+            self.agent_scope_index = tui.AGENT_SCOPES.index("all") if "all" in tui.AGENT_SCOPES else self.agent_scope_index
+            self.selected_row_ids["agents"] = agent_id
+            self.tab_index = tui.TABS.index("agents")
+            self.run_focus = "runs"
+            rows = self.active_rows()
+            self.row_index = tui.index_for_key(rows, "agents", agent_id)
+            self.fallback_indexes["agents"] = self.row_index
+            self.update_tab_chrome()
+            return True
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -365,6 +413,7 @@ def run_textual_app(tui: Any) -> None:
                     focus=self.focus_mode,
                     scroll_offset=self.detail_scroll_offset,
                     layout_mode=self.layout_mode,
+                    selected_run_agent_index=self.selected_run_agent_index,
                 )
             )
 
@@ -373,6 +422,10 @@ def run_textual_app(tui: Any) -> None:
             self.update_dashboard()
 
         def action_escape_or_quit(self) -> None:
+            if self.tab == "runs" and self.run_focus == "agents":
+                self.run_focus = "runs"
+                self.update_dashboard()
+                return
             if self.focus_mode:
                 self.focus_mode = False
                 self.update_dashboard()
@@ -441,6 +494,8 @@ def run_textual_app(tui: Any) -> None:
             self.copy_selection("json")
 
         def action_toggle_focus(self) -> None:
+            if self.open_selected_run_agent() or self.focus_run_agents():
+                return
             if not self.active_rows():
                 return
             self.focus_mode = not self.focus_mode
@@ -496,7 +551,21 @@ def run_textual_app(tui: Any) -> None:
             self.restore_selection()
             self.update_tab_chrome()
 
+        def action_nav_right(self) -> None:
+            if self.open_selected_run_agent() or self.focus_run_agents():
+                return
+            self.action_next_tab()
+
+        def action_nav_left(self) -> None:
+            if self.tab == "runs" and self.run_focus == "agents":
+                self.run_focus = "runs"
+                self.update_dashboard()
+                return
+            self.action_previous_tab()
+
         def action_move_down(self) -> None:
+            if self.move_run_agent_selection(1):
+                return
             rows = self.active_rows()
             if self.tab == "runs":
                 self.run_index = tui.clamp_index(self.run_index + 1, len(self.runs))
@@ -510,6 +579,8 @@ def run_textual_app(tui: Any) -> None:
             self.update_dashboard()
 
         def action_move_up(self) -> None:
+            if self.move_run_agent_selection(-1):
+                return
             if self.tab == "runs":
                 self.run_index = tui.clamp_index(self.run_index - 1, len(self.runs))
                 if self.runs:
@@ -523,6 +594,10 @@ def run_textual_app(tui: Any) -> None:
             self.update_dashboard()
 
         def action_top(self) -> None:
+            if self.tab == "runs" and self.run_focus == "agents":
+                self.set_selected_run_agent_index(0)
+                self.update_dashboard()
+                return
             if self.tab == "runs":
                 self.run_index = 0
                 if self.runs:
@@ -536,6 +611,10 @@ def run_textual_app(tui: Any) -> None:
             self.update_dashboard()
 
         def action_bottom(self) -> None:
+            if self.tab == "runs" and self.run_focus == "agents":
+                self.set_selected_run_agent_index(len(self.selected_run_agents()) - 1)
+                self.update_dashboard()
+                return
             rows = self.active_rows()
             if self.tab == "runs":
                 self.run_index = max(0, len(self.runs) - 1)
@@ -552,6 +631,10 @@ def run_textual_app(tui: Any) -> None:
             return max(5, min(12, self.size.height // 4))
 
         def action_page_down(self) -> None:
+            if self.tab == "runs" and self.run_focus == "agents":
+                self.set_selected_run_agent_index(self.selected_run_agent_index + self.page_step())
+                self.update_dashboard()
+                return
             rows = self.active_rows()
             if self.tab == "runs":
                 self.run_index = tui.clamp_index(self.run_index + self.page_step(), len(self.runs))
@@ -565,6 +648,11 @@ def run_textual_app(tui: Any) -> None:
             self.update_dashboard()
 
         def action_page_up(self) -> None:
+            if self.tab == "runs" and self.run_focus == "agents":
+                self.set_selected_run_agent_index(self.selected_run_agent_index - self.page_step())
+                self.detail_scroll_offset = 0
+                self.update_dashboard()
+                return
             if self.tab == "runs":
                 self.run_index = max(0, self.run_index - self.page_step())
                 if self.runs:

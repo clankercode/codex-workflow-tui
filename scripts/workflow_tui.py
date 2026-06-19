@@ -282,6 +282,16 @@ def copy_value_for_selection(
     raise ValueError(f"unknown copy mode {mode!r}")
 
 
+def agent_index_for_id(run: dict[str, Any] | None, agent_id: str | None) -> int:
+    agents = list((run or {}).get("agents", []))
+    if not agent_id:
+        return 0
+    for index, agent in enumerate(agents):
+        if str(agent.get("agent_id", "")) == str(agent_id):
+            return index
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Layout: sidebar + detail orchestration
 # ---------------------------------------------------------------------------
@@ -712,6 +722,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--filter", default="", help="filter rows by text")
     parser.add_argument("--focus", action="store_true", help="render selected detail full-width")
     parser.add_argument("--detail-scroll", type=int, default=0, help="scroll offset for detail pane")
+    parser.add_argument("--selected-run-agent-index", type=int, default=0)
     return parser
 
 
@@ -736,6 +747,7 @@ def main() -> None:
                 focus=args.focus,
                 detail_scroll=args.detail_scroll,
                 layout_mode=args.layout,
+                selected_run_agent_index=args.selected_run_agent_index,
             )
         )
         return

@@ -365,10 +365,12 @@ Use `--dry-run` to print the key/capture plan without starting tmux.
 
 ## TUI Keys
 
-- `Up`/`Down`: move within the current sidebar list.
-- `Right`/`Left`: move across top-level tabs.
-- `Enter`: focus the selected detail full-width.
-- `Escape`: leave focus mode, or quit when not focused.
+- `Up`/`Down`: move within the current list.
+- `Right`/`Left`: move across top-level tabs, except on `runs` drill-down focus.
+- `Enter`: focus the selected detail full-width; on `runs`, focus the selected run's agent list.
+- On `runs`, `Enter` or `Right`: focus the selected run's agent list; from that list, `Enter` or `Right` opens the selected agent in the agents tab.
+- On focused run agents, `Left` or `Escape`: return to the runs list.
+- `Escape`: leave focus mode, back out of focused run agents, or quit when not focused.
 - `/`: cycle common filters.
 - `!`: jump to the `attention` tab.
 - `L`: cycle global layout mode (`command`, `ops`, `timeline`) and persist the last-used mode. The header shows the current mode as `layout: command  L`.
