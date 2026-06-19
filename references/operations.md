@@ -333,6 +333,7 @@ workflow-run-codex --title "..." --job "name::prompt"
 
 The global command installed for everyday use is `~/.local/bin/workflow`; `~/.local/bin/wf` is the shorter alias.
 The live TUI uses Textual from `$WORKFLOW_HOME/.venv` when launched through these aliases. With the recommended user-scope install, that is `~/.agents/workflow-system/.venv`.
+The `runs` tab is the TUI home tab, and `attention` is the notification tray for warnings and actionable items.
 
 The live TUI checks the workflow skill git upstream in the background. Use the Textual command palette for `Workflow: Check for updates` or `Workflow: Update skill from git`; the update action runs `git pull --ff-only` in the skill checkout and reports success or failure as a notification.
 
@@ -373,7 +374,7 @@ Use `--dry-run` to print the key/capture plan without starting tmux.
 - `Escape`: leave focus mode, back out of focused run agents, or quit when not focused.
 - `/`: cycle common filters.
 - `!`: jump to the `attention` tab.
-- `L`: cycle global layout mode (`command`, `ops`, `timeline`) and persist the last-used mode. The header shows the current mode as `layout: command  L`.
+- `L`: cycle global runs layout (`command`, `ops`, `timeline`) and persist the last-used mode. The header shows the current mode as `layout: command  L`.
 - `c`: clear the active filter.
 - `a`: toggle Agents between selected-phase scope and all agents.
 - `v`: toggle the selected agent detail between live output and prompt.

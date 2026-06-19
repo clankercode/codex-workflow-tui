@@ -1547,6 +1547,9 @@ class WorkflowScriptTests(unittest.TestCase):
                 observed_live = False
                 while time.time() < deadline:
                     data = json.loads(run_file.read_text(encoding="utf-8"))  # type: ignore[union-attr]
+                    if not data["agents"]:
+                        time.sleep(0.05)
+                        continue
                     agent = data["agents"][0]
                     if agent.get("status") == "running" and agent.get("tool_call_count", 0) >= 1:
                         observed_live = True
@@ -4670,15 +4673,22 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(observations["tab"], "attention")
         self.assertEqual(observations["tab_index"], FakeTui.TABS.index("attention"))
 
-    def test_tui_docs_include_attention_and_layout_keys(self) -> None:
-        """Keep operator key docs aligned with visible Task 1 TUI labels."""
-        operations = (ROOT / "references" / "operations.md").read_text(encoding="utf-8")
+    def test_tui_key_docs_include_layout_and_attention(self) -> None:
+        """Keep operator key docs aligned with visible TUI navigation labels."""
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        operations = (ROOT / "references" / "operations.md").read_text(encoding="utf-8")
+
+        for text in (skill, operations):
+            self.assertIn("L", text)
+            self.assertIn("layout", text.lower())
+            self.assertIn("attention", text.lower())
 
         self.assertIn("`!`: jump to the `attention` tab.", operations)
-        self.assertIn("`L`: cycle global layout mode", operations)
+        self.assertIn("`L`: cycle global runs layout", operations)
         self.assertIn("On `runs`, `Enter` or `Right`", operations)
         self.assertIn("On focused run agents, `Left` or `Escape`", operations)
+        self.assertIn("`runs` tab is the TUI home tab", operations)
+        self.assertIn("`attention` is the notification tray", operations)
         self.assertIn("`layout: command  L`", operations)
         self.assertNotIn("attention overview", operations)
         self.assertIn("default TUI home tab is `runs`", skill)
