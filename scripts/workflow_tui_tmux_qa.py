@@ -19,7 +19,9 @@ from typing import Any
 sys.dont_write_bytecode = True
 
 DEFAULT_ACTIONS = [
-    ("capture", "initial-overview"),
+    ("capture", "initial-runs"),
+    ("send", "!"),
+    ("capture", "attention"),
     ("send", "/"),
     ("send", "/"),
     ("capture", "filter-blocked"),
@@ -54,7 +56,8 @@ DEFAULT_ACTIONS = [
 ]
 
 EXPECTED_CAPTURE_TEXT = {
-    "initial-overview": ("Agent Workflows", "Attention", "run-fail"),
+    "initial-runs": ("Agent Workflows", "Runs", "wf-fixture-rich", "Live Stats"),
+    "attention": ("Agent Workflows", "Attention", "run-fail"),
     "filter-blocked": ("Attention filter: blocked", "Run blocked"),
     "focus-filter-blocked": ("filter: blocked", "Run blocked"),
     "filter-restored": ("Attention filter: blocked", "Run blocked"),
@@ -78,7 +81,8 @@ EXPECTED_CAPTURE_TEXT = {
     ),
 }
 FORBIDDEN_CAPTURE_TEXT = {
-    "initial-overview": (" a Scope", " v View"),
+    "initial-runs": ("Attention filter", " a Scope", " v View"),
+    "attention": (" a Scope", " v View"),
     "filter-blocked": ("Agent stale",),
     "focus-filter-blocked": ("Agent stale",),
     "filter-restored": ("Agent stale",),

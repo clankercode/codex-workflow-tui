@@ -6075,7 +6075,11 @@ class WorkflowScriptTests(unittest.TestCase):
             "workflow-tui-test",
         )
         self.assertIn("workflow-tui-test", result.stdout)
-        self.assertIn("capture initial-overview", result.stdout)
+        self.assertIn("capture initial-runs", result.stdout)
+        self.assertIn("send-key !", result.stdout)
+        self.assertIn("capture attention", result.stdout)
+        self.assertLess(result.stdout.index("capture initial-runs"), result.stdout.index("send-key !"))
+        self.assertLess(result.stdout.index("send-key !"), result.stdout.index("capture attention"))
         self.assertIn("send-key Right", result.stdout)
         self.assertIn("send-key y", result.stdout)
         self.assertIn("send-key p", result.stdout)

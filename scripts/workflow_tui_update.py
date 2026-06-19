@@ -197,7 +197,7 @@ def workflow_control_action(run_id: str, action: str, reason: str = "TUI command
 # Attention toast notifications
 # ---------------------------------------------------------------------------
 #
-# The overview tab lists health "attention" items.  When a brand-new item
+# The attention tab lists health items.  When a brand-new item
 # appears we surface a compact toast at the top of the TUI for a few seconds
 # and flag the row as unread in the sidebar.  State lives here so the live TUI
 # (one long-running process, many refreshes) can remember what it has already
@@ -231,7 +231,7 @@ def _attention_item_epoch(item: dict[str, Any]) -> float | None:
 
 
 def _attention_item_key(item: dict[str, Any], index: int) -> str:
-    """Stable key for an attention item (mirrors item_key for the overview tab)."""
+    """Stable key for an attention item (mirrors item_key for the attention tab)."""
     return str(item.get("attention_id") or f"item-{index}")
 
 

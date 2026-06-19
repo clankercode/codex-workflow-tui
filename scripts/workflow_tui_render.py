@@ -474,7 +474,7 @@ def make_mapping_table(rows: list[tuple[str, Any]]) -> Table:
 
 
 def make_attention_table(items: list[dict[str, Any]], selected: int, visible: int, *, unread_keys: set[str] | None = None) -> Table:
-    """Render the overview attention list.
+    """Render the attention tab list.
 
     ``unread_keys`` flags brand-new items with a bold title so operators can spot
     rows they have not yet seen.  The styling is stripped from text snapshots, so
