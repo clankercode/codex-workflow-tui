@@ -349,60 +349,47 @@ def filter_empty_message(filter_text: str) -> str:
 
 def make_header(tab: str, *, width: int = 110, filter_text: str = "", layout_mode: str = "command") -> Text:
     tab = normalize_tab(tab)
-    compact = width < 130
-    tabs = make_tabs_title(tab, compact=compact)
-    tabs_len = len(tabs.plain)
-
-    # Build the left portion with hints.
-    if width < 100:
-        hints = []
-    elif compact:
-        hints = ["\u2191/\u2193", "\u2190/\u2192", "y", "p"]
-        if tab == "agents":
-            hints.extend(["a", "v"])
-        hints.append("r/q")
-    else:
-        hints = ["\u2191/\u2193 rows", "\u2190/\u2192 tabs", "y id", "p path"]
-        if tab == "agents":
-            hints.extend(["a scope", "v view"])
-        hints.append("r/q")
-    left = Text()
-    left.append("Agent Workflows", style="bold bright_cyan")
-    if hints:
-        left.append(f"  {'  '.join(hints)}", style="dim")
     normalized = active_filter(filter_text)
-    if normalized:
-        left.append("  ")
-        left.append(f"filter: {normalized}", style="bold yellow")
     layout_label = normalize_layout_mode(layout_mode)
-    left.append("  ")
-    left.append(f"layout: {layout_label}", style="green")
-    left.append("  L", style="dim")
 
-    if width >= 130:
-        # Pad left to the agents-tab width so every tab's header starts at the
-        # same column.  This must be independent of the current tab.
-        max_hints = ["\u2191/\u2193 rows", "\u2190/\u2192 tabs", "y id", "p path", "a scope", "v view", "r/q"]
-        agents_left_len = len(f"Agent Workflows  {'  '.join(max_hints)}  layout: {layout_label}  L")
-        max_left_len = max(len(left.plain), agents_left_len)
-        # Pad the left section to max_left_len.
-        gap = max_left_len - len(left.plain)
-        if gap > 0:
-            left.append(" " * gap)
-        # Per-tab padding so ● lands at a stable column across tabs.
-        marker_idx = tabs.plain.find("\u25cf")
-        if compact:
-            max_test_offset = 20
+    def left_text(hints: list[str]) -> Text:
+        left = Text()
+        left.append("Agent Workflows", style="bold bright_cyan")
+        if hints:
+            left.append(f"  {'  '.join(hints)}", style="dim")
+        if normalized:
+            left.append("  ")
+            left.append(f"filter: {normalized}", style="bold yellow")
+        left.append("  ")
+        left.append(f"layout: {layout_label}", style="green")
+        left.append("  L", style="dim")
+        return left
+
+    full_hints = ["\u2191/\u2193 rows", "\u2190/\u2192 tabs", "y id", "p path"]
+    compact_hints = ["\u2191/\u2193", "\u2190/\u2192", "y", "p"]
+    if tab == "agents":
+        full_hints.extend(["a scope", "v view"])
+        compact_hints.extend(["a", "v"])
+    full_hints.append("r/q")
+    compact_hints.append("r/q")
+
+    hint_options = [full_hints, compact_hints, []] if width >= 100 else [[]]
+    left = left_text([])
+    tabs = make_tabs_title(tab, compact=True)
+    pad = 1
+    for hints in hint_options:
+        candidate_left = left_text(hints)
+        for compact_tabs in (False, True):
+            candidate_tabs = make_tabs_title(tab, compact=compact_tabs)
+            candidate_pad = max(1, width - len(candidate_left.plain) - len(candidate_tabs.plain))
+            if len(candidate_left.plain) + candidate_pad + len(candidate_tabs.plain) <= width:
+                left = candidate_left
+                tabs = candidate_tabs
+                pad = candidate_pad
+                break
         else:
-            max_test_offset = 31
-        target_col = max_left_len + max_test_offset + 1
-        if marker_idx >= 0:
-            pad = max(1, target_col - max_left_len - marker_idx)
-        else:
-            pad = max(1, 1)
-    else:
-        # Narrow: simple right-alignment, no per-tab compensation.
-        pad = max(1, width - len(left.plain) - tabs_len)
+            continue
+        break
 
     header = Text(no_wrap=True)
     header.append_text(left)

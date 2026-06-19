@@ -68,6 +68,8 @@ workflow tui
 
 The live TUI is Textual-based and the snapshot renderer uses Rich panels/tables.
 The installed `workflow`/`wf` aliases use the private workflow virtualenv when it exists.
+The default TUI home tab is `runs`; use the visible `attention` tab for warnings and actionable items, or press `!` to jump there directly.
+The header shows the current layout mode as `layout: command  L`; `L` is the displayed layout affordance while later layout-mode work is still being wired.
 In the TUI, use arrow keys to move rows and sections, `a` to toggle phase/all agent scope, `v` to toggle live output/prompt, `y` to copy the selected id, `p` to copy the useful path, and `Ctrl-Y` to copy selected-row JSON.
 Use `Ctrl-P` for the Textual command palette; it includes update checks plus pause, resume, and stop controls for the selected run.
 

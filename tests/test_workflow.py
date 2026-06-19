@@ -3675,14 +3675,30 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(workflow_tui.normalize_layout_mode("ops"), "ops")
         self.assertEqual(workflow_tui.normalize_layout_mode("bogus"), "command")
 
-    def test_attention_header_is_visible_at_supported_width(self) -> None:
+    def test_active_header_tab_is_visible_at_supported_widths(self) -> None:
         sys.path.insert(0, str(SCRIPTS))
         import workflow_tui  # pylint: disable=import-outside-toplevel
 
-        for width in (80, 110):
-            with self.subTest(width=width):
-                header = workflow_tui.make_header("attention", width=width)
-                self.assertIn("attn", header.plain[:width])
+        labels = {
+            "runs": ("run", "runs"),
+            "graph": ("grf", "graph"),
+            "phases": ("pha", "phases"),
+            "agents": ("agt", "agents"),
+            "events": ("evt", "events"),
+            "decisions": ("dec", "decisions"),
+            "artifacts": ("art", "artifacts"),
+            "attention": ("attn", "attention"),
+        }
+        for width in (80, 100, 110, 120, 130, 140):
+            for tab in workflow_tui.TABS:
+                with self.subTest(width=width, tab=tab):
+                    visible = workflow_tui.make_header(tab, width=width).plain[:width]
+                    marker_index = visible.find("●")
+                    self.assertGreaterEqual(marker_index, 0, visible)
+                    self.assertTrue(
+                        any(label in visible[marker_index:] for label in labels[tab]),
+                        visible,
+                    )
 
     @slow_test
     def test_snapshot_fixtures_match_checked_in_screens(self) -> None:
@@ -4297,14 +4313,19 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(observations["tab"], "attention")
         self.assertEqual(observations["tab_index"], FakeTui.TABS.index("attention"))
 
-    def test_operations_docs_include_attention_and_layout_keys(self) -> None:
+    def test_tui_docs_include_attention_and_layout_keys(self) -> None:
         """Keep operator key docs aligned with visible Task 1 TUI labels."""
-        text = (ROOT / "references" / "operations.md").read_text(encoding="utf-8")
+        operations = (ROOT / "references" / "operations.md").read_text(encoding="utf-8")
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("`!`: jump to the `attention` tab.", text)
-        self.assertIn("`L`: reserved layout-mode affordance", text)
-        self.assertIn("`layout: command  L`", text)
-        self.assertNotIn("attention overview", text)
+        self.assertIn("`!`: jump to the `attention` tab.", operations)
+        self.assertIn("`L`: reserved layout-mode affordance", operations)
+        self.assertIn("`layout: command  L`", operations)
+        self.assertNotIn("attention overview", operations)
+        self.assertIn("default TUI home tab is `runs`", skill)
+        self.assertIn("visible `attention` tab", skill)
+        self.assertIn("press `!` to jump there", skill)
+        self.assertIn("`layout: command  L`", skill)
 
     def test_live_tui_palette_exposes_workflow_control_actions(self) -> None:
         """Make pause, resume, and stop discoverable through the Textual command palette."""
@@ -5966,11 +5987,11 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertIn("dec", rendered)
         self.assertIn("wf-fixture-rich/run.json", rendered)
 
-    def test_tab_bar_marker_column_is_stable_across_tabs(self) -> None:
-        """The active-tab marker ● must be at the same column for every tab at a given width."""
+    def test_tab_bar_marker_is_visible_across_tabs(self) -> None:
+        """The active-tab marker ● must remain visible when the header adapts."""
         test_tabs = ("runs", "graph", "phases", "agents")
+        labels = {"runs": "run", "graph": "grf", "phases": "pha", "agents": "agt"}
         for width in (140,):
-            columns: list[int] = []
             for tab in test_tabs:
                 rendered = self.run_script(
                     "workflow_tui.py",
@@ -5991,12 +6012,7 @@ class WorkflowScriptTests(unittest.TestCase):
                     marker_col, 0,
                     f"tab={tab} width={width}: ● not found in header line",
                 )
-                columns.append(marker_col)
-            self.assertEqual(
-                len(set(columns)), 1,
-                f"width={width}: ● column varies across tabs: "
-                + ", ".join(f"{t}={c}" for t, c in zip(test_tabs, columns)),
-            )
+                self.assertIn(labels[tab], header_line[marker_col:])
 
     def test_selected_row_stays_visible_in_snapshot_tables(self) -> None:
         """Render a long table and confirm a selected lower row is kept on screen."""
